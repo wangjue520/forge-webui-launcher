@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Forge WebUI 启动器</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- 开屏动画（终末地风格：点 → 线 → WWY NEO → V2.0） -->
+<div id="splash">
+  <div class="sp-bg"></div>
+  <div class="sp-band"></div>
+  <span class="sp-corner tl"></span><span class="sp-corner tr"></span>
+  <span class="sp-corner bl"></span><span class="sp-corner br"></span>
+  <div class="sp-head">
+    <span><i>//</i>WWY LAUNCHER</span><span>SYS.STARTUP</span>
+  </div>
+  <div class="sp-stage">
+    <div class="sp-morph"></div>
+    <div class="sp-brand">
+      <div class="sp-panel"><div class="sp-title">WWY<em>NEO</em></div></div>
+      <div class="sp-sub"><i>//</i>FORGE WEBUI LAUNCHER</div>
+    </div>
+    <div class="sp-version">
+      <div class="sp-ver-wrap">
+        <div class="sp-ver-num">V2.0</div>
+        <div class="sp-ver-side">
+          <span class="sp-ver-tag">NEO EDITION</span>
+          <span class="sp-ver-line">STABLE DIFFUSION WEBUI FORGE</span>
+        </div>
+      </div>
+      <div class="sp-stripe"></div>
+      <div class="sp-load"><span class="sp-load-bar"></span><span class="sp-load-txt">INITIALIZING</span></div>
+    </div>
+  </div>
+  <div class="sp-foot">
+    <span>ENGINE <i>//</i> WEBVIEW2</span>
+    <span class="sp-foot-tri">▽ ▽ ▽</span>
+    <span>FORGE NEO COMPATIBLE</span>
+  </div>
+</div>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-launch" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h12M20 17h0"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="17" r="2"/></symbol>
+    <symbol id="i-deploy" viewBox="0 0 24 24"><path d="M12 3c3 2 4.5 5.5 4.5 9l2.5 3-3.5-.5c-1 1.5-2.2 2.7-3.5 3.5-1.3-.8-2.5-2-3.5-3.5L5 15l2.5-3C7.5 8.5 9 5 12 3z"/><circle cx="12" cy="10" r="1.6"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></symbol>
+    <symbol id="i-models" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></symbol>
+    <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M9 4h4v3a2 2 0 104 0h3v4h-3a2 2 0 100 4h3v4h-4v-3a2 2 0 10-4 0v3H9v-3a2 2 0 10-4 0v3H4v-4h3a2 2 0 100-4H4V7h3a2 2 0 104 0z" transform="scale(0.9) translate(1.3 1.3)"/></symbol>
+    <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8-9-9z"/><circle cx="8" cy="9" r="1.6"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 18l5-5 3 3 4-4 4 4"/></symbol>
+  </defs>
+</svg>
+
+<div id="layout">
+  <!-- ============ 侧边栏 ============ -->
+  <aside id="sidebar">
+    <div class="brand">
+      <div class="brand-logo">F</div>
+      <div class="brand-text">
+        <div class="brand-name">Forge WebUI</div>
+        <div class="brand-sub">启动器</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <button class="nav-item" data-page="launch"><svg><use href="#i-launch"/></svg><span>一键启动</span></button>
+      <button class="nav-item" data-page="settings"><svg><use href="#i-settings"/></svg><span>高级选项</span></button>
+      <button class="nav-item" data-page="deploy"><svg><use href="#i-deploy"/></svg><span>环境部署</span></button>
+      <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站·liblib</em></button>
+      <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
+      <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
+      <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>WD14 反推</span></button>
+      <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="global-status" class="status-pill" data-state="idle">
+        <span class="dot"></span><span id="global-status-text">WebUI 未启动</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ============ 主区域 ============ -->
+  <main id="main">
+    <header id="topbar">
+      <h1 id="page-title">一键启动</h1>
+      <div id="topbar-extra"></div>
+    </header>
+
+    <div id="content">
+
+      <!-- ======== 一键启动 ======== -->
+      <section class="page" id="page-launch">
+        <div class="card">
+          <div class="card-title">WebUI 根目录<span class="card-title-hint">包含 webui.bat 的那个文件夹</span></div>
+          <div class="row">
+            <input type="text" id="launch-root" data-cfg="webui_root" placeholder="例如 F:\sd-webui-forge-aki">
+            <button class="btn" id="launch-browse">浏览…</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">解释器 / Git 路径<span class="card-title-hint">留空则自动检测同目录下的便携版，或使用系统环境</span></div>
+          <div class="form-grid">
+            <label>Python 解释器</label>
+            <input type="text" id="launch-python" data-cfg="custom_python_path" placeholder="留空自动检测 python\python.exe 或使用系统 python">
+            <label>Git</label>
+            <input type="text" id="launch-git" data-cfg="custom_git_path" placeholder="留空自动检测 git\cmd\git.exe 或使用系统 git">
+          </div>
+          <div class="hint" id="launch-env-hint"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">启动参数<span class="card-title-hint">将注入 COMMANDLINE_ARGS 环境变量，由「高级选项」页生成</span></div>
+          <div class="code-box" id="launch-cmd-preview">（无）</div>
+          <label class="chk-row">
+            <input type="checkbox" id="launch-auto-open" data-cfg="auto_open_browser_on_ready"><i></i>
+            <span>启动成功、检测到监听地址后自动在浏览器打开</span>
+          </label>
+        </div>
+
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" id="launch-start">
+            <svg class="btn-icon"><use href="#i-launch"/></svg>一键启动
+          </button>
+          <button class="btn btn-lg" id="launch-stop" disabled>停止</button>
+          <div class="status-pill" id="launch-status" data-state="idle"><span class="dot"></span><span id="launch-status-text">尚未启动</span></div>
+          <button class="btn" id="launch-open-browser" disabled>在浏览器中打开</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">输出图片<span class="card-title-hint">快速打开 WebUI 的出图目录（当天目录不存在时会自动创建）</span>
+            <div class="hint" id="launch-output-hint" style="margin:2px 0 8px"></div><span style="display:none"></span></div>
+          <div class="action-row" style="margin-top:0">
+            <button class="btn" data-open-output="root">输出目录</button>
+            <button class="btn" data-open-output="txt2img">文生图</button>
+            <button class="btn" data-open-output="txt2img_today">当天文生图</button>
+            <button class="btn" data-open-output="img2img">图生图</button>
+            <button class="btn" data-open-output="img2img_today">当天图生图</button>
+          </div>
+        </div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>运行日志</span><button class="btn btn-xs" id="launch-log-clear">清空</button></div>
+          <pre class="console" id="launch-log"></pre>
+        </div>
+      </section>
+
+      <!-- ======== 高级选项 ======== -->
+      <section class="page" id="page-settings">
+        <div class="card">
+          <div class="card-title">当前所属分支<span class="card-title-hint">由「环境部署」页自动设置，也可以在这里手动切换</span></div>
+          <select id="s-branch" data-cfg="webui_branch"></select>
+        </div>
+
+        <div class="card">
+          <div class="card-title">性能设置<span class="card-title-hint">以下选项会真实生成命令行参数，Forge 会真正识别</span></div>
+          <div class="form-grid">
+            <label>GPU 编号</label>
+            <input type="text" id="s-gpu" data-cfg="gpu_device_id" placeholder="对应 --device-id，多卡时填 CUDA 设备编号，例如 0">
+            <label>显存策略</label>
+            <select id="s-vram" data-cfg="vram_mode"></select>
+          </div>
+          <label class="chk-row" data-branch-hide="neo2">
+            <input type="checkbox" id="s-offload" data-cfg="always_offload_from_vram"><i></i>
+            <span>用完模型后总是从显存卸载（--always-offload-from-vram），更省显存但更慢</span>
+          </label>
+          <div class="form-grid" data-branch-show="neo2">
+            <label>预留显存</label>
+            <input type="text" id="s-reserve-vram" data-cfg="reserve_vram_gb" placeholder="对应 --reserve-vram，留空不设置，例如填 2 表示给系统留 2GB">
+          </div>
+          <label class="chk-row">
+            <input type="checkbox" id="s-cuda-malloc" data-cfg="cuda_malloc"><i></i>
+            <span>启用 cudaMallocAsync（--cuda-malloc），官方提示部分场景可能不稳定/崩溃</span>
+          </label>
+          <div class="form-grid">
+            <label>计算精度</label>
+            <select id="s-precision" data-cfg="precision_mode"></select>
+          </div>
+          <div data-branch-show="neo2">
+            <div class="form-grid">
+              <label>UNet 精度</label><select id="s-unet" data-cfg="unet_precision"></select>
+              <label>VAE 精度</label><select id="s-vae" data-cfg="vae_precision"></select>
+              <label>文本编码器精度</label><select id="s-textenc" data-cfg="text_enc_precision"></select>
+              <label>注意力实现</label><select id="s-attention" data-cfg="attention_impl"></select>
+            </div>
+            <label class="chk-row"><input type="checkbox" id="s-fast-fp16" data-cfg="fast_fp16"><i></i><span>启用快速 FP16（--fast-fp16）</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-pin-mem" data-cfg="pin_shared_memory"><i></i><span>固定共享内存（--pin-shared-memory）</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-expandable" data-cfg="expandable_segments"><i></i><span>可扩展显存段（--expandable-segments），缓解显存碎片</span></label>
+          </div>
+
+          <div class="sub-title">注意力加速库</div>
+          <label class="chk-row"><input type="checkbox" id="s-xformers" data-cfg="install_xformers"><i></i><span>安装并尝试使用 xFormers（--xformers）</span></label>
+          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-flash" data-cfg="install_flash"><i></i><span>安装并尝试使用 Flash-Attention（--flash）<em class="tag">仅 Neo</em></span></label>
+          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-sage" data-cfg="install_sage"><i></i><span>安装并尝试使用 Sage-Attention（--sage）<em class="tag">仅 Neo</em></span></label>
+          <div class="hint">--xformers / --flash / --sage 只负责在首次启动时安装对应的包，实际用哪种注意力实现由 Forge 自动挑选，不是强制切换；装好之后如果不想每次启动都重新检查，可以把对应勾选去掉。</div>
+
+          <div class="sub-title">网络与其他</div>
+          <label class="chk-row"><input type="checkbox" id="s-listen" data-cfg="enable_listen"><i></i><span>局域网访问（--listen）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-api" data-cfg="enable_api"><i></i><span>启用 API（--api）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-share" data-cfg="enable_share"><i></i><span>生成公网分享链接（--share）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-insecure" data-cfg="enable_insecure_extension_access"><i></i><span>允许不安全的扩展访问（--enable-insecure-extension-access）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-autolaunch" data-cfg="autolaunch"><i></i><span>启动后自动打开浏览器（--autolaunch）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-skip-pyver" data-cfg="skip_python_version_check"><i></i><span>跳过 Python 版本检查（--skip-python-version-check），venv 版本与 webui.bat 期望不一致时可以先试试</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-no-hashing" data-cfg="no_hashing"><i></i><span>禁用模型 SHA-256 哈希计算（--no-hashing），老版本 Python (3.10) 加载新模型时可能因缺 hashlib.file_digest 而崩溃，勾这个可以跳过</span></label>
+
+          <div class="form-grid">
+            <label>网页主题</label>
+            <select id="s-theme" data-cfg="theme">
+              <option value="auto">跟随 Forge 默认</option>
+              <option value="dark">深色（--theme dark）</option>
+              <option value="light">浅色（--theme light）</option>
+            </select>
+            <label>端口</label>
+            <input type="text" id="s-port" data-cfg="port" placeholder="对应 --port，留空使用默认端口 7860">
+            <label>自定义追加参数</label>
+            <input type="text" id="s-extra" data-cfg="extra_args" placeholder="其他想手动追加的命令行参数，用空格分隔">
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">下载加速（国内网络）</div>
+          <div class="form-grid">
+            <label>加速策略</label>
+            <select id="s-mirror" data-cfg="mirror_mode">
+              <option value="auto">自动检测（推荐）</option>
+              <option value="always">总是使用国内镜像</option>
+              <option value="never">总是使用官方源（国外/有代理时选这个）</option>
+            </select>
+          </div>
+          <div class="row" style="align-items:center">
+            <span class="hint" id="s-mirror-status"></span>
+            <button class="btn" id="s-mirror-redetect">重新检测网络环境</button>
+          </div>
+          <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">仅供参考<span class="card-title-hint">这些在网页内 Settings 或显卡驱动层面控制，命令行无法设置——仅帮你记录偏好</span></div>
+          <div class="form-grid">
+            <label>GPU Weight / 预留显存</label>
+            <input type="number" id="s-info-vram" data-cfg="info_reserved_vram_gb" min="0" max="24" step="1">
+          </div>
+          <div class="hint">需在 WebUI 内 Settings → Optimizations 手动设置</div>
+          <label class="chk-row"><input type="checkbox" id="s-info-shared" data-cfg="info_shared_vram_fallback"><i></i><span>使用共享显存回退（需在 NVIDIA 控制面板：管理3D设置 → 程序设置 → 找到该 exe →「CUDA - Sysmem Fallback Policy」中设置）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-info-hash" data-cfg="info_model_hash_calc"><i></i><span>模型哈希计算（需在 WebUI 内 Settings → 搜索 “hash” 关闭/开启）</span></label>
+          <div class="hint">上面「性能设置」勾选/修改后，点击「一键启动」时会真实写入 COMMANDLINE_ARGS；这一块只是记录偏好，实际生效需要去对应的地方手动配置一次，之后通常会持续生效。</div>
+        </div>
+      </section>
+
+      <!-- ======== 环境部署 ======== -->
+      <section class="page" id="page-deploy">
+        <div class="card">
+          <div class="card-title">环境检测</div>
+          <div class="env-grid">
+            <span class="env-label">Git</span><span class="env-status" id="deploy-git-status">检测中…</span>
+            <span class="env-label">Python</span><span class="env-status" id="deploy-python-status">检测中…</span>
+          </div>
+          <button class="btn" id="deploy-redetect">重新检测</button>
+        </div>
+
+        <div class="card">
+          <div class="card-title">选择要部署的 WebUI Forge 分支</div>
+          <select id="deploy-branch"></select>
+        </div>
+
+        <div class="card">
+          <div class="card-title">安装目录</div>
+          <div class="row">
+            <input type="text" id="deploy-target" placeholder="选择一个空目录，或已有的 WebUI 安装目录">
+            <button class="btn" id="deploy-browse">浏览…</button>
+            <button class="btn" id="deploy-check">检测该目录</button>
+          </div>
+          <div class="hint" id="deploy-dir-status">尚未检测</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">虚拟环境依赖</div>
+          <label class="chk-row">
+            <input type="checkbox" id="deploy-portable" data-cfg="use_portable_env"><i></i>
+            <span>自动下载便携版 Python + Git，不依赖系统安装（部署出来的环境完全自包含，跟「秋叶整合包」结构一样：python\python.exe、git\cmd\git.exe）</span>
+          </label>
+          <div class="hint">Python 来自 astral-sh/python-build-standalone（uv 底层用的同一套真正独立、可重定位的 CPython 构建，不是阉割过 venv 的官方 embeddable 包）；Git 来自 git-for-windows 官方 PortableGit。两者都是运行时从 GitHub 实时查询最新版本下载，体积加起来大概 100~150MB。勾选后即使系统一个都没装也能部署。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">环境诊断<span class="card-title-hint">对已有安装做检测/修复，不需要重新部署</span></div>
+          <div class="hint">如果你是已有安装（比如秋叶整合包）想检查一下 venv 版本对不对，或者遇到过 "hashlib has no attribute 'file_digest'" 这个报错，用下面两个按钮就够了，不用走完整的克隆部署流程。</div>
+          <div class="row">
+            <button class="btn" id="deploy-venv-check">检测现有 venv 版本</button>
+            <button class="btn" id="deploy-patch-hashlib">写入 hashlib 兼容补丁</button>
+          </div>
+          <div class="hint" id="deploy-diag-result"></div>
+        </div>
+
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" id="deploy-start">
+            <svg class="btn-icon"><use href="#i-deploy"/></svg>开始部署
+          </button>
+          <button class="btn btn-lg" id="deploy-cancel" disabled>取消</button>
+        </div>
+        <div class="progress" id="deploy-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+        <div class="hint">部署过程会先（视情况）下载便携版 Python/Git，再执行 git clone 下载源码，然后通过环境变量的方式直接运行仓库自带的 webui.bat——这一步会由 Forge 自己创建 venv 虚拟环境并下载安装 torch 等依赖（体积较大，根据网速可能需要十几分钟到几十分钟）。安装完成后会自动填回「一键启动」页。</div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>部署日志</span><button class="btn btn-xs" id="deploy-log-clear">清空</button></div>
+          <pre class="console" id="deploy-log"></pre>
+        </div>
+      </section>
+
+      <!-- ======== 模型下载 ======== -->
+      <section class="page" id="page-civitai">
+        <div class="card">
+          <div class="card-title">输入 Civitai / liblib 模型网址 / 版本网址 / ID</div>
+          <div class="row">
+            <input type="text" id="cv-url" placeholder="Civitai：https://civitai.com/models/12345?modelVersionId=67890　或　liblib：https://www.liblib.art/modelinfo/xxxx?versionUuid=xxxx">
+            <button class="btn btn-accent" id="cv-fetch">获取信息</button>
+          </div>
+          <div class="hint">两个站的链接都认：粘贴后点「获取信息」即可。liblib 的链接里没带 ?versionUuid= 时，会在下方列出所有版本供选择。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Civitai API Key<span class="card-title-hint">下载受限/需登录内容时才需要，可留空</span></div>
+          <div class="row">
+            <input type="password" id="cv-apikey" data-cfg="civitai_api_key" placeholder="留空表示匿名访问">
+            <button class="btn" id="cv-open-key">在浏览器中打开并生成 Key</button>
+          </div>
+          <div class="hint">做不到「自动登录」——Civitai 没有开放给第三方程序的自动登录接口，真做的话得替你存密码，这个风险不会承担。点右边按钮会跳转到 Civitai 的 Key 管理页（浏览器已登录的话直接跳过登录），生成后复制粘贴回来即可，之后保存在本地配置里不用每次填。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">liblib usertoken<span class="card-title-hint">liblib 所有模型都强制登录才能下载，只看不下的话可以留空</span></div>
+          <div class="row">
+            <input type="password" id="lb-token" data-cfg="liblib_token" placeholder="从浏览器 Cookie 里复制的 usertoken">
+            <button class="btn" id="lb-verify">验证并保存</button>
+            <button class="btn" id="lb-open">打开 liblib 登录</button>
+          </div>
+          <div class="hint">获取方法：浏览器打开 liblib.art 并登录 → 按 F12 打开开发者工具 → 「应用 / Application」→ 左侧 Cookies → www.liblib.art → 找到 usertoken，把它的值复制粘贴到这里 → 点「验证并保存」（验证成功会显示你的昵称）。凭证只存在本地配置里，不会发给 liblib 以外的任何服务器。会员 / 独家模型即使填了 token 也可能被拒（那属于账号权限问题），这时请用信息卡里的「打开模型页面」在浏览器里下载。</div>
+        </div>
+
+        <div class="card" id="cv-info-card" hidden>
+          <div class="card-title">模型信息</div>
+          <div class="kv-table" id="cv-info"></div>
+          <div id="cv-files"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">保存位置<span class="card-title-hint">获取信息后会按模型类型自动填入对应文件夹</span></div>
+          <div class="row">
+            <input type="text" id="cv-dest" placeholder="选择/获取信息后会自动填入根目录下对应的模型文件夹">
+            <button class="btn" id="cv-browse">浏览…</button>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button class="btn btn-accent btn-lg" id="cv-download" disabled>
+            <svg class="btn-icon"><use href="#i-download"/></svg>下载并放入对应文件夹
+          </button>
+        </div>
+        <div class="progress" id="cv-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>日志</span><button class="btn btn-xs" id="cv-log-clear">清空</button></div>
+          <pre class="console console-sm" id="cv-log"></pre>
+        </div>
+      </section>
+
+      <!-- ======== 模型管理 ======== -->
+      <section class="page" id="page-models">
+        <div class="toolbar">
+          <button class="btn" id="md-refresh">刷新</button>
+          <button class="btn btn-success" id="md-batch">一键查询本类别缺失信息的模型</button>
+          <button class="btn" id="md-batch-cancel" disabled>取消批量</button>
+          <span class="hint" id="md-root"></span>
+        </div>
+        <div class="models-layout">
+          <div class="models-cats card-flat" id="md-cats"></div>
+          <div class="models-mid">
+            <div class="row">
+              <input type="text" id="md-filter" placeholder="输入关键字过滤文件名…">
+              <select id="md-base"><option value="">全部</option></select>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="md-files">
+                <thead><tr>
+                  <th data-sort="rel" class="sortable">文件名</th>
+                  <th data-sort="base" class="sortable">基础模型</th>
+                  <th data-sort="size" class="sortable">大小</th>
+                  <th data-sort="mtime_text" class="sortable">修改时间</th>
+                </tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <div class="hint" id="md-count"></div>
+          </div>
+          <div class="models-detail">
+            <div class="preview-box" id="md-preview"><span>选中文件后这里显示预览图</span></div>
+            <div class="detail-view" id="md-detail"></div>
+            <div class="detail-actions">
+              <button class="btn btn-sm" id="md-open" disabled>在资源管理器中定位</button>
+              <button class="btn btn-sm" id="md-copy-name" disabled>复制文件名（不含后缀）</button>
+              <button class="btn btn-sm btn-accent" id="md-copy-lora" disabled>复制 &lt;lora:名字:1&gt; 调用格式</button>
+              <button class="btn btn-sm" id="md-hash-lookup" disabled>按哈希查询并补全信息（Civitai / liblib）</button>
+              <button class="btn btn-sm btn-danger-text" id="md-delete" disabled>删除该模型…</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======== 常用插件 ======== -->
+      <section class="page" id="page-extensions">
+        <div class="hint hint-block">勾选想装的扩展，点「安装选中项」会依次 git clone 到 extensions/ 目录下。已经装过的会显示「已安装」并自动跳过，不会重复下载。需要先在「一键启动」页设置好 WebUI 根目录。部分扩展（ADetailer、WD14 Tagger）会根据「高级选项」页当前选择的分支自动装对应的兼容版本，不用你自己判断。</div>
+        <div id="ext-list"></div>
+        <div class="action-row">
+          <button class="btn" id="ext-refresh">刷新安装状态</button>
+          <button class="btn btn-accent" id="ext-install">
+            <svg class="btn-icon"><use href="#i-download"/></svg>安装选中项
+          </button>
+          <button class="btn" id="ext-cancel" disabled>取消</button>
+        </div>
+        <div class="console-wrap">
+          <div class="console-head"><span>日志</span><button class="btn btn-xs" id="ext-log-clear">清空</button></div>
+          <pre class="console console-sm" id="ext-log"></pre>
+        </div>
+      </section>
+
+      <!-- ======== WD14 反推 ======== -->
+      <section class="page" id="page-wd14">
+        <div class="hint hint-block">这是内置在启动器里的独立反推工具，不依赖 webui 扩展，跟 Forge 是常规版还是 Neo 无关。模型首次使用时会自动从 HuggingFace 下载并缓存在本地（wd_tagger_models 文件夹），之后不用重复下载。也可以直接把图片或文件夹从资源管理器拖进下面的列表框里。推理运行在独立的虚拟环境（wd14_venv 文件夹）里，跟你系统 Python 里装的其他工具完全隔离，不会互相污染依赖版本。首次使用需要下载安装这个独立环境（约几十 MB），之后会跳过。</div>
+
+        <div class="card">
+          <div class="card-title">模型</div>
+          <div class="row">
+            <select id="wd-model"></select>
+            <button class="btn btn-accent" id="wd-load">加载模型</button>
+            <span class="hint" id="wd-model-status">尚未加载</span>
+          </div>
+          <div class="progress" id="wd-model-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+          <div class="row" style="margin-top:8px">
+            <button class="btn btn-sm" id="wd-open-repo">打开模型下载页面</button>
+            <button class="btn btn-sm" id="wd-import">手动导入模型…</button>
+          </div>
+          <div class="hint">下载失败时走这条路：点「打开模型下载页面」，把 <b>model.onnx</b> 和 <b>selected_tags.csv</b> 两个文件下到同一个文件夹（model.onnx 比较大，用下载工具拖会快很多），然后点「手动导入模型…」选中那个文件夹。自动下载本身已经会依次尝试国内镜像和官方源，并且支持断点续传——中途断了再点一次「加载模型」会接着下，不用从头来。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">参数</div>
+          <div class="form-grid">
+            <label id="wd-general-label">常规标签阈值（0.35）</label>
+            <input type="range" id="wd-general" min="1" max="99" value="35">
+            <label id="wd-character-label">角色标签阈值（0.85）</label>
+            <input type="range" id="wd-character" min="1" max="99" value="85">
+          </div>
+          <label class="chk-row"><input type="checkbox" id="wd-include-rating"><i></i><span>包含评分标签（safe/questionable/explicit）</span></label>
+          <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>批量处理时把结果保存为同名 .txt（LoRA 训练打标常用格式）</span></label>
+        </div>
+
+        <div class="card">
+          <div class="card-title">图片<span class="card-title-hint">可以直接把图片或文件夹拖进列表</span></div>
+          <div class="row">
+            <button class="btn" id="wd-pick-files">选择图片…</button>
+            <button class="btn" id="wd-pick-folder">选择文件夹（批量）…</button>
+            <button class="btn" id="wd-clear">清空列表</button>
+          </div>
+          <div class="drop-list" id="wd-images"><div class="drop-empty">把图片 / 文件夹拖到这里</div></div>
+        </div>
+
+        <div class="action-row">
+          <button class="btn btn-primary btn-lg" id="wd-run" disabled>
+            <svg class="btn-icon"><use href="#i-launch"/></svg>开始反推
+          </button>
+          <button class="btn btn-lg" id="wd-cancel" disabled>取消</button>
+        </div>
+        <div class="progress" id="wd-tag-progress"><div class="progress-bar"></div><span class="progress-text">等待开始…</span></div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>结果（可直接复制）</span><button class="btn btn-xs" id="wd-result-clear">清空</button></div>
+          <pre class="console" id="wd-result"></pre>
+        </div>
+      </section>
+
+      <!-- ======== 图片信息 ======== -->
+      <section class="page" id="page-meta">
+        <div class="meta-layout">
+          <div class="meta-left">
+            <div class="drop-area" id="meta-drop">
+              <span>把图片拖到这里<br>（或点击下方按钮选择）<br><br>支持 PNG / JPG / WebP<br>以及 ComfyUI 工作流 .json</span>
+            </div>
+            <button class="btn" id="meta-pick">选择图片…</button>
+            <div class="hint" id="meta-file"></div>
+          </div>
+          <div class="meta-right">
+            <div class="meta-source-bar" id="meta-source" hidden></div>
+            <div class="meta-timing" id="meta-timing"></div>
+            <div class="card">
+              <div class="card-title">正向提示词</div>
+              <textarea id="meta-prompt" readonly class="ta-prompt"></textarea>
+            </div>
+            <div class="card">
+              <div class="card-title">负向提示词</div>
+              <textarea id="meta-neg" readonly class="ta-sm"></textarea>
+            </div>
+            <div class="card" id="meta-chars-card" hidden>
+              <div class="card-title">角色提示词<span class="card-title-hint">NovelAI V4 / V4.5 / V5 的多角色插槽</span></div>
+              <div id="meta-chars"></div>
+            </div>
+            <div class="card" id="meta-lora-card" hidden>
+              <div class="card-title">LoRA<span class="card-title-hint">带哈希的能被「缺失模型检测」精确匹配</span></div>
+              <div id="meta-loras"></div>
+            </div>
+            <div class="card" id="meta-civitai-card" hidden>
+              <div class="card-title">Civitai 资源<span class="card-title-hint">元数据里嵌的 AIR 标识，可直接跳到模型页</span></div>
+              <div id="meta-civitai"></div>
+            </div>
+            <div class="card">
+              <div class="card-title">生成参数<span class="card-title-hint">模型 / LoRA / 采样等</span></div>
+              <div class="table-wrap table-wrap-sm">
+                <table class="data-table" id="meta-settings"><tbody></tbody></table>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-title">缺失模型检测<span class="card-title-hint">从图片元数据里的哈希反查 Civitai，一键补齐本地没有的模型</span></div>
+              <div class="hint">A1111/Forge 格式的元数据带哈希（文件内容的指纹），能精确匹配自动下载；ComfyUI 工作流通常不存哈希，缺失的模型会显示「按名字搜索」——这条路径不保证精确匹配（Civitai 上同名模型不少见），需要你从候选里手动选一个确认，不会替你自动下载。</div>
+              <div class="row">
+                <button class="btn" id="meta-scan" disabled>检测缺失模型</button>
+                <button class="btn btn-accent" id="meta-download" disabled>下载勾选项</button>
+              </div>
+              <div class="table-wrap table-wrap-sm">
+                <table class="data-table" id="meta-missing">
+                  <thead><tr><th style="width:56px">下载</th><th style="width:90px">类型</th><th>名称</th><th>状态</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="progress" id="meta-missing-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+            </div>
+            <div class="row">
+              <button class="btn btn-sm" id="meta-copy-prompt" disabled>复制正向</button>
+              <button class="btn btn-sm" id="meta-copy-neg" disabled>复制负向</button>
+              <button class="btn btn-sm btn-accent" id="meta-copy-all" disabled>复制全部原始参数</button>
+            </div>
+            <div class="hint">支持的来源：A1111 / Forge / reForge、ComfyUI（真正遍历工作流图去追提示词和 LoRA 链，不是按节点名硬猜）、NovelAI V3 到 V5（含多角色插槽）、Fooocus / SwarmUI / InvokeAI / Draw Things / Easy Diffusion，以及隐写 PNG（参数藏在像素里、文本块被剥掉的那种）。LoRA 训练集里只有同名 .txt 的图也会一并读出来。<br>读不出参数的常见原因是截图、微信/QQ 传输、网站二次压缩——这些会把元数据整段抹掉，隐写那条路也救不回来。</div>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<!-- 模态框 / 通知 -->
+<div id="modal-mask" hidden>
+  <div id="modal">
+    <div id="modal-title"></div>
+    <div id="modal-body"></div>
+    <div id="modal-buttons"></div>
+  </div>
+</div>
+<!-- 顶部加载条 -->
+<div id="topbar"><div class="topbar-fill"><span class="topbar-glow"></span></div></div>
+
+<div id="toasts"></div>
+
+<script src="js/splash.js"></script>
+<script src="js/mock.js"></script>
+<script src="js/core.js"></script>
+<script src="js/launch.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/deploy.js"></script>
+<script src="js/civitai.js"></script>
+<script src="js/models.js"></script>
+<script src="js/extensions.js"></script>
+<script src="js/wd14.js"></script>
+<script src="js/imgcontainer.js"></script>
+<script src="js/meta.js"></script>
+</body>
+</html>

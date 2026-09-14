@@ -1,0 +1,24 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 运行期自动生成 / 本机私有
+launcher_config.json
+model_hash_cache.json
+web/_preview/
+tmp/
+
+# WD14 独立环境（首次使用自动部署，约 200MB）
+wd14_venv/
+wd_tagger_models/
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# 历史开发文档/一次性迁移脚本，不进仓库
+后端加固补丁.py
+图片信息页重写说明.md
