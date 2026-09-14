@@ -1383,17 +1383,36 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
             log(f"[便携环境] 查询 python-build-standalone 最新版本 (目标 Python {version_prefix}.x) ...\n")
             net_log = lambda m: log(m + "\n")
             tag = pe.get_latest_pbs_tag(cfg=self.cfg, log_cb=net_log)
+            # 防篡改：先取 release 官方清单 SHA256SUMS 作为哈希基准，
+            # 下载完必须校验通过才会解压/执行（加速代理是第三方中间人）。
+            log("[便携环境] 获取官方校验清单 SHA256SUMS ...\n")
+            sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self.cfg, log_cb=net_log)
             assets = pe.list_release_assets(pe.PBS_REPO, tag, cfg=self.cfg, log_cb=net_log)
             asset = pe.pick_python_asset(assets, version_prefix)
             if not asset:
                 raise pe.PortableEnvError(
                     f"没有找到匹配 Python {version_prefix}.x / Windows x86_64 的构建，可能需要手动安装")
+            expected = sha_map.get(asset["name"])
+            if not expected:
+                raise pe.PortableEnvError(
+                    f"官方 SHA256SUMS 中没有 {asset['name']} 的哈希记录，无法验证下载内容，已中止")
+            # 交叉核对：GitHub API 的资产摘要应当与官方清单一致，不一致说明
+            # 元数据链路也可能被代理篡改，直接中止
+            api_digest = (asset.get("digest") or "")
+            if api_digest.startswith("sha256:"):
+                api_digest = api_digest[len("sha256:"):].lower()
+                if api_digest != expected:
+                    raise pe.PortableEnvError(
+                        "GitHub API 摘要与官方 SHA256SUMS 不一致，元数据可能被篡改，已中止")
             log(f"[便携环境] 下载 {asset['name']} ...\n")
             archive_path = os.path.join(tmp, asset["name"])
             pe.download_file(asset["url"], archive_path,
                              progress_cb=progress,
                              cancel_flag=self._deploy_cancel.is_set,
                              cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+            pe.verify_downloaded_file(archive_path, expected,
+                                      what=f"Python 归档 {asset['name']}")
+            log("[便携环境] 校验通过，开始解压\n")
             python_exe = pe.extract_python_tar(archive_path, target,
                                                log_cb=lambda m: log(m + "\n"))
             log(f"[便携环境] Python 部署完成: {python_exe}\n")
@@ -1401,17 +1420,25 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
             raise _DeployCancelled()
         if need_git:
             log("[便携环境] 查询 git-for-windows 最新版本 ...\n")
-            assets = pe.list_release_assets(pe.GIT_REPO, tag=None,
-                                            cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+            assets, body = pe.list_release_assets_with_meta(
+                pe.GIT_REPO, tag=None, cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
             asset = pe.pick_git_asset(assets)
             if not asset:
                 raise pe.PortableEnvError("没有找到 PortableGit 64位安装包")
+            expected = pe.pick_git_asset_sha256(body, asset["name"])
+            if not expected:
+                raise pe.PortableEnvError(
+                    f"git-for-windows 发布信息中没有 {asset['name']} 的校验和，无法验证下载内容，已中止")
             log(f"[便携环境] 下载 {asset['name']} ...\n")
             archive_path = os.path.join(tmp, asset["name"])
             pe.download_file(asset["url"], archive_path,
                              progress_cb=progress,
                              cancel_flag=self._deploy_cancel.is_set,
                              cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+            pe.verify_downloaded_file(archive_path, expected,
+                                      what=f"Git 安装包 {asset['name']}")
+            # 自解压包执行前再验 Authenticode 签名（双保险）
+            pe.verify_pe_signature(archive_path, log_cb=lambda m: log(m + "\n"))
             git_exe = pe.extract_portable_git(archive_path, target,
                                               log_cb=lambda m: log(m + "\n"))
             log(f"[便携环境] Git 部署完成: {git_exe}\n")

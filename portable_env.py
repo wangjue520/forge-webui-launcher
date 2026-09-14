@@ -19,6 +19,7 @@ Git 来源：git-for-windows 官方发布的 PortableGit（自解压 7z 包）�
 两者都通过 GitHub Releases API 实时查询最新版本和下载链接，不写死某个
 具体版本号/文件名（那样过一段时间必然失效）。
 """
+import hashlib
 import os
 import re
 import subprocess
@@ -113,13 +114,134 @@ def get_latest_pbs_tag(cfg=None, log_cb=None):
 
 
 def list_release_assets(repo, tag=None, cfg=None, log_cb=None):
-    """tag=None 表示查询 'latest' release"""
+    """tag=None 表示查询 'latest' release。每个资产带 digest（GitHub API
+    提供的 sha256 摘要，形如 'sha256:<hex>'，可能为空）。"""
+    assets, _body = list_release_assets_with_meta(repo, tag, cfg, log_cb)
+    return assets
+
+
+def list_release_assets_with_meta(repo, tag=None, cfg=None, log_cb=None):
+    """list_release_assets + 发布正文。git-for-windows 只把安装包的
+    sha256 校验和写在发布正文里（没有独立清单文件），需要正文才能验签。"""
     if tag:
         url = f"{GITHUB_API}/repos/{repo}/releases/tags/{tag}"
     else:
         url = f"{GITHUB_API}/repos/{repo}/releases/latest"
     data = _get_json(url, cfg, log_cb)
-    return [{"name": a["name"], "url": a["browser_download_url"]} for a in data.get("assets", [])]
+    assets = [{"name": a["name"], "url": a["browser_download_url"],
+               "digest": a.get("digest") or ""} for a in data.get("assets", [])]
+    return assets, (data.get("body") or "")
+
+
+def fetch_pbs_sha256sums(tag, cfg=None, log_cb=None):
+    """
+    下载并解析 python-build-standalone 每个 release 都附带的 SHA256SUMS，
+    返回 {文件名: sha256}。这是防篡改的校验基准：加速代理是第三方中间人，
+    有能力替换下载内容，但它要同时篡改清单和文件才能通过校验。
+
+    拿不到清单视为失败（fail-closed）——宁可部署不了，也不装来源不可证的
+    解释器。
+    """
+    assets = list_release_assets(PBS_REPO, tag, cfg, log_cb)
+    sums = next((a for a in assets if a["name"] == "SHA256SUMS"), None)
+    if not sums:
+        raise PortableEnvError("release 中没有 SHA256SUMS 清单文件，无法校验下载内容，已中止")
+    urls = _github_candidates(sums["url"], cfg, log_cb)
+    last_error = None
+    for u in urls:
+        try:
+            resp = requests.get(u, timeout=60)
+            resp.raise_for_status()
+            result = {}
+            for line in resp.text.splitlines():
+                parts = line.split()
+                if len(parts) == 2 and re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+                    result[parts[1]] = parts[0].lower()
+            if result:
+                return result
+            last_error = PortableEnvError("SHA256SUMS 内容为空或无法解析")
+        except PortableEnvError as e:
+            raise
+        except Exception as e:
+            last_error = e
+            continue
+    raise PortableEnvError(f"无法获取 SHA256SUMS（已尝试 {len(urls)} 个地址）: {last_error}")
+
+
+def pick_git_asset_sha256(body, asset_name):
+    """从 git-for-windows 发布正文解析指定资产的 sha256。
+    正文格式为表格行：'PortableGit-x.y.z-64-bit.7z.exe | <64位hex>'。"""
+    for line in body.splitlines():
+        m = re.match(r"\s*\*?\s*(.+?)\s*\|\s*([0-9a-fA-F]{64})\s*$", line)
+        if m and m.group(1).strip() == asset_name:
+            return m.group(2).lower()
+    return None
+
+
+def sha256_file(path, chunk_size=1024 * 1024):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(chunk_size)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def verify_downloaded_file(path, expected_sha256, what="下载文件"):
+    """
+    解压/执行前的强制 sha256 校验。拿不到的哈希来源的下载物不允许继续
+    （fail-closed），校验不符直接中止并给出两个哈希方便比对。
+    """
+    if not expected_sha256:
+        raise PortableEnvError(f"{what} 没有可用的哈希校验基准，已中止（安全策略）")
+    actual = sha256_file(path)
+    if actual.lower() != expected_sha256.lower():
+        raise PortableEnvError(
+            f"{what} 校验失败！\n"
+            f"  期望 sha256: {expected_sha256}\n"
+            f"  实际 sha256: {actual}\n"
+            f"文件可能被下载代理篡改或已损坏——已中止部署，不会解压或执行它。"
+            f"请重新点击「开始部署」换个地址重试。")
+    return True
+
+
+def verify_pe_signature(exe_path, log_cb=None):
+    """
+    校验 PE 文件的 Authenticode 签名（仅 Windows 生效，其他平台直接放行）。
+    自解压安装包在执行前先验签：代理塞过来的伪造二进制过不了系统信任链。
+    git-for-windows 官方发布的二进制都由 Johannes Schindelin 签名。
+    """
+    if os.name != "nt":
+        return True
+    quoted = exe_path.replace("'", "''")
+    ps = (f"$s = Get-AuthenticodeSignature -FilePath '{quoted}'; "
+          "Write-Output $s.Status.ToString(); "
+          "Write-Output $s.SignerCertificate.Subject")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                           capture_output=True, text=True, timeout=60,
+                           creationflags=0x08000000 if os.name == "nt" else 0)
+    except Exception as e:
+        raise PortableEnvError(f"签名校验执行失败: {e}")
+    lines = (r.stdout or "").strip().splitlines()
+    status = lines[0].strip() if lines else ""
+    subject = lines[1].strip() if len(lines) > 1 else ""
+    if status.lower() != "valid":
+        raise PortableEnvError(
+            f"{what_name(exe_path)} 签名校验失败（状态: {status or '未知'}），文件可能被篡改，已中止。\n"
+            f"路径: {exe_path}")
+    if "schindelin" not in subject.lower() and "git for windows" not in subject.lower():
+        raise PortableEnvError(
+            f"签名者不符合预期: {subject}（应为 git-for-windows 官方签名），已中止。")
+    if log_cb:
+        log_cb(f"签名校验通过: {subject}")
+    return True
+
+
+def what_name(path):
+    return os.path.basename(path)
 
 
 def pick_python_asset(assets, version_prefix):
