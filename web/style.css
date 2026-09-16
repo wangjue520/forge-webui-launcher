@@ -332,7 +332,7 @@ input[type="range"]::-webkit-slider-thumb {
 /* ============ 模型管理三栏 ============ */
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
 .toolbar .hint { margin: 0 0 0 auto; }
-.models-layout { display: grid; grid-template-columns: 168px minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; height: calc(100vh - 190px); min-height: 420px; }
+.models-layout { display: grid; grid-template-columns: 160px minmax(0, 1.35fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 14px; height: calc(100vh - 160px); min-height: 420px; }
 .card-flat { background: var(--card); border: 1px solid var(--card-border); border-radius: var(--radius); }
 .models-cats { padding: 8px; overflow-y: auto; }
 .cat-item {
@@ -342,17 +342,24 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .cat-item:hover { background: #26272f; color: var(--text); }
 .cat-item.active { background: var(--accent-grad); color: #fff; }
-.models-mid { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.models-mid { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
 .models-mid .table-wrap { flex: 1; }
-.models-detail { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.models-detail { display: flex; flex-direction: column; gap: 8px; min-width: 0; min-height: 0; }
+.preview-wrap { position: relative; flex: none; }
 .preview-box {
-  height: 220px; flex: none; border: 1px solid var(--card-border); border-radius: var(--radius);
+  height: 150px; border: 1px solid var(--card-border); border-radius: var(--radius);
   background: #17181e; display: flex; align-items: center; justify-content: center;
   color: #62626e; font-size: 12px; overflow: hidden;
 }
+.preview-toggle {
+  position: absolute; top: 6px; right: 6px; z-index: 2; opacity: .55;
+  padding: 1px 8px; font-size: 10.5px;
+}
+.preview-toggle:hover { opacity: 1; }
+.models-detail.preview-collapsed .preview-wrap { display: none; }
 .preview-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .detail-view {
-  flex: 1; overflow-y: auto; background: var(--input-bg);
+  flex: 1; min-height: 0; overflow-y: auto; background: var(--input-bg);
   border: 1px solid var(--card-border); border-radius: var(--radius-sm);
   padding: 10px 12px; user-select: text; font-size: 12.5px; line-height: 1.6;
 }
@@ -363,7 +370,13 @@ input[type="range"]::-webkit-slider-thumb {
 .detail-view .sect:first-child { margin-top: 0; }
 .detail-view .kv-table { margin-bottom: 4px; }
 .detail-view .dim { color: var(--text-faint); }
-.detail-actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.detail-actions { display: flex; flex-direction: row; flex-wrap: wrap; gap: 6px; flex: none; }
+
+/* 行悬停快捷操作（定位/复制名/复制 lora 调用），平时隐藏不挤占表格 */
+#md-files th.row-actions, #md-files td.row-actions { width: 1%; white-space: nowrap; text-align: right; }
+#md-files td.row-actions { opacity: 0; transition: opacity .12s; user-select: none; }
+#md-files tr:hover td.row-actions { opacity: 1; }
+#md-files td.row-actions .btn + .btn { margin-left: 4px; }
 
 /* ============ 拖拽区 ============ */
 .drop-area {

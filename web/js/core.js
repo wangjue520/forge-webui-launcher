@@ -70,6 +70,37 @@
     return (i === 0 ? n : n.toFixed(n < 10 ? 2 : 1)) + " " + u[i];
   };
 
+  /* ---------- 界面缩放（Ctrl+滚轮，全窗口生效，本地记住） ---------- */
+  // 触摸板双指捏合在 Chromium 里就是 ctrl+wheel，一并覆盖。
+  // 缩放挂在 documentElement 上对整个窗口（含所有页面）生效；
+  // 每次缩放立即写 localStorage，下次启动直接恢复。
+  const ZOOM_KEY = "ui-zoom", ZOOM_MIN = 0.5, ZOOM_MAX = 2.0, ZOOM_STEP = 0.1;
+  App.zoom = 1;
+
+  function applyZoom(z, save) {
+    z = Math.round(Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)) * 100) / 100;
+    App.zoom = z;
+    document.documentElement.style.zoom = z;
+    if (save) { try { localStorage.setItem(ZOOM_KEY, String(z)); } catch (e) { /* 隐私模式等 */ } }
+  }
+
+  (function initZoom() {
+    let saved = 1;
+    try { saved = parseFloat(localStorage.getItem(ZOOM_KEY)) || 1; } catch (e) {}
+    applyZoom(saved, false);
+
+    // 触控板一次捏合会连发很多小 delta，攒到一格滚轮的量再跳一档
+    let acc = 0;
+    document.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      acc += e.deltaY;
+      if (Math.abs(acc) < 60) return;
+      applyZoom(App.zoom + (acc > 0 ? -ZOOM_STEP : ZOOM_STEP), true);
+      acc = 0;
+    }, { passive: false });
+  })();
+
   /* ---------- 模态框（Promise 化） ---------- */
   // buttons: [{id, label, kind: "primary"|"accent"|"danger"|""}] —— resolve(id)；Esc/无按钮时不自动关闭
   App.modal = function (title, bodyHtml, buttons, opts) {

@@ -389,6 +389,7 @@
                   <th data-sort="base" class="sortable">基础模型</th>
                   <th data-sort="size" class="sortable">大小</th>
                   <th data-sort="mtime_text" class="sortable">修改时间</th>
+                  <th class="row-actions"></th>
                 </tr></thead>
                 <tbody></tbody>
               </table>
@@ -396,14 +397,17 @@
             <div class="hint" id="md-count"></div>
           </div>
           <div class="models-detail">
-            <div class="preview-box" id="md-preview"><span>选中文件后这里显示预览图</span></div>
+            <div class="preview-wrap">
+              <div class="preview-box" id="md-preview"><span>选中文件后这里显示预览图</span></div>
+              <button class="btn preview-toggle" id="md-preview-toggle" title="收起/展开预览图，给详情腾出空间">收起</button>
+            </div>
             <div class="detail-view" id="md-detail"></div>
             <div class="detail-actions">
-              <button class="btn btn-sm" id="md-open" disabled>在资源管理器中定位</button>
-              <button class="btn btn-sm" id="md-copy-name" disabled>复制文件名（不含后缀）</button>
-              <button class="btn btn-sm btn-accent" id="md-copy-lora" disabled>复制 &lt;lora:名字:1&gt; 调用格式</button>
-              <button class="btn btn-sm" id="md-hash-lookup" disabled>按哈希查询并补全信息（Civitai / liblib）</button>
-              <button class="btn btn-sm btn-danger-text" id="md-delete" disabled>删除该模型…</button>
+              <button class="btn btn-xs" id="md-open" disabled title="在资源管理器中定位">在资源管理器中定位</button>
+              <button class="btn btn-xs" id="md-copy-name" disabled title="复制文件名（不含后缀）">复制文件名</button>
+              <button class="btn btn-xs btn-accent" id="md-copy-lora" disabled title="复制 &lt;lora:名字:1&gt; 调用格式">复制 lora 调用格式</button>
+              <button class="btn btn-xs" id="md-hash-lookup" disabled title="按哈希查询并补全信息（先查 Civitai，查不到再查 liblib）">哈希查询补全信息</button>
+              <button class="btn btn-xs btn-danger-text" id="md-delete" disabled title="会连同同名预览图和 .civitai.info 一起删除，不可恢复">删除该模型…</button>
             </div>
           </div>
         </div>

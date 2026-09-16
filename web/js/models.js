@@ -52,11 +52,31 @@
         <td class="dim">${App.esc(f.base || "未知")}</td>
         <td class="dim">${App.esc(f.size_text)}</td>
         <td class="dim">${App.esc(f.mtime_text)}</td>
+        <td class="row-actions">` +
+        `<button class="btn btn-xs" data-act="reveal" title="在资源管理器中定位">定位</button>` +
+        `<button class="btn btn-xs" data-act="copy" title="复制文件名（不含后缀）">复制名</button>` +
+        (curIsLora ? `<button class="btn btn-xs" data-act="lora" title="复制 &lt;lora:名字:1&gt; 调用格式">复制lora</button>` : "") +
+        `</td>
       </tr>`).join("");
     $("#md-count").textContent = `共 ${files.length} 个文件` +
       (rows.length !== files.length ? `，筛选后 ${rows.length} 个` : "");
-    tbody().querySelectorAll("tr").forEach((tr) =>
-      tr.addEventListener("click", () => selectRow(tr.dataset.path, tr)));
+    tbody().querySelectorAll("tr").forEach((tr) => {
+      tr.addEventListener("click", () => selectRow(tr.dataset.path, tr));
+      tr.querySelectorAll("[data-act]").forEach((b) =>
+        b.addEventListener("click", (e) => {
+          e.stopPropagation();   // 不要触发整行选中/读详情
+          rowAction(b.dataset.act, tr.dataset.path);
+        }));
+    });
+  }
+
+  function rowAction(act, path) {
+    const f = files.find((x) => x.path === path);
+    if (!f) return;
+    const stem = f.rel.replace(/\.[^.]+$/, "");
+    if (act === "reveal") App.api.reveal_in_explorer(f.path);
+    else if (act === "copy") App.copy(stem, "已复制文件名");
+    else if (act === "lora") App.copy(`<lora:${stem}:1>`, "已复制 LoRA 调用格式");
   }
 
   async function selectRow(path, tr) {
@@ -241,6 +261,22 @@
       $("#md-refresh").addEventListener("click", reloadAll);
       $("#md-filter").addEventListener("input", renderTable);
       $("#md-base").addEventListener("change", renderTable);
+
+      // 预览图可收起（窗口小或触发词多时给详情区腾地方），状态本地记住
+      const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
+      const recall = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+      const pToggle = $("#md-preview-toggle");
+      const applyPreviewCollapsed = () => {
+        const collapsed = recall("md-preview-collapsed") === "1";
+        $(".models-detail").classList.toggle("preview-collapsed", collapsed);
+        pToggle.textContent = collapsed ? "展开" : "收起";
+      };
+      pToggle.addEventListener("click", () => {
+        store("md-preview-collapsed",
+          $(".models-detail").classList.contains("preview-collapsed") ? "0" : "1");
+        applyPreviewCollapsed();
+      });
+      applyPreviewCollapsed();
 
       $$("#md-files th.sortable").forEach((th) => th.addEventListener("click", () => {
         const key = th.dataset.sort;
