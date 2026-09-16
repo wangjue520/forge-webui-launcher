@@ -1,0 +1,5 @@
+# cmd.exe 解析不了 LF 换行的批处理文件（双击会闪退），
+# 所以 .bat 必须以原始字节（CRLF）存储：-text 禁止 git 做任何换行转换，
+# 否则 GitHub 的 zip 打包/克隆出来的会是 LF 版，双击黑框一闪就没了。
+*.bat   -text
+*.cmd   -text
