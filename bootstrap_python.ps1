@@ -24,6 +24,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# IWR 的进度条会把下载拖慢 1-2 个数量级，静默掉
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # 与 mirror_manager.GITHUB_PROXIES 保持一致

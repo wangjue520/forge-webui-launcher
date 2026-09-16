@@ -23,6 +23,7 @@ import os
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -176,19 +177,25 @@ def _fmt_size(num_bytes):
 
 
 def kill_process_tree(pid):
-    """杀掉整棵进程树（cmd.exe 只是壳，真正占端口的 python.exe 是孙进程）"""
+    """杀掉整棵进程树（cmd.exe 只是壳，真正占端口的 python.exe 是孙进程）。
+    返回是否杀成功；taskkill 本身也加超时，避免杀进程的动作自己卡死。"""
     if not pid or pid <= 0:
-        return
+        return False
     if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
-            capture_output=True, creationflags=_NO_WINDOW,
-        )
+        try:
+            r = subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, creationflags=_NO_WINDOW, timeout=10,
+            )
+            return r.returncode == 0
+        except Exception:
+            return False
     else:
         try:
             os.killpg(os.getpgid(pid), 9)
+            return True
         except Exception:
-            pass
+            return False
 
 
 def _probe_executable(cmd, timeout=15):
@@ -458,6 +465,15 @@ class LauncherApi:
         self._asks = {}            # ask_id -> {"event": Event, "value": ...}
         self._threads_lock = threading.Lock()
 
+        # 事件推送队列：_emit 只入队，由专门的 sender 线程串行 evaluate_js。
+        # 以前是每个 worker 线程 emit 时同步阻塞到渲染进程完成 JS——
+        # 日志一多渲染侧积压，背压直接拖慢 pip/git 子进程，UI 还持续
+        # 高负载假死。队列满时只允许丢最旧的日志事件，state/ask 等
+        # 控制事件宁可阻塞也绝不丢。
+        self._emit_q = queue.Queue(maxsize=5000)
+        self._emit_sender = None
+        self._emit_sender_lock = threading.Lock()
+
         # 一键启动
         self._launch_proc = None
         self._launch_url = None
@@ -486,6 +502,9 @@ class LauncherApi:
         self._deploy_cancel = threading.Event()
         self._deploy_proc = None
         self._deploy_running = False
+        # 双击「开始部署」会在前端连发两次请求，检查和置位必须原子，
+        # 否则两个部署线程并发跑，日志/配置互相踩
+        self._deploy_lock = threading.Lock()
 
         # 模型下载页（Civitai / liblib 共用一套界面）
         self._civitai_version_info = None
@@ -531,23 +550,115 @@ class LauncherApi:
         self._window = window
 
     def _emit(self, scope, type_, **data):
-        """推送事件给前端：window.App.onEvent({scope, type, ...})"""
+        """推送事件给前端：只放进发送队列，由 sender 线程统一 evaluate_js。
+        worker 线程从此不会因渲染进程阻塞而产生背压。"""
         if not self._window:
             return
+        self._ensure_emit_sender()
+        evt = {"scope": scope, "type": type_, **data}
+        if type_ != "log":
+            # state/ask/progress 等控制事件不允许丢，队列满了就阻塞等 sender 消化
+            self._emit_q.put(evt)
+            return
+        # 日志事件量大、丢了也不影响流程：队列满时丢掉最旧的一条日志
         try:
-            payload = json.dumps({"scope": scope, "type": type_, **data}, ensure_ascii=False)
-            self._window.evaluate_js(f"window.App && window.App.onEvent({payload})")
+            self._emit_q.put_nowait(evt)
+        except queue.Full:
+            self._drop_oldest_log()
+            try:
+                self._emit_q.put_nowait(evt)
+            except queue.Full:
+                pass  # 极端情况下连最旧日志都腾不出位置，只好丢这条新的
+
+    def _drop_oldest_log(self):
+        """队列已满时腾位置：移除队列里最旧的一条 log 事件（不碰其他类型）"""
+        kept = []
+        dropped = False
+        try:
+            while True:
+                evt = self._emit_q.get_nowait()
+                if not dropped and evt.get("type") == "log":
+                    dropped = True
+                    continue
+                kept.append(evt)
+        except queue.Empty:
+            pass
+        for evt in kept:
+            try:
+                self._emit_q.put_nowait(evt)
+            except queue.Full:
+                break  # sender 消费得慢，保住排前面的，剩下的丢弃
+
+    def _ensure_emit_sender(self):
+        if self._emit_sender is not None:
+            return
+        with self._emit_sender_lock:
+            if self._emit_sender is not None:
+                return
+            t = threading.Thread(target=self._emit_sender_loop,
+                                 daemon=True, name="emit-sender")
+            t.start()
+            self._emit_sender = t
+
+    def _emit_sender_loop(self):
+        """唯一给前端发事件的线程：从队列取事件，相邻同 scope 的 log 事件
+        贪心合并成一条再发，降低 evaluate_js 频率（前端日志追加是 O(n²)，
+        发送太密会把渲染进程拖垮）"""
+        pending = []  # 合并时取出但不属于本批的事件，按原顺序补发
+        while True:
+            if pending:
+                evt = pending.pop(0)
+            else:
+                evt = self._emit_q.get()
+            if evt is None:
+                break
+            try:
+                if evt.get("type") == "log":
+                    scope = evt.get("scope")
+                    text = evt.get("text") or ""
+                    while True:
+                        try:
+                            nxt = self._emit_q.get(timeout=0.05)
+                        except queue.Empty:
+                            break
+                        if nxt.get("type") == "log" and nxt.get("scope") == scope:
+                            piece = nxt.get("text") or ""
+                            # 前端对每条事件之间自行补换行；合并后缺换行要补上，
+                            # 否则两条日志会粘成一行
+                            if text and not text.endswith("\n") and not piece.startswith("\n"):
+                                text += "\n"
+                            text += piece
+                        else:
+                            pending.append(nxt)
+                            break
+                    evt = {**evt, "text": text}
+                self._send_event(evt)
+            except Exception:
+                pass  # 单条发送失败（窗口在销毁等）不影响后续事件
+
+    def _send_event(self, evt):
+        window = self._window
+        if not window:
+            return
+        try:
+            payload = json.dumps(evt, ensure_ascii=False)
+            window.evaluate_js(f"window.App && window.App.onEvent({payload})")
         except Exception:
             pass
 
-    def _ask(self, scope, title, body, buttons):
-        """给前端弹一个选择框，阻塞当前工作线程直到用户点了某个按钮"""
+    def _ask(self, scope, title, body, buttons, cancel_event=None):
+        """给前端弹一个选择框，阻塞当前工作线程直到用户点了某个按钮。
+        cancel_event 被 set（如用户点了取消部署）时返回 None，调用方按
+        用户取消处理——否则弹窗期间取消会让工作线程永久挂死。"""
         self._ask_seq += 1
         ask_id = f"ask_{self._ask_seq}"
         ev = threading.Event()
         self._asks[ask_id] = {"event": ev, "value": None}
         self._emit(scope, "ask", ask_id=ask_id, title=title, body=body, buttons=buttons)
-        ev.wait()
+        while not ev.wait(0.5):
+            if cancel_event is not None and cancel_event.is_set():
+                self._asks.pop(ask_id, None)
+                return None
         return self._asks.pop(ask_id, {}).get("value")
 
     def answer(self, ask_id, value):
@@ -696,6 +807,9 @@ class LauncherApi:
     def webui_running(self):
         return bool(self._launch_proc and self._launch_proc.poll() is None)
 
+    def deploy_running(self):
+        return bool(self._deploy_running)
+
     def request_exit_confirm(self):
         """窗口关闭事件里调用：WebUI 还在跑就让前端弹确认框"""
         self._emit("app", "confirm_exit")
@@ -703,8 +817,15 @@ class LauncherApi:
     def exit_app(self, kill_webui=True):
         if kill_webui:
             self._kill_launch_tree()
-        if self._window:
-            self._window.destroy()
+            if self._window:
+                self._window.destroy()
+            return {"ok": True}
+        # 不杀 WebUI 时 destroy() 会被 on_closing 否决（窗口关不掉、确认框
+        # 已经关了，观感就是「退出卡死」），所以这里不再尝试关窗，改为
+        # 明确提示用户本次退出已被取消
+        self._emit("app", "error",
+                   text="已取消退出：Forge WebUI 仍在运行，直接退出会留下占端口/显存的孤儿进程。"
+                        "请先停止 WebUI，或在关闭确认框里选「结束 WebUI 并退出」。")
         return {"ok": True}
 
     # ============================================================
@@ -1175,20 +1296,22 @@ def _api_deploy_precheck(self, target, branch, use_portable):
 
 
 def _api_deploy_start(self, target, branch, use_portable):
-    if self._deploy_running:
-        return {"ok": False, "error": "已有部署任务在进行中"}
-    target = (target or "").strip()
-    try:
-        os.makedirs(target, exist_ok=True)
-    except OSError as e:
-        return {"ok": False, "error": f"无法创建目录：\n{target}\n\n{e}\n\n"
-                                      "常见原因：盘符不存在、路径不合法、或没有写入权限。"}
+    # 检查和置位必须原子，否则双击会并发跑两个部署线程
+    with self._deploy_lock:
+        if self._deploy_running:
+            return {"ok": False, "error": "已有部署任务在进行中"}
+        target = (target or "").strip()
+        try:
+            os.makedirs(target, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"无法创建目录：\n{target}\n\n{e}\n\n"
+                                          "常见原因：盘符不存在、路径不合法、或没有写入权限。"}
 
-    self.cfg["webui_branch"] = branch
-    cm.save_config(self.cfg)
+        self.cfg["webui_branch"] = branch
+        cm.save_config(self.cfg)
 
-    self._deploy_cancel.clear()
-    self._deploy_running = True
+        self._deploy_cancel.clear()
+        self._deploy_running = True
     self._emit("deploy", "state", running=True)
     self._spawn(lambda: self._deploy_flow(target, branch, use_portable), name="deploy")
     return {"ok": True}
@@ -1198,6 +1321,10 @@ def _api_deploy_cancel(self):
     self._deploy_cancel.set()
     if self._deploy_proc and self._deploy_proc.poll() is None:
         kill_process_tree(self._deploy_proc.pid)
+    # 部署线程可能正阻塞在 _ask() 里等用户点弹窗，这里把它唤醒，
+    # 否则取消后部署线程永久挂死、_deploy_running 永远 True
+    for a in list(self._asks.values()):
+        a["event"].set()
     return {"ok": True}
 
 
@@ -1265,8 +1392,10 @@ def _deploy_flow(self, target, branch, use_portable):
                 if rc != 0:
                     log(f"\n[部署] 设置远程地址失败（退出码 {rc}），请检查日志\n")
                     return
-                rc = self._deploy_run_cmd(git_exe, ["-C", target, "fetch", "origin", ref],
-                                          parent, log)
+                rc = self._deploy_run_cmd(
+                    git_exe, ["-C", target, "-c", "http.lowSpeedLimit=1000",
+                              "-c", "http.lowSpeedTime=120", "fetch", "origin", ref],
+                    parent, log, timeout=1800)
                 if rc == 0:
                     fetched = True
                     break
@@ -1302,7 +1431,8 @@ def _deploy_flow(self, target, branch, use_portable):
                     {"id": "delete", "label": "删除并重建（推荐）", "kind": "primary"},
                     {"id": "keep", "label": "继续使用现有 venv", "kind": "normal"},
                     {"id": "cancel", "label": "取消部署", "kind": "danger"},
-                ])
+                ],
+                cancel_event=self._deploy_cancel)
             if choice == "delete":
                 log(f"[部署] 正在删除 {venv_dir} ...\n")
                 shutil.rmtree(venv_dir, ignore_errors=True)
@@ -1444,7 +1574,14 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
             log(f"[便携环境] Git 部署完成: {git_exe}\n")
 
 
-def _deploy_run_cmd(self, program, args, cwd, log, env=None):
+def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
+    """跑一条部署命令，流式回显输出。
+
+    timeout 以秒计；网络型命令（git fetch 这类）必须传超时——加速代理
+    常见的死法是「接受 TCP 连接后永久不返回数据」，不设超时就会永远
+    静默卡死，轮不到下一个候选地址。超时返回 -9，让调用方的候选轮换
+    逻辑生效。返回进程退出码。
+    """
     log(f"\n[部署] 执行: {program} {' '.join(args)}  (工作目录: {cwd})\n\n")
     try:
         self._deploy_proc = subprocess.Popen(
@@ -1456,27 +1593,76 @@ def _deploy_run_cmd(self, program, args, cwd, log, env=None):
         log(f"[部署] 无法启动进程: {e}\n")
         return 1
     proc = self._deploy_proc
+    # 读线程 + 队列 + 主循环轮询，模式同 _deploy_run_webui_until_ready：
+    # 主循环才能响应取消和超时，阻塞在 read1 里什么都轮不到
+    out_q = queue.Queue()
+
+    def _reader():
+        try:
+            while True:
+                # read1()：见 _launch_reader 的注释，read() 会攒满 4096 字节
+                # 才返回，git 长时间静默时日志卡住
+                data = proc.stdout.read1(4096)
+                if not data:
+                    break
+                out_q.put(data)
+        except Exception:
+            pass
+        finally:
+            out_q.put(None)  # EOF 哨兵
+
+    threading.Thread(target=_reader, daemon=True, name="deploy-cmd-reader").start()
+    start_ts = time.monotonic()
+    last_out_ts = start_ts
+    last_beat_ts = start_ts
     try:
         while True:
-            # read1()：见 _launch_reader 的注释，read() 会攒满 4096 字节
-            # 才返回，git 长时间静默时日志卡住
-            data = proc.stdout.read1(4096)
-            if not data:
-                break
-            log(cm.decode_process_output(data))
+            if self._deploy_cancel.is_set():
+                log("\n[部署] 用户取消，终止当前命令\n")
+                kill_process_tree(proc.pid)
+                return -9
+            now = time.monotonic()
+            if timeout and now - start_ts > timeout:
+                el = int(now - start_ts)
+                log(f"\n[部署] 该步骤超时（已运行 {el} 秒），终止进程并视作失败，"
+                    "以便切换到下一个候选地址或提示用户\n")
+                kill_process_tree(proc.pid)
+                return -9
+            if now - last_out_ts > 30 and now - last_beat_ts > 30:
+                # 长时间没输出不一定是死了（大文件下载中），但不能让用户
+                # 对着一动不动界面干等——发心跳说明还在跑
+                last_beat_ts = now
+                el = int(now - start_ts)
+                log(f"[部署] 仍在执行 {os.path.basename(program)}，"
+                    f"已运行 {el // 60} 分 {el % 60} 秒...\n")
+            try:
+                chunk = out_q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                break  # 进程输出结束（进程已退出）
+            last_out_ts = time.monotonic()
+            log(cm.decode_process_output(chunk))
     except Exception:
         pass
+    finally:
+        if proc.poll() is None:
+            kill_process_tree(proc.pid)
+        self._deploy_proc = None
     return proc.wait()
 
 
-def _deploy_run_webui_until_ready(self, target, log, env):
+def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     """
     首次运行 webui.bat：创建 venv、装依赖、把 WebUI 起起来验证能跑通。
 
-    返回 True 表示成功（输出里出现了 "Running on local URL"，说明依赖
-    安装完成且服务已能启动；此时停掉这个临时进程，部署继续收尾）。
-    返回 False 表示失败（进程在出现监听地址之前就退出了——webui.bat 失败
-    路径的 exit code 并不可靠，不能拿返回码当判断依据）。
+    返回 True 表示成功（输出里出现了 "Running on local URL"，或端口探测
+    发现 WebUI 已在监听——有些 webui.bat 会把输出重定向走，管道里一个字
+    节都没有，靠解析输出判断就绪会永远卡住；此时停掉这个临时进程，部署
+    继续收尾）。
+    返回 False 表示失败（进程在就绪之前就退出了，或超过 timeout 秒的总
+    时限——webui.bat 失败路径的 exit code 并不可靠，不能拿返回码当判断
+    依据；总时限默认 5400 秒 = 90 分钟，torch 几个 GB 的慢网也要装得下）。
 
     部署期间需要用户做的决策（venv 版本不一致）已经在此之前处理完，
     这个方法只管跑和看。
@@ -1516,18 +1702,55 @@ def _deploy_run_webui_until_ready(self, target, log, env):
             out_q.put(None)  # EOF 哨兵
 
     threading.Thread(target=_reader, daemon=True, name="deploy-webui-reader").start()
+    # 端口兜底（跟 _launch_port_watcher 同一思路）：输出被重定向时靠
+    # TCP 探测判定就绪。必须至少先见过一行输出再探，否则可能连上的
+    # 是上一次没退干净的残留服务。探的配置端口，没配就探 7860-7869。
+    cfg_port = str(self.cfg.get("port", "")).strip()
+    probe_ports = [int(cfg_port)] if cfg_port.isdigit() else list(range(7860, 7870))
     tail = ""
     ready = False
+    saw_output = False
+    start_ts = time.monotonic()
+    last_out_ts = start_ts
+    last_beat_ts = start_ts
+    last_probe_ts = start_ts
     try:
         while True:
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
+            now = time.monotonic()
+            if timeout and now - start_ts > timeout:
+                log(f"\n[部署] 装依赖步骤超时（已运行 {int(now - start_ts)} 秒），"
+                    "终止进程并按失败收尾；网络好转后可重新点击「开始部署」继续\n")
+                break
+            if now - last_out_ts > 30 and now - last_beat_ts > 30:
+                # pip 静默下载阶段一个字都不吐，发心跳让用户知道没死
+                last_beat_ts = now
+                el = int(now - start_ts)
+                log(f"[部署] 仍在执行（装依赖/启动 WebUI），"
+                    f"已运行 {el // 60} 分 {el % 60} 秒...\n")
+            if saw_output and now - last_probe_ts >= 2:
+                last_probe_ts = now
+                for p in probe_ports:
+                    try:
+                        with socket.create_connection(("127.0.0.1", p), timeout=0.5):
+                            pass
+                    except OSError:
+                        continue
+                    ready = True
+                    log(f"\n[部署] 通过端口探测到 WebUI 已在监听 "
+                        f"http://127.0.0.1:{p}，首次运行验证通过\n")
+                    break
+                if ready:
+                    break
             try:
                 chunk = out_q.get(timeout=0.5)
             except queue.Empty:
                 continue
             if chunk is None:
                 break  # 进程输出结束（进程已退出）
+            saw_output = True
+            last_out_ts = time.monotonic()
             text = cm.decode_process_output(chunk)
             log(text)
             combined = tail + text
@@ -1544,7 +1767,8 @@ def _deploy_run_webui_until_ready(self, target, log, env):
             try:
                 proc.wait(timeout=15)
             except Exception:
-                pass
+                log("[部署] 等待临时进程退出超时（15 秒），进程可能仍有残留，"
+                    "如后续端口被占用请手动结束 python.exe\n")
         self._deploy_proc = None
     return ready
 
@@ -2520,7 +2744,9 @@ def _api_ext_install(self, names):
                 proc = self._ext_proc
                 try:
                     while True:
-                        data = proc.stdout.read(4096)
+                        # read1() 而非 read()：read 会攒满 4096 字节才返回，
+                        # git 输出停顿时段日志会一直卡住不显示
+                        data = proc.stdout.read1(4096)
                         if not data:
                             break
                         log(cm.decode_process_output(data))

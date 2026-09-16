@@ -61,7 +61,9 @@ def main():
     api._set_window(window)
 
     def on_closing():
-        if api.webui_running():
+        # 部署进行中关窗会把正在装 torch 的进程树孤儿化（下次启动连环卡），
+        # 所以和 WebUI 运行中一样走「取消关闭 + 弹确认框」的路径
+        if api.webui_running() or api.deploy_running():
             # 让前端弹「WebUI 仍在运行」确认框， veto 本次关闭。
             # 注意：closing 事件跑在 GUI 主线程上，而 request_exit_confirm 里要
             # evaluate_js 同步等 JS 返回——直接在主线程里调会和正在进行的窗口
