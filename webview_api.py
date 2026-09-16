@@ -1352,6 +1352,10 @@ def _deploy_flow(self, target, branch, use_portable):
         webui_bat = os.path.join(target, "webui.bat")
         already_installed = os.path.isdir(target) and os.path.exists(webui_bat)
         git_exe = bundled_git if os.path.exists(bundled_git) else "git"
+        if os.path.exists(bundled_git):
+            # 便携 Git 必做：关掉 Schannel 吊销检查，否则 CRL 查询不可达的
+            # 网络里 fetch 必然 128（CRYPT_E_NO_REVOCATION_CHECK）。幂等。
+            pe.tune_bundled_git(os.path.join(target, "git"), log_cb=log)
 
         if not already_installed:
             repo, ref = (NEO_REPO, NEO_BRANCH) if branch in _NEO_KEYS else (CLASSIC_REPO, "main")

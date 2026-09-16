@@ -445,6 +445,40 @@ def extract_portable_git(archive_path, root_dir, log_cb=None):
     return git_exe
 
 
+def tune_bundled_git(git_root, log_cb=None):
+    """关掉便携 Git 的 Schannel 证书吊销检查（http.schannelCheckRevoke=false）。
+
+    git for Windows 用系统 Schannel 做 TLS，握手时 Windows 要联网向证书颁发
+    机构查询吊销状态（CRL/OCSP）——这个查询地址在很多网络环境（尤其国内）
+    不可达，TLS 直接报 CRYPT_E_NO_REVOCATION_CHECK (0x80092012)，表现为
+    git fetch 必然 128 失败，且与走不走加速代理无关（Python 探测用的 OpenSSL
+    默认不做吊销检查，所以网络探测会误判"可直连"）。这是 git-for-windows
+    官方文档对该错误的标准处置。只写启动器自己管理的这份 git 的
+    <git>/etc/gitconfig，不碰系统 git；幂等，可反复调用。
+    """
+    git_exe = os.path.join(git_root, "cmd", "git.exe")
+    if not os.path.exists(git_exe):
+        return False
+    etc_config = os.path.join(git_root, "etc", "gitconfig")
+    try:
+        r = subprocess.run(
+            [git_exe, "config", "--file", etc_config, "http.schannelCheckRevoke", "false"],
+            capture_output=True, text=True, timeout=15,
+            creationflags=0x08000000 if os.name == "nt" else 0,
+        )
+        if r.returncode == 0:
+            if log_cb:
+                log_cb("[Git] 已关闭证书吊销检查（Schannel 吊销查询在部分网络下不可达，"
+                       "不关会导致 fetch 必然失败）\n")
+            return True
+        if log_cb:
+            log_cb(f"[Git] 关闭吊销检查失败（不影响继续部署）：{r.stderr.strip()}\n")
+    except Exception as e:
+        if log_cb:
+            log_cb(f"[Git] 关闭吊销检查失败（不影响继续部署）：{e}\n")
+    return False
+
+
 # ============================================================
 # venv 诊断 + hashlib 兼容性补丁
 #
