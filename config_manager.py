@@ -394,7 +394,14 @@ def build_launch_env_overrides(cfg, root_dir):
     if not custom_git:
         custom_git = detect_bundled_git(root_dir) or ""
     if custom_git:
-        overrides["GIT"] = _quote_if_needed(custom_git)
+        # 注意：GIT 的值必须是未加引号的原始路径。Neo 的 webui.bat 有
+        #   if defined GIT (set "GIT_PYTHON_GIT_EXECUTABLE=%GIT%")
+        # 会把 GIT 原样拷给 GitPython——一旦带了引号（_quote_if_needed 对
+        # 含空格路径加引号），GitPython 会把引号当成路径的一部分去执行，
+        # 导入期直接抛 "Bad git executable"（部署目录带空格时必现，
+        # 且会覆盖我们下面单独注入的正确值）。launch.py 里 GIT 也按
+        # subprocess 列表参数/自行包引号使用，同样要原始路径。
+        overrides["GIT"] = custom_git
         # Forge 的 modules/gitpython_hack.py 会 import git（GitPython 库），
         # 而 GitPython 在导入时就要定位 git 可执行文件——它只认 PATH 和自己的
         # GIT_PYTHON_GIT_EXECUTABLE 变量，完全不理会 Forge 的 GIT 变量。
