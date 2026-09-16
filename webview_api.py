@@ -1282,10 +1282,11 @@ def _api_deploy_precheck(self, target, branch, use_portable):
         })
 
     if not use_portable:
-        if not shutil.which("git"):
+        if not ((self.cfg.get("custom_git_path") or "").strip() or shutil.which("git")):
             issues.append({"level": "error",
                            "text": "未检测到 Git，请先安装：https://git-scm.com/download/win\n"
-                                   "（或者勾选「自动下载便携版 Python + Git」跳过这个要求）"})
+                                   "（或者勾选「自动下载便携版 Python + Git」跳过这个要求；"
+                                   "也可以在「设置」页手动指定 Git 路径）"})
         if not (shutil.which("python") or shutil.which("python3")):
             issues.append({"level": "error",
                            "text": "未检测到 Python，请先安装：https://www.python.org/downloads/\n"
@@ -1351,7 +1352,14 @@ def _deploy_flow(self, target, branch, use_portable):
         # ---- 2. git 拉源码（init -> config -> fetch -> checkout，幂等可续跑）----
         webui_bat = os.path.join(target, "webui.bat")
         already_installed = os.path.isdir(target) and os.path.exists(webui_bat)
-        git_exe = bundled_git if os.path.exists(bundled_git) else "git"
+        # git 选取顺序与启动/预检/插件安装保持一致：自定义路径 > 便携版 > 系统 PATH。
+        # 整合包自带的便携 git 可能是坏的（杀软误删等），用户在设置里手动指了
+        # git 的话必须处处优先，否则部署这步又会去用坏的那个。
+        custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
+        if custom_git and os.path.exists(custom_git):
+            git_exe = custom_git
+        else:
+            git_exe = bundled_git if os.path.exists(bundled_git) else "git"
         if os.path.exists(bundled_git):
             # 便携 Git 必做：关掉 Schannel 吊销检查，否则 CRL 查询不可达的
             # 网络里 fetch 必然 128（CRYPT_E_NO_REVOCATION_CHECK）。幂等。
@@ -2690,9 +2698,13 @@ def _api_ext_install(self, names):
     ext_dir = os.path.join(root, "extensions")
     branch = self.cfg.get("webui_branch", "classic")
 
-    # 优先用部署时装的便携版 Git（系统没装 Git 的用户也能装插件）
+    # git 选取顺序与部署/启动保持一致：自定义路径 > 便携版 > 系统 PATH
+    #（用户手动指定的 git 优先——便携版可能损坏，正是用户绕开它的原因）
+    custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
     bundled_git = os.path.join(root, "git", "cmd", "git.exe")
-    if os.path.exists(bundled_git):
+    if custom_git and os.path.exists(custom_git):
+        git_exe = custom_git
+    elif os.path.exists(bundled_git):
         git_exe = bundled_git
     elif shutil.which("git"):
         git_exe = "git"
