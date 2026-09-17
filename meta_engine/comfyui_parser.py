@@ -21,7 +21,9 @@ class ComfyUIParser:
 
     _SAMPLER_CLASSES = [
         "KSampler", "KSamplerAdvanced", "SamplerCustomAdvanced", "KSamplerWithRefiner",
-        "FluxSampler", "EffortlessKSampler", "BNK_TiledKSampler"
+        "FluxSampler", "EffortlessKSampler", "BNK_TiledKSampler",
+        "SamplerCustom", "KSampler (Efficient)", "easy kSampler", "easy kSamplerTiled",
+        "SUPIR_sample",
     ]
 
     _NODE_PATTERNS = {
@@ -35,6 +37,16 @@ class ComfyUIParser:
         "inpaint": ["VAEEncodeForInpaint", "SetLatentNoiseMask", "DifferentialDiffusion", "InpaintModelConditioning"],
         "multidiffusion": ["TiledDiffusion", "TiledDiffusionTTP", "TTP_TiledDiffusion", "TiledKSampler", "VAEDecodeTiled", "VAEEncodeTiled"],
         "freeu": ["FreeU", "FreeU_V2", "FreeU_Advanced"],
+        "video": ["WanImageToVideo", "WanTextToVideo", "WanFunControlToVideo", "WanFirstLastFrameToVideo",
+                  "WanVaceToVideo", "WanPhantomSubjectToVideo", "EmptyHunyuanLatentVideo",
+                  "EmptyLTXVLatentVideo", "EmptyMochiLatentVideo", "LTXVConditioning",
+                  "VHS_VideoCombine", "CreateVideo", "SaveAnimatedWEBP", "SaveAnimatedPNG",
+                  "SVD_img2vid_Conditioning"],
+        "faceid": ["InstantIDModelLoader", "ApplyInstantID", "PulidFluxModelLoader", "ApplyPulidFlux",
+                   "PhotoMakerLoader", "PhotoMakerEncode"],
+        "preprocessor": ["AIO_Preprocessor", "DWPreprocessor", "DepthAnythingPreprocessor",
+                         "OpenposePreprocessor", "CannyPreprocessor", "LineartPreprocessor",
+                         "MiDaS-DepthMapPreprocessor", "TilePreprocessor"],
     }
 
     # class_type → 分类 反向查找表 (避免逐节点遍历所有分类)
@@ -85,6 +97,12 @@ class ComfyUIParser:
             data = json.loads(obj)
         except (ValueError, TypeError):
             return None
+        if isinstance(data, str):
+            # 双重编码 (dumps 了两次) 的真实怪癖: 再解一层
+            try:
+                data = json.loads(data)
+            except (ValueError, TypeError):
+                return None
         return data if isinstance(data, dict) else None
 
     @staticmethod
@@ -101,13 +119,19 @@ class ComfyUIParser:
         for link in links_list:
             if isinstance(link, (list, tuple)) and len(link) >= 3:
                 links_map[link[0]] = [str(link[1]), link[2]]
+            elif isinstance(link, dict) and link.get("id") is not None:
+                # 部分导出器用对象形式 {"id","origin_id","origin_slot",...}
+                src = link.get("origin_id", link.get("src_id"))
+                if src is not None:
+                    links_map[link["id"]] = [str(src), link.get("origin_slot", link.get("src_slot", 0))]
 
         nodes: Dict[str, Any] = {}
         for n in nodes_list:
             if not isinstance(n, dict) or n.get("id") is None:
                 continue
             nid = str(n.get("id"))
-            ctype = n.get("type", "")
+            ctype = n.get("type")
+            ctype = ctype if isinstance(ctype, str) else ""
             inputs: Dict[str, Any] = {}
 
             # 1. 具名部件值 (widgets_values_named 优先)
@@ -117,8 +141,26 @@ class ComfyUIParser:
                 wv = n["widgets_values"]
                 inputs["_widgets_values"] = wv
                 clow = ctype.lower()
-                if "ksampler" in clow:
-                    if "advanced" in clow or (len(wv) >= 7 and str(wv[0]).lower() in ("enable", "disable")):
+                if "ksampler" in clow or "ultimatesdupscale" in clow:
+                    if clow.startswith("easy"):
+                        # easy kSampler/fullkSampler 存在两代布局（版本差异）:
+                        #   A 新版: [seed, steps, cfg, sampler_name, scheduler, denoise, image_output, save_prefix]
+                        #   B 旧版: [steps, cfg, sampler_name, scheduler, denoise, image_output, save_prefix]
+                        #     （种子在独立 easy seed 节点经链接传入）
+                        # 判别: 布局 A 的 wv[2] 是数值(cfg), 布局 B 的 wv[2] 是采样器名字符串
+                        easy_off = 0 if (len(wv) > 2 and isinstance(wv[2], str)) else 1
+                        nums = [v for v in wv if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                        strs = [v for v in wv if isinstance(v, str) and v.strip()
+                                and v.strip().lower() not in ("fixed", "randomize", "increment", "decrement",
+                                                              "enable", "disable", "hide", "show", "auto", "none")]
+                        if easy_off == 1 and nums:
+                            inputs.setdefault("seed", nums[0])
+                        if len(nums) > easy_off: inputs.setdefault("steps", nums[easy_off])
+                        if len(nums) > easy_off + 1: inputs.setdefault("cfg", nums[easy_off + 1])
+                        if len(nums) > easy_off + 2: inputs.setdefault("denoise", nums[easy_off + 2])
+                        if strs: inputs.setdefault("sampler_name", strs[0])
+                        if len(strs) > 1: inputs.setdefault("scheduler", strs[1])
+                    elif "advanced" in clow or (len(wv) >= 7 and str(wv[0]).lower() in ("enable", "disable")):
                         inputs.setdefault("add_noise", wv[0])
                         # 新版 ComfyUI 在 noise_seed 后附带 control_after_generate 控件 ("fixed"/"randomize"/...),
                         # 旧版无此项: 以 wv[2] 是否为字符串区分两代布局, 各按正确槽位取值
@@ -154,13 +196,31 @@ class ComfyUIParser:
                             inputs.setdefault("scheduler", wv[4])
                             inputs.setdefault("denoise", wv[5])
                 elif "scheduler" in clow:
+                    _model_types = {"sd1", "sd15", "sd2", "sdxl", "sd3", "flux", "svd", "hunyuan", "wan", "ltxv"}
+                    # 只有这几类调度器节点真有 denoise 部件; Karras/Exponential 系的
+                    # sigma_max/sigma_min/rho 若被当成 denoise 会污染主参数 (终审实测意见)
+                    allow_denoise = any(k in clow for k in ("basic", "alignyoursteps", "sdturbo", "git"))
                     for item in wv:
-                        if isinstance(item, str) and item.strip() and "scheduler" not in inputs:
-                            inputs["scheduler"] = item.strip()
-                        elif isinstance(item, int) and not isinstance(item, bool) and "steps" not in inputs:
-                            inputs["steps"] = item
-                        elif isinstance(item, float) and "denoise" not in inputs:
-                            inputs["denoise"] = item
+                        if isinstance(item, str) and item.strip():
+                            if item.strip().lower() in _model_types:
+                                continue  # AlignYourStepsScheduler 首字符串是模型类型, 不是调度器名
+                            if "scheduler" not in inputs:
+                                inputs["scheduler"] = item.strip()
+                        elif isinstance(item, bool):
+                            continue
+                        elif isinstance(item, (int, float)):
+                            if float(item).is_integer() and "steps" not in inputs:
+                                inputs["steps"] = int(item)
+                            elif allow_denoise and "denoise" not in inputs:
+                                inputs["denoise"] = item
+                    if "scheduler" not in inputs:
+                        # 无下拉字符串的专用调度器节点: 由类名推导调度器名
+                        for kk, vv in (("alignyoursteps", "align_your_steps"), ("karras", "karras"),
+                                       ("exponential", "exponential"), ("polyexponential", "polyexponential"),
+                                       ("betasampling", "beta"), ("vp", "vp"), ("sdturbo", "turbo")):
+                            if kk in clow:
+                                inputs.setdefault("scheduler", vv)
+                                break
                 elif "guider" in clow:
                     for item in wv:
                         if isinstance(item, (int, float)) and not isinstance(item, bool):
@@ -177,6 +237,83 @@ class ComfyUIParser:
                             inputs.setdefault("seed", item)
                             inputs.setdefault("noise_seed", item)
                             break
+                elif "fullloader" in clow or "efficient loader" in clow or "effortlessloader" in clow:
+                    # all-in-one 加载器 (easy fullLoader / Efficient Loader):
+                    # [ckpt, vae, clip_skip, lora_name, lora_ms, lora_cs, positive, negative, ..., width, height, batch]
+                    # 注意必须排在 "lora" 分支前: "fullloader" 类名里含 "lora" 子串
+                    fnames = [v for v in wv if isinstance(v, str) and v.lower().endswith(ComfyUIParser._MODEL_FILE_EXTS)]
+                    if fnames: inputs.setdefault("ckpt_name", fnames[0])
+                    # 其余模型文件名: 名字含 vae 的当 VAE, 否则当 LoRA (ckpt/vae/lora 都可能带文件名)
+                    for extra_fn in fnames[1:]:
+                        if "vae" in extra_fn.lower():
+                            inputs.setdefault("vae_name", extra_fn)
+                        else:
+                            inputs.setdefault("lora_name", extra_fn)
+                    enums = {"none", "comfy", "a1111", "baked vae", "true", "false", "auto",
+                             "weight", "comfy++", "concat", "hide", "show", "hide all", "show all",
+                             "preview", "save", "output", "disabled", "mean", "length",
+                             "length+mean", "compel", "down-weight", "default"}
+                    # config_name ("Default")、resolution ("512 x 512") 这类配置串必须排除,
+                    # 否则会被当成正/负提示词 (终审实测意见)
+                    _res_re = re.compile(r"^\d+\s*[x×]\s*\d+$", re.IGNORECASE)
+                    texts = [v.strip() for v in wv if isinstance(v, str) and v.strip()
+                             and not v.lower().endswith(ComfyUIParser._MODEL_FILE_EXTS)
+                             and v.strip().lower() not in enums
+                             and not _res_re.match(v.strip())]
+                    if texts: inputs.setdefault("positive", texts[0])
+                    if len(texts) > 1: inputs.setdefault("negative", texts[1])
+                    # 极性校验: 关键词明显倒挂时交换 (与 _fallback_scan_prompts 同一套判定)
+                    if len(texts) > 1:
+                        pos_neg = len(ComfyUIParser._NEG_KEYWORDS.findall(texts[0]))
+                        neg_pos = len(ComfyUIParser._POS_KEYWORDS.findall(texts[1]))
+                        if pos_neg >= 2 and neg_pos >= 1:
+                            inputs["positive"], inputs["negative"] = texts[1], texts[0]
+                    nums = [v for v in wv if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                    for v in nums:
+                        if isinstance(v, int) and -12 <= v <= -1:
+                            inputs.setdefault("clip_skip", v)
+                            break
+                    dims = [v for v in nums if v >= 64]
+                    if len(dims) >= 2:
+                        inputs.setdefault("width", int(dims[0]))
+                        inputs.setdefault("height", int(dims[1]))
+                elif clow in ("easy positive", "easy negative"):
+                    # easy-use 的提示词节点: 类名不含 text/prompt 关键词, 需显式映射极性
+                    for item in wv:
+                        if isinstance(item, str) and item.strip():
+                            inputs.setdefault("positive" if "positive" in clow else "negative", item.strip())
+                            break
+                elif "guidance" in clow:
+                    # FluxGuidance: [guidance]
+                    for item in wv:
+                        if isinstance(item, (int, float)) and not isinstance(item, bool):
+                            inputs.setdefault("guidance", item)
+                            break
+                elif "modelsampling" in clow:
+                    # ModelSamplingFlux: [max_shift, base_shift, width, height]; SD3/AuraFlow: [shift]
+                    nums = [v for v in wv if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                    if len(nums) >= 2:
+                        inputs.setdefault("max_shift", nums[0])
+                        inputs.setdefault("base_shift", nums[1])
+                    elif nums:
+                        inputs.setdefault("shift", nums[0])
+                elif "primitive" in clow:
+                    # PrimitiveNode: widget 转输入后值仍留在 widgets_values, 映射为 value/string
+                    # 供下游 _trace_num/_trace_str 回溯 (UI-only PNG 最高频的静默丢失)
+                    for item in wv:
+                        if isinstance(item, bool): continue
+                        if isinstance(item, (int, float)):
+                            inputs.setdefault("value", item)
+                            break
+                        if isinstance(item, str) and item.strip():
+                            inputs.setdefault("string", item.strip())
+                            break
+                elif clow.startswith("getnode") or clow.startswith("setnode"):
+                    # KJNodes Get/Set: 配对名在 widgets 首位, 映射为 name 键供 GetNode 配对
+                    for item in wv:
+                        if isinstance(item, str) and item.strip():
+                            inputs.setdefault("name", item.strip())
+                            break
                 elif "lora" in clow:
                     for item in wv:
                         if isinstance(item, str) and item.lower().endswith(ComfyUIParser._MODEL_FILE_EXTS):
@@ -186,6 +323,13 @@ class ComfyUIParser:
                     if len(nums) >= 1:
                         inputs.setdefault("strength_model", nums[0])
                         inputs.setdefault("strength_clip", nums[1] if len(nums) >= 2 else nums[0])
+                    # rgthree Power Lora Loader: widgets 是嵌套 dict 列表
+                    # ({}, {"type":"...HeaderWidget"}, {"on":bool,"lora":str,"strength":n}, ...)
+                    dict_idx = 0
+                    for item in wv:
+                        if isinstance(item, dict) and isinstance(item.get("lora"), str):
+                            dict_idx += 1
+                            inputs.setdefault(f"lora_{dict_idx}", item)
                 elif any(k in clow for k in ("checkpoint", "ckpt", "unet", "diffusion", "loader", "precision")):
                     for item in wv:
                         if isinstance(item, str) and item.lower().endswith(ComfyUIParser._MODEL_FILE_EXTS):
@@ -198,11 +342,16 @@ class ComfyUIParser:
                             else:
                                 inputs.setdefault("ckpt_name", item)
                             break
-                elif "emptylatent" in clow or "latentimage" in clow:
+                elif "emptylatent" in clow or "latentimage" in clow \
+                        or ("empty" in clow and "latent" in clow) or "tovideo" in clow:
+                    # EmptyHunyuanLatentVideo/EmptyLTXVLatentVideo: [w, h, length, batch];
+                    # WanImageToVideo/WanTextToVideo: [w, h, length, batch]
                     nums = [v for v in wv if isinstance(v, (int, float))]
                     if len(nums) >= 2:
                         inputs.setdefault("width", nums[0])
                         inputs.setdefault("height", nums[1])
+                    if len(nums) >= 3:
+                        inputs.setdefault("length", nums[2])
                 elif "vae" in clow:
                     for item in wv:
                         if isinstance(item, str) and item.strip():
@@ -215,7 +364,7 @@ class ComfyUIParser:
                         inputs.setdefault("b2", nums[1])
                         inputs.setdefault("s1", nums[2])
                         inputs.setdefault("s2", nums[3])
-                elif not any(nk in clow for nk in ("note", "markdown")) and any(k in clow for k in ("cliptextencode", "prompt", "text", "string", "caption", "textarea")):
+                elif not any(nk in clow for nk in ("note", "markdown")) and any(k in clow for k in ("cliptextencode", "prompt", "text", "string", "caption", "textarea", "wildcard")):
                     for item in wv:
                         if isinstance(item, str) and item.strip() and not _NON_PROMPT_VAL_RE.search(item.strip()):
                             inputs.setdefault("text", item)
@@ -228,7 +377,7 @@ class ComfyUIParser:
                     label = str(inp_slot.get("label") or "").lower()
                     link_id = inp_slot.get("link")
                     if link_id in links_map:
-                        if name: inputs[name] = links_map[link_id]
+                        if name: inputs.setdefault(name, links_map[link_id])  # 同名槽位先到先得, 后者不覆盖
                         if label in ("positive", "negative", "model", "clip", "vae", "latent"):
                             inputs.setdefault(label, links_map[link_id])
 
@@ -266,29 +415,55 @@ class ComfyUIParser:
             # 第一个采样器 -> 主参数 (展平 guider/sampler/sigmas 子节点以兼容 SamplerCustomAdvanced)
             first_id, first_node = all_samplers[0]
             inp = ComfyUIParser._flatten_sampler_inputs(nodes, first_node.get("inputs") or {})
-            params.steps = safe_int(ComfyUIParser._resolve_num(nodes, inp.get("steps")))
-            params.cfg_scale = safe_float(ComfyUIParser._resolve_num(nodes, inp.get("cfg")))
+            params.steps = safe_int(ComfyUIParser._resolve_num(nodes, inp.get("steps"), prefer=("steps", "steps_total")))
+            # kijai 系 wrapper 采样器 (WanVideoSampler/HyVideoSampler) 的 cfg 叫 embedded_cfg_scale;
+            # SUPIR_sample 是 cfg_scale_start/end 区间, 取 start 为主值
+            params.cfg_scale = safe_float(ComfyUIParser._resolve_num(nodes, inp.get("cfg"), prefer="cfg"))
+            if params.cfg_scale is None:
+                for ck in ("embedded_cfg_scale", "cfg_scale_start"):
+                    if inp.get(ck) is not None:
+                        params.cfg_scale = safe_float(ComfyUIParser._resolve_num(nodes, inp.get(ck)))
+                        if params.cfg_scale is not None:
+                            break
             params.sampler_name = ComfyUIParser._resolve_str(nodes, inp.get("sampler_name"))
+            if params.sampler_name is None:
+                # SUPIR_sample 的采样器字段名是 sampler (字符串部件, 如 RestoreDPMPP2MSampler)
+                params.sampler_name = ComfyUIParser._resolve_str(nodes, inp.get("sampler"))
             params.scheduler = ComfyUIParser._resolve_str(nodes, inp.get("scheduler"))
+            if params.scheduler is None:
+                # 专用调度器节点 (AlignYourSteps/SDTurbo 等) 没有调度器名字符串部件, 由类名推导
+                params.scheduler = ComfyUIParser._derive_scheduler_name(nodes, inp)
             params.seed = safe_int(ComfyUIParser._resolve_seed(nodes, inp))
-            params.denoising_strength = safe_float(ComfyUIParser._resolve_num(nodes, inp.get("denoise")))
+            if params.seed is None:
+                params.seed = ComfyUIParser._find_implicit_seed(nodes)
+            params.denoising_strength = safe_float(ComfyUIParser._resolve_num(nodes, inp.get("denoise"), prefer="denoise"))
     
-            if inp.get("positive"): pos_prompt = ComfyUIParser._trace_text(nodes, inp["positive"], polarity="positive")
-            if inp.get("negative"): neg_prompt = ComfyUIParser._trace_text(nodes, inp["negative"], polarity="negative")
+            if inp.get("positive"):
+                v = inp["positive"]
+                # 内联字符串 (easy kSampler 经 pipe 展平 fullLoader 的文本字段) 与链接两种形态
+                pos_prompt = v.strip() if isinstance(v, str) \
+                    else ComfyUIParser._trace_text(nodes, v, polarity="positive")
+            if inp.get("negative"):
+                v = inp["negative"]
+                neg_prompt = v.strip() if isinstance(v, str) \
+                    else ComfyUIParser._trace_text(nodes, v, polarity="negative")
             if inp.get("model"): params.model_name, params.loras = ComfyUIParser._trace_model_and_loras(nodes, inp["model"])
             if inp.get("latent_image"): params.size = ComfyUIParser._trace_latent_size(nodes, inp["latent_image"])
             params.clip_skip = ComfyUIParser._extract_clip_skip(nodes, first_node)
+            # 新模型工作流的署名参数: Flux guidance / 各 ModelSampling 系 shift / 视频帧数
+            extras = ComfyUIParser._extract_core_extras(nodes, inp)
+            if extras: params.other_params["core_extras"] = extras
 
             # 后续采样器 -> refiners
             for ref_id, ref_node in all_samplers[1:]:
                 ref_inp = ComfyUIParser._flatten_sampler_inputs(nodes, ref_node.get("inputs") or {})
                 refiner: Dict[str, Any] = {
-                    "steps": safe_int(ComfyUIParser._resolve_num(nodes, ref_inp.get("steps"))),
-                    "cfg": safe_float(ComfyUIParser._resolve_num(nodes, ref_inp.get("cfg"))),
+                    "steps": safe_int(ComfyUIParser._resolve_num(nodes, ref_inp.get("steps"), prefer=("steps", "steps_total"))),
+                    "cfg": safe_float(ComfyUIParser._resolve_num(nodes, ref_inp.get("cfg"), prefer="cfg")),
                     "sampler_name": ComfyUIParser._resolve_str(nodes, ref_inp.get("sampler_name")),
                     "scheduler": ComfyUIParser._resolve_str(nodes, ref_inp.get("scheduler")),
                     "seed": safe_int(ComfyUIParser._resolve_seed(nodes, ref_inp)),
-                    "denoise": safe_float(ComfyUIParser._resolve_num(nodes, ref_inp.get("denoise"))),
+                    "denoise": safe_float(ComfyUIParser._resolve_num(nodes, ref_inp.get("denoise"), prefer="denoise")),
                 }
                 # 二采/Refiner 使用的底模 (ckpt) 名称: 回溯 model 链接; 回溯失败则回退主采样器底模
                 ref_model = None
@@ -307,9 +482,13 @@ class ComfyUIParser:
                 if ref_model: refiner["model_name"] = ref_model
                 # 独立提示词
                 if ref_inp.get("positive"):
-                    refiner["positive_prompt"] = ComfyUIParser._trace_text(nodes, ref_inp["positive"], polarity="positive")
+                    v = ref_inp["positive"]
+                    refiner["positive_prompt"] = v.strip() if isinstance(v, str) \
+                        else ComfyUIParser._trace_text(nodes, v, polarity="positive")
                 if ref_inp.get("negative"):
-                    refiner["negative_prompt"] = ComfyUIParser._trace_text(nodes, ref_inp["negative"], polarity="negative")
+                    v = ref_inp["negative"]
+                    refiner["negative_prompt"] = v.strip() if isinstance(v, str) \
+                        else ComfyUIParser._trace_text(nodes, v, polarity="negative")
                 params.refiners.append(refiner)
             
         # 兜底查找: 正/负各自补齐
@@ -366,19 +545,25 @@ class ComfyUIParser:
             for text in (pos_prompt, neg_prompt):
                 if not text:
                     continue
-                for lora_name, lora_weight in _LORA_TAG_RE.findall(text):
+                for lora_name, lora_weight, lora_clip_w in _LORA_TAG_RE.findall(text):
                     name = lora_name.strip()
                     if not name:
                         continue
                     weight = safe_float(lora_weight) if lora_weight else 1.0
                     if weight is None:
                         weight = 1.0
+                    # <lora:名:unet:clip> 三段语法的第三段是 clip 强度
+                    clip_w = safe_float(lora_clip_w) if lora_clip_w else None
                     if name in existing:
                         entry = existing[name]
                         if entry.get("weight") is None:
                             entry["weight"] = weight
+                        if clip_w is not None and entry.get("strength_clip") is None:
+                            entry["strength_clip"] = clip_w
                     else:
                         entry = {"name": name, "weight": weight}
+                        if clip_w is not None:
+                            entry["strength_clip"] = clip_w
                         loras.append(entry)
                         existing[name] = entry
         except Exception:
@@ -390,11 +575,19 @@ class ComfyUIParser:
         if not isinstance(n, dict): return False
         ctype = str(n.get("class_type", ""))
         if ctype in ComfyUIParser._SAMPLER_CLASSES: return True
-        inp = n.get("inputs") or {}
-        return "sampler" in ctype.lower() and any(k in inp for k in ("steps", "cfg", "positive"))
+        inp = n.get("inputs")
+        if not isinstance(inp, dict): return False
+        clow = ctype.lower()
+        # 类名含 sampler 但不是采样器的: KSampler Config (rgthree, 参数供给节点)、
+        # KSamplerSelect (采样器选择器) ——它们会被 "sampler" 子串 + cfg 键误判
+        if "config" in clow or "select" in clow:
+            return False
+        return "sampler" in clow and any(k in inp for k in ("steps", "cfg", "positive"))
 
     # SamplerCustomAdvanced 系把参数拆到子节点 (guider/sampler/sigmas) 以及 SDXL Tuple/Pipe
-    _ALIAS_INPUT_KEYS = ("guider", "sampler", "sigmas", "model", "sdxl_tuple", "pipe", "basic_pipe", "tuple", "noise")
+    # context: rgthree Context/Context Big 管线 (直接带 seed/steps/cfg/sampler_name/scheduler + 正负链接)
+    _ALIAS_INPUT_KEYS = ("guider", "sampler", "sigmas", "model", "sdxl_tuple", "pipe", "basic_pipe",
+                         "tuple", "noise", "context")
 
     @staticmethod
     def _flatten_sampler_inputs(nodes: Dict[str, Any], inp: Dict[str, Any]) -> Dict[str, Any]:
@@ -408,6 +601,11 @@ class ComfyUIParser:
             if "base_clip" in cur: flat.setdefault("clip", cur["base_clip"])
             if "noise_seed" in cur: flat.setdefault("seed", cur["noise_seed"])
             if "optional_vae" in cur: flat.setdefault("vae", cur["optional_vae"])
+            # BasicGuider (Flux 标准图): 唯一 conditioning 输入即正向条件, 与写回侧
+            # update_comfy_prompt_text 的 conditioning 特判对称; CFGGuider 有正负双键, 不触发
+            if "positive" not in cur and "negative" not in cur \
+                    and isinstance(cur.get("conditioning"), (list, tuple)):
+                flat.setdefault("positive", cur["conditioning"])
 
             for k in ComfyUIParser._ALIAS_INPUT_KEYS:
                 v = cur.get(k)
@@ -421,8 +619,16 @@ class ComfyUIParser:
                 if "base_model" in sub: flat.setdefault("model", sub["base_model"])
                 if "base_clip" in sub: flat.setdefault("clip", sub["base_clip"])
                 if "noise_seed" in sub: flat.setdefault("seed", sub["noise_seed"])
+                if "positive" not in sub and "negative" not in sub \
+                        and isinstance(sub.get("conditioning"), (list, tuple)):
+                    flat.setdefault("positive", sub["conditioning"])
 
-                for sk, sv in sub.items(): flat.setdefault(sk, sv)
+                for sk, sv in sub.items():
+                    # 别名键本身不落地为最终值 (嵌套别名会让 _resolve_* 多穿一层拿到错误值);
+                    # model/noise 除外——它们同时是有语义的结果键 (BasicGuider.model / RandomNoise 种子链)
+                    if sk in ComfyUIParser._ALIAS_INPUT_KEYS and sk not in ("model", "noise"):
+                        continue
+                    flat.setdefault(sk, sv)
                 stack.append(sub)
         return flat
 
@@ -442,7 +648,8 @@ class ComfyUIParser:
                 sid = str(v[0])
                 if sid in seen or not isinstance(nodes.get(sid), dict): continue
                 seen.add(sid)
-                sub = nodes[sid].get("inputs") or {}
+                sub = nodes[sid].get("inputs")
+                if not isinstance(sub, dict): continue
                 if key in sub: return sub
                 stack.append(sub)
         return None
@@ -468,7 +675,8 @@ class ComfyUIParser:
         sampler_ids = {nid for nid, _ in candidates}
         output_of: Dict[str, str] = {}  # output_of[consumer] = producer
         for nid, n in candidates:
-            latent_link = (n.get("inputs") or {}).get("latent_image")
+            n_inp = n.get("inputs")
+            latent_link = n_inp.get("latent_image") if isinstance(n_inp, dict) else None
             if not (isinstance(latent_link, (list, tuple)) and latent_link):
                 continue
             # BFS 回溯上游，定位首个采样器生产者 (visited 防环)
@@ -482,11 +690,13 @@ class ComfyUIParser:
                 if curr in sampler_ids and curr != nid:
                     output_of[nid] = curr
                     break
-                if curr in nodes:
-                    queue.extend(str(v[0]) for v in (nodes[curr].get("inputs") or {}).values()
+                curr_node = nodes.get(curr)
+                curr_inp = curr_node.get("inputs") if isinstance(curr_node, dict) else None
+                if isinstance(curr_inp, dict):
+                    queue.extend(str(v[0]) for v in curr_inp.values()
                                  if isinstance(v, (list, tuple)) and v)
 
-        # Kahn 式拓扑排序 (max_iter 防死循环，循环依赖时追加剩余)
+        # Kahn 式拓扑排序 (max_iter 防死循环，循环依赖时按 id 稳定排序追加剩余)
         ordered: List[Tuple[str, Dict[str, Any]]] = []
         remaining = list(candidates)
         placed = set()
@@ -500,7 +710,11 @@ class ComfyUIParser:
                     ordered.append(item)
                     placed.add(nid)
                     remaining.remove(item)
-        ordered.extend(remaining)
+        # 循环依赖兜底: 数字感知的稳定排序, 避免 dict 顺序让 refiner 排到主采样器前面
+        def _sort_key(item):
+            nid = item[0]
+            return (0, int(nid)) if str(nid).isdigit() else (1, str(nid))
+        ordered.extend(sorted(remaining, key=_sort_key))
         return ordered
 
     @staticmethod
@@ -518,7 +732,8 @@ class ComfyUIParser:
                     referenced.add(str(v[0]))
 
         for nid, n in nodes.items():
-            ctype = n.get("class_type", "")
+            ctype = n.get("class_type")
+            ctype = ctype if isinstance(ctype, str) else ""  # 畸形节点 class_type 可能是 None/int/list
             # 检测范围: 绕过/静音节点 (编辑器格式 mode 2=静音 4=绕过) 不参与出图, 不成卡
             if n.get("mode") in (2, 4):
                 continue
@@ -580,6 +795,14 @@ class ComfyUIParser:
                 info = {"node_id": nid, "class_type": ctype}
                 for k in ("ipadapter_file", "model_name", "ipadapter"):
                     if isinstance(inp.get(k), str) and inp[k].strip(): info["model"] = inp[k].strip(); break
+                if "model" not in info:
+                    # cubiq 版现代 IPAdapter: 模型在独立 loader 节点, 经链接传入, 回溯取文件名
+                    for lk in ("ipadapter", "model"):
+                        if isinstance(inp.get(lk), (list, tuple)):
+                            mn = ComfyUIParser._trace_detector_model(nodes, inp[lk])
+                            if mn:
+                                info["model"] = mn
+                                break
                 for k in ("weight", "weight_type", "start_at", "end_at"):
                     if k in inp and (w := ComfyUIParser._resolve_widget(nodes, inp[k])) is not None: info[k] = w
                 result[category].append(info)
@@ -622,9 +845,38 @@ class ComfyUIParser:
                         info[k] = val
                 result[category].append(info)
 
+            elif category == "video":
+                info = {"node_id": nid, "class_type": ctype}
+                for k in ("width", "height", "length", "num_frames", "video_frames", "frame_rate",
+                          "fps", "motion_bucket_id", "loop_count", "format", "codec"):
+                    if k in inp:
+                        val = ComfyUIParser._resolve_widget(nodes, inp[k])
+                        if isinstance(val, (int, float, str)) and not isinstance(val, bool):
+                            info[k] = val
+                result[category].append(info)
+
+            elif category == "faceid":
+                info = {"node_id": nid, "class_type": ctype}
+                for k in ("instantid_file", "pulid_file", "model_name", "photomaker_name"):
+                    v = inp.get(k)
+                    if isinstance(v, str) and v.strip():
+                        info["model"] = v.strip()
+                        break
+                for k in ("weight", "start_at", "end_at"):
+                    if k in inp and (val := ComfyUIParser._resolve_widget(nodes, inp[k])) is not None:
+                        info[k] = val
+                result[category].append(info)
+
+            elif category == "preprocessor":
+                info = {"node_id": nid, "class_type": ctype}
+                for k in ("preprocessor", "resolution"):
+                    if k in inp and (val := ComfyUIParser._resolve_widget(nodes, inp[k])) is not None:
+                        info[k] = val
+                result[category].append(info)
+
         # 超分链合并为一张卡 (真实模型名 + 放大倍率 + 目标尺寸), 剔除 ['75',0] 这类链接引用垃圾
         if upscale_nodes:
-            merged = ComfyUIParser._merge_upscale_chain(upscale_nodes)
+            merged = ComfyUIParser._merge_upscale_chain(upscale_nodes, nodes)
             if merged: result["upscale"].append(merged)
 
         # 转换为列表格式，过滤空分类
@@ -650,6 +902,12 @@ class ComfyUIParser:
             return "vae"
         if ("upscale" in low or "esrgan" in low) and any(k in inp for k in ("model_name", "upscaler_name", "scale_by", "upscale_by", "width")):
             return "upscale"
+        if "tovideo" in low or "latentvideo" in low or ("wan" in low and "video" in low):
+            return "video"
+        if "instantid" in low or "pulid" in low or "photomaker" in low:
+            return "faceid"
+        if "preprocessor" in low:
+            return "preprocessor"
         return None
 
     @staticmethod
@@ -672,7 +930,8 @@ class ComfyUIParser:
         return None
 
     @staticmethod
-    def _merge_upscale_chain(upscale_nodes: List[Tuple[str, Dict[str, Any]]]) -> Dict[str, Any]:
+    def _merge_upscale_chain(upscale_nodes: List[Tuple[str, Dict[str, Any]]],
+                             nodes: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """将超分链合并为单卡; 有效放大倍率 = 模型原生倍率(名前缀 4x) × 缩放节点(scale_by)"""
         info: Dict[str, Any] = {}
         model_names: List[str] = []
@@ -693,6 +952,19 @@ class ComfyUIParser:
             # UltimateSDUpscale 附加采样参数
             for k in ("steps", "denoise"):
                 if isinstance(inp.get(k), (int, float)): info.setdefault(k, inp[k])
+            if ctype == "UltimateSDUpscale":
+                # USDU 自带完整采样参数 (它本质是采样器, 参数可与主采样不同)
+                for k in ("seed", "cfg"):
+                    v = inp.get(k)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool): info.setdefault(k, v)
+                for k in ("sampler_name", "scheduler"):
+                    v = inp.get(k)
+                    if isinstance(v, str) and v.strip(): info.setdefault(k, v.strip())
+                if nodes:
+                    for pk in ("positive", "negative"):
+                        if isinstance(inp.get(pk), (list, tuple)):
+                            t = ComfyUIParser._trace_text(nodes, inp[pk], polarity=pk)
+                            if t and t.strip(): info.setdefault(pk + "_prompt", t.strip())
         # 模型原生倍率: 解析名前缀 "4x" / "2x"
         native = None
         if model_names:
@@ -716,7 +988,16 @@ class ComfyUIParser:
         if visited is None: visited = set()
         if not isinstance(link, (list, tuple)) or not link: return ""
         sid = str(link[0])
-        slot = int(link[1]) if len(link) > 1 and str(link[1]).isdigit() else 0
+        # 槽位兼容: int 直取 (含负数), 数字字符串 (含 "-1") 转换, 其他归零
+        if len(link) > 1:
+            if isinstance(link[1], int):
+                slot = link[1]
+            elif str(link[1]).lstrip("-").isdigit():
+                slot = int(str(link[1]))
+            else:
+                slot = 0
+        else:
+            slot = 0
         state_key = (sid, slot, polarity)
         if state_key in visited or sid not in nodes: return ""
         visited.add(state_key)
@@ -766,6 +1047,27 @@ class ComfyUIParser:
             elif isinstance(inp[eff_k], str) and inp[eff_k].strip():
                 return inp[eff_k].strip()
 
+        # 0g. KJNodes GetNode/SetNode: 靠 name 字符串配对, links 里没有这条语义边
+        if clow.startswith("getnode") or clow.startswith("setnode"):
+            if clow.startswith("setnode"):
+                for k, v in inp.items():
+                    if k == "_widgets_values": continue
+                    if isinstance(v, (list, tuple)):
+                        return ComfyUIParser._trace_text(nodes, v, visited, depth + 1, polarity=polarity)
+                return ""
+            my_name = inp.get("name")
+            if isinstance(my_name, str):
+                for snid, sn in nodes.items():
+                    if not isinstance(sn, dict): continue
+                    if not str(sn.get("class_type", "")).lower().startswith("setnode"): continue
+                    sinp = sn.get("inputs", {}) or {}
+                    if sinp.get("name") != my_name: continue
+                    for k, v in sinp.items():
+                        if k == "_widgets_values": continue
+                        if isinstance(v, (list, tuple)):
+                            return ComfyUIParser._trace_text(nodes, v, visited, depth + 1, polarity=polarity)
+            return ""
+
         # 1. ConditioningSetMaskAndCombine* (Slot 0=positive, Slot 1=negative)
         if "maskandcombine" in clow:
             eff_polarity = "negative" if (slot == 1 or polarity == "negative") else "positive"
@@ -795,6 +1097,23 @@ class ComfyUIParser:
         # 3. SDXL/双 CLIP (text_g+text_l 等) 需合并 g+l, 优先于单字段
         if dual := ComfyUIParser._trace_dual_clip(inp, nodes, visited, depth + 1, polarity=polarity): return dual
 
+        # 3a. 多段文本编码器 (CLIPTextEncodeFlux/SD3/HiDream/HunyuanDiT):
+        #     clip_l/clip_g/t5xxl/llama/bert/mt5xl 按序合并。字段名与 DualCLIPLoader 的
+        #     clip_name1/2 不冲突, 但仍限定 textencode 类名, 防未来加载器撞名
+        if "textencode" in clow:
+            multi_fields = [f for f in ("clip_l", "clip_g", "t5xxl", "llama", "bert", "mt5xl") if f in inp]
+            if multi_fields:
+                parts: List[str] = []
+                for f in multi_fields:
+                    v = inp[f]
+                    if isinstance(v, str) and v.strip():
+                        parts.append(v.strip())
+                    elif isinstance(v, (list, tuple)):
+                        if sub := ComfyUIParser._trace_text(nodes, v, visited, depth + 1, polarity=polarity):
+                            parts.append(sub)
+                if parts:
+                    return "\n".join(dict.fromkeys(parts))
+
         # 4. 直接文本字段 (用户填写的提示词控件, 含第三方与中文字段名)
         if polarity == "positive":
             target_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if not any(k.lower().startswith(nk) for nk in ("negative", "neg", "负"))]
@@ -805,11 +1124,24 @@ class ComfyUIParser:
         else:
             target_fields = ComfyUIParser._PROMPT_TEXT_FIELDS
 
+        dynamic_src = None  # 文本字段是链接但回溯不到文本时, 记录上游来源类名 (自动打标/LLM 管线)
         for k in target_fields:
             if k not in inp: continue
             val = inp[k]
             if isinstance(val, str) and val.strip(): return val.strip()
             if isinstance(val, (list, tuple)):
+                if dynamic_src is None:
+                    src = nodes.get(str(val[0])) if val else None
+                    if isinstance(src, dict):
+                        c = str(src.get("class_type", ""))
+                        # 只标注真实生成型节点 (VLM 反推/LLM 扩写); 普通文本节点
+                        # (Concat/StringFunction/Primitive/ShowText) 不算, 防误标
+                        if c and any(t in c.lower() for t in (
+                                "florence", "joycaption", "joy_caption", "ollama", "blip",
+                                "tagger", "moondream", "minicpm", "qwen", "gemini",
+                                "magicprompt", "randomgenerator", "combinatorialgenerator",
+                                "internvl", "gpt", "llava", "onebuttonprompt")):
+                            dynamic_src = c
                 sub_pol = "negative" if any(k.lower().startswith(nk) for nk in ("negative", "neg", "负")) else ("positive" if any(k.lower().startswith(pk) for pk in ("positive", "pos", "正")) else polarity)
                 if res := ComfyUIParser._trace_text(nodes, val, visited, depth + 1, polarity=sub_pol): return res
 
@@ -853,6 +1185,12 @@ class ComfyUIParser:
                     if isinstance(item, str) and len(item.strip()) >= 5 and not _NON_PROMPT_VAL_RE.search(item.strip()) and not _NON_PROMPT_KEY_RE.search(item.strip()):
                         if item.lower() not in ("fixed", "randomize", "increment", "decrement", "enable", "disable", "cpu", "cuda", "fp16", "fp32", "bf16"):
                             return item.strip()
+
+        # 8. 动态提示词占位 (放在 widgets 兜底之后): 文本字段是生成型节点的链接
+        #    (Florence2Run/JoyCaption/LLM 自动打标管线), 静态 metadata 拿不到运行时文本,
+        #    明示来源比空白更有用; 白名单外的节点不占位, 避免挡住正常兜底
+        if dynamic_src:
+            return f"（运行时由 {dynamic_src} 生成）"
 
         return ""
 
@@ -924,13 +1262,30 @@ class ComfyUIParser:
         model_name, lora = ComfyUIParser._extract_model_info(inp)
         loras = [lora] if lora else []
         loras.extend(ComfyUIParser._extract_lora_stack(inp))
-        # 收集下一步候选链接: model 键 > 开关节点生效分支 > 透明节点穿透键 (后两组复用统一 helper, 与 _trace_num/_trace_str 同语义)
+        loras.extend(ComfyUIParser._extract_dict_loras(inp))
+        # 模型合并节点 (ModelMergeSimple/Blocks/Add 等): 双 MODEL 入口, 名称合并展示
+        if "modelmerge" in str(nodes[sid].get("class_type", "")).lower():
+            names: List[str] = []
+            for mk in ("model1", "model2"):
+                if isinstance(inp.get(mk), (list, tuple)):
+                    pm, pl = ComfyUIParser._trace_model_and_loras(nodes, inp[mk], set(visited), depth + 1)
+                    if pl: loras.extend(pl)
+                    if pm: names.append(pm)
+            if len(names) > 1:
+                ratio = safe_float(inp.get("ratio"))
+                suffix = f" (融合 {ratio:.2f})" if ratio is not None else " (融合)"
+                return " + ".join(dict.fromkeys(names)) + suffix, loras
+            if names:
+                return names[0], loras
+        # 收集下一步候选链接: LoRA Stack 链接 > model 键 > 开关节点生效分支 > 透明节点穿透键。
+        # stack 必须在 model 前面: Inspire 系加载器的 LoRA 来自独立的 lora_stack 输入,
+        # 若先递归 model 链找到底模就 break, stack 里的 LoRA 会整个漏掉
         candidates: List[Any] = []
-        if isinstance(inp.get("model"), (list, tuple)):
-            candidates.append(inp["model"])
         for lk in ("lora_stack", "loras", "lora_list", "stack"):
             if isinstance(inp.get(lk), (list, tuple)):
                 candidates.append(inp[lk])
+        if isinstance(inp.get("model"), (list, tuple)):
+            candidates.append(inp["model"])
         candidates.extend(ComfyUIParser._pass_through_candidates(inp))
         for cand in candidates:
             # 每个分支用独立 visited 副本, 避免分支汇合点被误判为环
@@ -943,13 +1298,17 @@ class ComfyUIParser:
         return model_name, loras
 
     # 数值/字符串部件源节点的取值字段 (随机种节点 / primitive / int=float 节点等)
-    _NUM_VALUE_FIELDS = ("seed", "noise_seed", "seed_num", "rand_seed", "value", "int", "number", "float")
+    # steps_total: rgthree KSampler Config 的步数字段 (经 Context 注入)
+    _NUM_VALUE_FIELDS = ("seed", "noise_seed", "seed_num", "rand_seed", "steps_total",
+                         "value", "int", "number", "float")
     _STR_VALUE_FIELDS = ("value", "string", "text", "sampler_name", "scheduler")
 
     @staticmethod
-    def _resolve_num(nodes: Dict[str, Any], v: Any) -> Any:
-        """数值部件 (steps/cfg/denoise 等) 被转成链接时, 回溯源节点取值"""
-        return ComfyUIParser._trace_num(nodes, v) if isinstance(v, (list, tuple)) else v
+    def _resolve_num(nodes: Dict[str, Any], v: Any, prefer: Any = None) -> Any:
+        """数值部件 (steps/cfg/denoise 等) 被转成链接时, 回溯源节点取值。
+        prefer: 目标字段名 (或候选元组), 优先于无差别字段表——回溯 steps 时不会被
+        同节点的 seed 截胡 (steps_total 与 seed 共存于 rgthree KSampler Config)"""
+        return ComfyUIParser._trace_num(nodes, v, prefer=prefer) if isinstance(v, (list, tuple)) else v
 
     @staticmethod
     def _resolve_str(nodes: Dict[str, Any], v: Any) -> Optional[str]:
@@ -965,9 +1324,10 @@ class ComfyUIParser:
         """种子: 直取值 > 回溯链接到随机种节点 (easy seed/CR Seed/RandomNoise 等) > SamplerCustomAdvanced 的 noise 链接"""
         v = inp.get("seed")
         if v is None: v = inp.get("noise_seed")
-        if isinstance(v, (list, tuple)): v = ComfyUIParser._trace_num(nodes, v)
+        if isinstance(v, (list, tuple)):
+            v = ComfyUIParser._trace_num(nodes, v, prefer=("seed", "noise_seed", "seed_num", "rand_seed"))
         if v is None and isinstance(inp.get("noise"), (list, tuple)):
-            v = ComfyUIParser._trace_num(nodes, inp["noise"])
+            v = ComfyUIParser._trace_num(nodes, inp["noise"], prefer=("noise_seed", "seed"))
         return v
 
     @staticmethod
@@ -982,7 +1342,8 @@ class ComfyUIParser:
         return cands
 
     @staticmethod
-    def _trace_num(nodes: Dict[str, Any], link: Any, visited: Optional[set] = None, depth: int = 0) -> Optional[float]:
+    def _trace_num(nodes: Dict[str, Any], link: Any, visited: Optional[set] = None, depth: int = 0,
+                   prefer: Any = None) -> Optional[float]:
         if depth > 200: return None
         if visited is None: visited = set()
         if not isinstance(link, (list, tuple)) or not link: return None
@@ -990,7 +1351,10 @@ class ComfyUIParser:
         if sid in visited or sid not in nodes: return None
         visited.add(sid)
         inp = nodes[sid].get("inputs", {})
-        for k in ComfyUIParser._NUM_VALUE_FIELDS:
+        # prefer 目标字段优先 (str 或候选元组), 其后才是无差别字段表
+        keys = ([prefer] if isinstance(prefer, str) else list(prefer or []))
+        keys += [k for k in ComfyUIParser._NUM_VALUE_FIELDS if k not in keys]
+        for k in keys:
             v = inp.get(k)
             if isinstance(v, bool): continue
             if isinstance(v, (int, float)): return v
@@ -1035,7 +1399,7 @@ class ComfyUIParser:
         visited.add(sid)
         inp = nodes[sid].get("inputs", {})
         if size := ComfyUIParser._extract_size(inp): return size
-        for k in ["samples", "latent_image", "latent", "pixels", "image"]:
+        for k in ["samples", "latent_image", "latent", "latents", "pixels", "image"]:
             if k in inp and isinstance(inp[k], (list, tuple)) and (res := ComfyUIParser._trace_latent_size(nodes, inp[k], visited, depth + 1)): return res
         for cand in ComfyUIParser._pass_through_candidates(inp):
             if res := ComfyUIParser._trace_latent_size(nodes, cand, set(visited), depth + 1):
@@ -1076,17 +1440,45 @@ class ComfyUIParser:
                     model_name = w.strip()
                     break
         lora = None
-        for lk in ("lora_name", "lora"):
+        for lk in ("lora_name", "lora", "base_lora_name", "refiner_lora_name"):
             if isinstance(inp.get(lk), str) and inp[lk].strip():
                 name = inp[lk].strip()
                 if name.lower() not in ("none", ""):
+                    # easy fullLoader / Efficient Loader 的强度键是 lora_model_strength 系
+                    m_str = safe_float(inp.get("strength_model", inp.get("lora_model_strength",
+                                        inp.get("model_strength", inp.get("lora_strength",
+                                         inp.get("lora_weight", inp.get("strength", 1.0)))))))
+                    c_str = safe_float(inp.get("strength_clip", inp.get("lora_clip_strength",
+                                        inp.get("clip_strength", inp.get("lora_strength",
+                                         inp.get("lora_weight", inp.get("strength", m_str)))))))
                     lora = {
                         "name": name,
-                        "strength_model": safe_float(inp.get("strength_model", inp.get("strength", 1.0))),
-                        "strength_clip": safe_float(inp.get("strength_clip", inp.get("strength", 1.0)))
+                        "strength_model": m_str,
+                        "strength_clip": c_str,
                     }
                 break
         return model_name, lora
+
+    @staticmethod
+    def _extract_dict_loras(inp: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """rgthree Power Lora Loader 等: lora_01..N 槽位值为嵌套字典
+        {"on": bool, "lora": "xxx.safetensors", "strength": 0.8, "strengthTwo": null}。
+        on=False 的槽位被用户停用, 不参与出图, 必须排除。"""
+        out: List[Dict[str, Any]] = []
+        for k, v in inp.items():
+            if not (isinstance(k, str) and isinstance(v, dict)):
+                continue
+            name = v.get("lora", v.get("lora_name"))
+            if not (isinstance(name, str) and name.strip()) or name.strip().lower() == "none":
+                continue
+            if v.get("on") is False:
+                continue
+            w = safe_float(v.get("strength", v.get("strength_model", 1.0)))
+            # strengthTwo 键存在但为 null 时表示未拆 clip 强度, 必须回退到 model 强度
+            st2 = v.get("strengthTwo", v.get("strength_clip"))
+            cw = safe_float(st2) if st2 is not None else w
+            out.append({"name": name.strip(), "strength_model": w, "strength_clip": cw})
+        return out
 
     @staticmethod
     def _extract_lora_stack(inp: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1096,14 +1488,26 @@ class ComfyUIParser:
         if not any(isinstance(k, str) and k.startswith(("lora_name_", "lora_")) for k in inp):
             return []
         stack_loras = []
-        for i in range(1, 51):
-            for pattern in (f"lora_name_{i}", f"lora_{i}_name", f"lora_{i}"):
+        # 槽位上限动态化: 按 inputs 里实际出现的最大编号遍历 (51+ 槽位不再静默丢失), 上限 200 防病态
+        max_slot = 50
+        for k in inp:
+            if isinstance(k, str):
+                m = re.match(r"^lora(?:_name)?_(\d+)$", k)
+                if m:
+                    max_slot = max(max_slot, min(int(m.group(1)), 200))
+        for i in range(1, max_slot + 1):
+            for pattern in (f"lora_name_{i}", f"lora_{i}_name", f"lora_{i}",
+                            f"lora_name_{i:02d}", f"lora_{i:02d}"):
                 if isinstance(inp.get(pattern), str) and inp[pattern].strip():
                     name = inp[pattern].strip()
                     if name.lower() not in ("none", ""):
                         wt = safe_float(inp.get(f"lora_wt_{i}"))
-                        m_str = safe_float(inp.get(f"model_str_{i}", inp.get(f"lora_{i}_model_strength", inp.get(f"lora_strength_{i}", 1.0))))
-                        c_str = safe_float(inp.get(f"clip_str_{i}", inp.get(f"lora_{i}_clip_strength", m_str)))
+                        m_str = safe_float(inp.get(f"model_str_{i}", inp.get(f"strength_model_{i}",
+                                            inp.get(f"strength_{i}", inp.get(f"strength_{i:02d}",
+                                             inp.get(f"lora_{i}_model_strength", inp.get(f"lora_strength_{i}", 1.0)))))))
+                        c_str = safe_float(inp.get(f"clip_str_{i}", inp.get(f"strength_clip_{i}",
+                                            inp.get(f"strengthTwo_{i}", inp.get(f"strength_two_{i}",
+                                             inp.get(f"lora_{i}_clip_strength", m_str))))))
                         if wt is not None:
                             eff_m = round(wt * (m_str if m_str is not None else 1.0), 4)
                             eff_c = round(wt * (c_str if c_str is not None else 1.0), 4)
@@ -1139,7 +1543,97 @@ class ComfyUIParser:
             if lora: loras.append(lora)
             st_loras = ComfyUIParser._extract_lora_stack(inp)
             if st_loras: loras.extend(st_loras)
+            loras.extend(ComfyUIParser._extract_dict_loras(inp))
         return model_name, loras
+
+    # 专用调度器节点类名 -> 调度器名 (这类节点没有 scheduler 字符串部件)
+    _SCHEDULER_CLASS_NAMES = (
+        ("alignyoursteps", "align_your_steps"), ("karras", "karras"),
+        ("polyexponential", "polyexponential"), ("exponential", "exponential"),
+        ("betasampling", "beta"), ("sdturbo", "turbo"), ("vp", "vp"),
+    )
+
+    @staticmethod
+    def _derive_scheduler_name(nodes: Dict[str, Any], sampler_inp: Dict[str, Any]) -> Optional[str]:
+        """只沿 sigmas 链回溯调度器节点 (含 Flip/Split 等中间节点), 由类名推导名称。
+        禁止全图扫描: 未接入的遗留调度器节点会被误判成实际调度器 (终审实测意见)。"""
+        if not isinstance(sampler_inp.get("sigmas"), (list, tuple)) or not sampler_inp["sigmas"]:
+            return None
+        visited: set = set()
+        queue = deque([str(sampler_inp["sigmas"][0])])
+        hops = 0
+        while queue and hops < 200:
+            sid = queue.popleft()
+            if sid in visited:
+                continue
+            visited.add(sid)
+            hops += 1
+            n = nodes.get(sid)
+            if not isinstance(n, dict) or n.get("mode") in (2, 4):
+                continue
+            clow = str(n.get("class_type", "")).lower()
+            if "scheduler" in clow:
+                for kk, vv in ComfyUIParser._SCHEDULER_CLASS_NAMES:
+                    if kk in clow:
+                        return vv
+                return None  # 是调度器节点但类名不认识, 不给错误答案
+            for v in (n.get("inputs") or {}).values():
+                if isinstance(v, (list, tuple)) and v:
+                    queue.append(str(v[0]))
+        return None
+
+    @staticmethod
+    def _extract_core_extras(nodes: Dict[str, Any], sampler_inp: Dict[str, Any]) -> Dict[str, Any]:
+        """新模型工作流的署名参数 (Flux guidance / ModelSampling 系 shift / 视频帧数),
+        归入 other_params.core_extras, 前端显示为「核心参数」分组。"""
+        extras: Dict[str, Any] = {}
+        # 两轮扫描: 第一轮只认 FluxGuidance 专用节点; 第二轮才回退到 CLIPTextEncodeFlux
+        # 内嵌的 guidance 部件——避免字典序让编码器默认值盖过真正的 FluxGuidance (终审实测意见)
+        for n in nodes.values():
+            if not isinstance(n, dict): continue
+            if n.get("mode") in (2, 4): continue  # 旁路/静音节点不算数
+            clow = str(n.get("class_type", "")).lower()
+            inp = n.get("inputs", {}) or {}
+            if clow == "fluxguidance":
+                g = ComfyUIParser._resolve_num(nodes, inp.get("guidance"), prefer="guidance")
+                if g is not None: extras.setdefault("Guidance", g)
+            elif "modelsampling" in clow:
+                for sk in ("shift", "max_shift"):
+                    sv = ComfyUIParser._resolve_num(nodes, inp.get(sk), prefer=sk)
+                    if sv is not None:
+                        extras.setdefault("Shift", sv)
+                        break
+        if "Guidance" not in extras:
+            for n in nodes.values():
+                if not isinstance(n, dict) or n.get("mode") in (2, 4): continue
+                if "cliptextencodeflux" not in str(n.get("class_type", "")).lower(): continue
+                g = ComfyUIParser._resolve_num(nodes, (n.get("inputs", {}) or {}).get("guidance"))
+                if g is not None:
+                    extras["Guidance"] = g
+                    break
+        if isinstance(sampler_inp.get("latent_image"), (list, tuple)):
+            frames = ComfyUIParser._trace_frames(nodes, sampler_inp["latent_image"])
+            if frames is not None: extras["Frames"] = frames
+        return extras
+
+    @staticmethod
+    def _trace_frames(nodes: Dict[str, Any], link: Any, visited: Optional[set] = None, depth: int = 0) -> Optional[int]:
+        """沿 latent 链回溯视频帧数 (WanImageToVideo/EmptyHunyuanLatentVideo 等的 length 字段)"""
+        if depth > 50: return None
+        if visited is None: visited = set()
+        if not isinstance(link, (list, tuple)) or not link: return None
+        sid = str(link[0])
+        if sid in visited or sid not in nodes: return None
+        visited.add(sid)
+        inp = nodes[sid].get("inputs", {}) or {}
+        v = inp.get("length", inp.get("num_frames", inp.get("video_frames")))
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 1:
+            return int(v)
+        for k in ("samples", "latent_image", "latent", "pixels", "image"):
+            if isinstance(inp.get(k), (list, tuple)):
+                if r := ComfyUIParser._trace_frames(nodes, inp[k], visited, depth + 1):
+                    return r
+        return None
 
     @staticmethod
     def _extract_clip_skip(nodes: Dict[str, Any], first_node: Optional[Dict[str, Any]] = None) -> Optional[int]:
@@ -1160,6 +1654,22 @@ class ComfyUIParser:
                     if cs is not None:
                         v = safe_int(cs)
                         if v is not None and v != 0: return abs(v)
+        return None
+
+    @staticmethod
+    def _find_implicit_seed(nodes: Dict[str, Any]) -> Optional[int]:
+        """隐式种子源 (links 里没有边的广播): Seed Everywhere (cg-use-everywhere) /
+        GlobalSeed //Inspire (值字段是 value, 执行期改写各采样器种子)"""
+        for n in nodes.values():
+            if not isinstance(n, dict) or n.get("mode") in (2, 4): continue
+            clow = str(n.get("class_type", "")).lower()
+            inp = n.get("inputs", {}) or {}
+            if clow == "seed everywhere":
+                v = safe_int(inp.get("seed"))
+                if v is not None: return v
+            elif "globalseed" in clow:
+                v = safe_int(inp.get("value", inp.get("seed")))
+                if v is not None: return v
         return None
 
     @staticmethod
@@ -1298,7 +1808,9 @@ class ComfyUIParser:
                 if snap is not None:
                     size_changed = (snap.size or "") != (params.size or "")
                 if size_changed:
-                    li = (new_graph.get(str(inp["latent_image"][0])) or {}).get("inputs") or {}
+                    li = (new_graph.get(str(inp["latent_image"][0])) or {}).get("inputs")
+                    if not isinstance(li, dict):
+                        li = {}
                     if (m := ComfyUIParser._SIZE_RE.fullmatch(params.size)) and "width" in li:
                         li["width"], li["height"] = int(m.group(1)), int(m.group(2))
 
@@ -1352,8 +1864,10 @@ class ComfyUIParser:
             ui_node = ui_by_id.get(str(nid))
             if not isinstance(ui_node, dict) or not isinstance(new_node, dict):
                 continue
-            new_inputs = new_node.get("inputs") or {}
-            old_inputs = (old_node or {}).get("inputs") or {}
+            new_inputs = new_node.get("inputs")
+            old_inputs = (old_node or {}).get("inputs")
+            if not isinstance(new_inputs, dict) or not isinstance(old_inputs, dict):
+                continue
             for field, new_val in new_inputs.items():
                 old_val = old_inputs.get(field)
                 if not isinstance(new_val, str) or not isinstance(old_val, str) or new_val == old_val:
@@ -1363,10 +1877,10 @@ class ComfyUIParser:
                     named[field] = new_val
                 wv = ui_node.get("widgets_values")
                 if isinstance(wv, list):
+                    # 同一旧值可能出现多处 (镜像 widget), 全部同步, 避免 UI/API 半新半旧
                     for i, w in enumerate(wv):
                         if isinstance(w, str) and w == old_val:
                             wv[i] = new_val
-                            break
 
     @staticmethod
     def _write_text_at(nodes: Dict[str, Any], nid: str, txt: str, polarity: Optional[str] = None,
@@ -1393,7 +1907,8 @@ class ComfyUIParser:
             # 对称于读取端: 静音(2)/旁路(4)节点不参与出图, 不写入也不穿透
             # (真实缺陷: flux_kontext 的旁路 ADetailer 正向节点曾被负向写回清空)
             if node.get("mode") in (2, 4): continue
-            inp = node.get("inputs") or {}
+            inp = node.get("inputs")
+            if not isinstance(inp, dict): continue  # 畸形节点 inputs 可能是 bool/list/str
             # 1a) 优先：若节点自身有匹配当前极性的字符串字段 (如 negative, positive)
             if polarity and polarity in inp and isinstance(inp[polarity], str):
                 if (cur, polarity) not in forbidden:
@@ -1445,7 +1960,8 @@ class ComfyUIParser:
             if any(nk in clow for nk in ("note", "markdown")):
                 continue
             slot_list = bypass_slots if n.get("mode") in (2, 4) else active_slots
-            inp = n.get("inputs") or {}
+            inp = n.get("inputs")
+            if not isinstance(inp, dict): continue
             title = ((n.get("_meta") or {}).get("title") or n.get("title") or "").lower()
             # 与读取 _fallback_scan_prompts 用同一套 _PROMPT_TEXT_FIELDS 键 + 同序遍历 + 同款极性
             # 判定 (正向标记优先于负向), 保证读写槽位对称
@@ -1470,7 +1986,9 @@ class ComfyUIParser:
             or (slots[0] if slots else None)
         neg_slot = next((s for s in slots if s[2] == "negative" and s is not pos_slot), None)
         if neg_slot is None and len(slots) >= 2:
-            neg_slot = next((s for s in slots if s is not pos_slot), None)
+            # 回退槽位排除已标记 positive 的槽: 两个槽都被判成正向时宁缺毋写,
+            # 否则 negative 写进 positive 槽, 读取端再按正向读回来就是正负对调损毁
+            neg_slot = next((s for s in slots if s is not pos_slot and s[2] != "positive"), None)
         if positive_text is not None and pos_slot is not None:
             pos_slot[0][pos_slot[1]] = positive_text
         if negative_text is not None and neg_slot is not None:

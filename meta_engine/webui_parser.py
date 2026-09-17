@@ -12,7 +12,7 @@ from .common import safe_int, safe_float
 _PARAM_LINE_RE = re.compile(r"Steps[:：]\s*\d+.*(?:Sampler|CFG scale|Seed|Model hash)[:：]")
 # 正负提示词切分与 <lora:name:weight> 标签: 高频调用, 预编译避免每次 parse_text 重编译
 _NEG_PROMPT_RE = re.compile(r"(?:^|\n)Negative prompt[:：]\s*")
-_LORA_TAG_RE = re.compile(r"<lora:([^:>]+)(?::([^:>]+))?>")
+_LORA_TAG_RE = re.compile(r"<(?:lora|lyco):([^:>]+)(?::([^:>]+))?(?::([^:>]+))?>")
 # 键名规范: 字母开头, 允许数字/下划线/连字符/空格 (如 "Model hash", "Hires resize-up", "ControlNet 0 Guidance Start")
 _KEY_RE = re.compile(r"[A-Za-z][\w \-]*")
 
@@ -299,7 +299,7 @@ class WebUIParser:
             # A1111/Forge 负面提示词中的 <lora:> 标签同样会作用于模型, 与 ComfyUI 解析器
             # (_merge_prompt_lora_tags) 保持一致: 正负两处都收集, 同名去重 (hash 行优先)
             for prompt_text in (meta.positive_prompt, meta.negative_prompt):
-                for lora_name, lora_weight in _LORA_TAG_RE.findall(prompt_text):
+                for lora_name, lora_weight, _clip_w in _LORA_TAG_RE.findall(prompt_text):
                     w = safe_float(lora_weight) if lora_weight else 1.0
                     if lora_name not in seen_loras:
                         seen_loras.add(lora_name)

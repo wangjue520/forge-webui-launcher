@@ -71,6 +71,10 @@ _NODE_CATEGORY_LABELS = {
     "text_encoder": "文本编码器",
     "inpaint": "重绘",
     "multidiffusion": "分块扩散",
+    "freeu": "FreeU",
+    "video": "视频",
+    "faceid": "人脸 ID",
+    "preprocessor": "预处理器",
 }
 
 # 参数行解析的副产物：JSON 片段被当成键名（"modelName" 之类）。

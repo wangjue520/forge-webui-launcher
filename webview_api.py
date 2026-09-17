@@ -41,6 +41,7 @@ import image_meta_core as imc
 import meta_engine as me
 import wd14_tagger_core as wt
 import wd14_venv_manager as venv
+import updater
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -506,6 +507,10 @@ class LauncherApi:
         # 否则两个部署线程并发跑，日志/配置互相踩
         self._deploy_lock = threading.Lock()
 
+        # 启动器自更新
+        self._update_running = False
+        self._update_lock = threading.Lock()
+
         # 模型下载页（Civitai / liblib 共用一套界面）
         self._civitai_version_info = None
         self._civitai_download_cancel = False
@@ -690,12 +695,14 @@ class LauncherApi:
     # ---------------------------------------------------------- 配置 ----
 
     def get_state(self):
+        local_ver = updater.get_local_info(self.cfg)
         return {
             "ok": True,
             "config": self.cfg,
             "cmd_args": cm.build_commandline_args(self.cfg),
             "is_windows": os.name == "nt",
             "launch": self.launch_status(),
+            "launcher": {"version": local_ver["version"], "commit": local_ver["commit"]},
             "mirror_status": self._mirror_status_text(),
             "settings_schema": self._settings_schema(),
             "deploy_branches": [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS],
@@ -3688,6 +3695,72 @@ def _api_meta_deep(self, path):
 
 
 # ============================================================
+# 启动器自更新（updater.py 干重活，这里只做线程调度和事件推送）
+# ============================================================
+
+def _api_launcher_check_update(self):
+    """检查启动器有没有新版本（线程里跑，要访问 GitHub API）"""
+    def work():
+        try:
+            result = updater.check_update(
+                self.cfg, log_cb=lambda t: self._emit("launcher", "log", text=t))
+            self._emit("launcher", "update_info", ok=True, **result)
+        except Exception as e:
+            self._emit("launcher", "update_info", ok=False, error=str(e))
+    self._spawn(work, name="launcher-check-update")
+    return {"ok": True}
+
+
+def _api_launcher_update(self):
+    """一键更新启动器本体。覆盖的是源码文件，当前进程不受影响，重启后生效。"""
+    with self._update_lock:
+        if self._update_running:
+            return {"ok": False, "error": "更新正在进行中"}
+        self._update_running = True
+
+    def work():
+        try:
+            def progress(done, total):
+                pct = int(done * 100 / total) if total else 0
+                self._emit("launcher", "update_progress", pct=pct,
+                           label=f"下载中 {done/1024/1024:.1f} / {total/1024/1024:.1f} MB"
+                           if total else "下载中 ...")
+            result = updater.perform_update(
+                self.cfg,
+                log_cb=lambda t: self._emit("launcher", "log", text=t),
+                progress_cb=progress)
+            self._emit("launcher", "update_done", ok=True,
+                       version=result["version"], commit=result["commit"],
+                       need_restart=True)
+        except Exception as e:
+            self._emit("launcher", "update_done", ok=False, error=str(e))
+        finally:
+            with self._update_lock:
+                self._update_running = False
+    self._spawn(work, name="launcher-update")
+    return {"ok": True}
+
+
+def _api_launcher_restart(self):
+    """更新完成后重启启动器：拉起 start一键启动.bat 再关掉当前窗口。"""
+    if self.webui_running() or self.deploy_running():
+        return {"ok": False, "error": "WebUI 或部署任务仍在运行，请先停止再重启启动器"}
+    try:
+        bat = os.path.join(APP_DIR, "start一键启动.bat")
+        if os.name == "nt" and os.path.exists(bat):
+            os.startfile(bat)  # noqa: S606 - 拉起本启动器自己的 bat
+        else:
+            subprocess.Popen([sys.executable, os.path.join(APP_DIR, "webview_main.py")],
+                             cwd=APP_DIR)
+    except Exception as e:
+        return {"ok": False, "error": f"重启失败: {e}"}
+    if self._window:
+        # 延迟一点再销毁窗口，让本次 JS 调用的返回值先送回去
+        threading.Timer(0.5, self._window.destroy).start()
+    return {"ok": True}
+
+
+# ============================================================
 # 把分节写的函数挂到 LauncherApi 上
 # ============================================================
 
@@ -3749,5 +3822,8 @@ for _name, _fn in {
     "meta_name_search": _api_meta_name_search,
     "meta_choose_candidate": _api_meta_choose_candidate,
     "meta_download": _api_meta_download,
+    "launcher_check_update": _api_launcher_check_update,
+    "launcher_update": _api_launcher_update,
+    "launcher_restart": _api_launcher_restart,
 }.items():
     setattr(LauncherApi, _name, _fn)

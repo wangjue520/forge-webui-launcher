@@ -7,7 +7,9 @@ __pycache__/
 launcher_config.json
 model_hash_cache.json
 web/_preview/
+clipboard_inbox/
 tmp/
+.venv/
 
 # WD14 独立环境（首次使用自动部署，约 200MB）
 wd14_venv/

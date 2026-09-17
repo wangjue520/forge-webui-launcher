@@ -80,6 +80,7 @@ body {
 }
 .brand-name { font-size: 15px; font-weight: 700; letter-spacing: .2px; }
 .brand-sub { font-size: 11px; color: var(--text-faint); margin-top: 1px; }
+.brand-ver { opacity: .7; font-variant-numeric: tabular-nums; }
 
 #nav { display: flex; flex-direction: column; gap: 3px; flex: 1; }
 .nav-item {

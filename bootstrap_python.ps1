@@ -1,4 +1,4 @@
-﻿#Requires -Version 3.0
+#Requires -Version 3.0
 # Forge WebUI 启动器 - 便携 Python 自动引导脚本
 #
 # 用途：start一键启动.bat 在系统里找不到任何可用 Python 时调用本脚本，
@@ -226,6 +226,16 @@ if ($LASTEXITCODE -ne 0) { throw ('tar 解压失败 (exit ' + $LASTEXITCODE + ')
 
 $py = Join-Path $LauncherDir 'python\python.exe'
 if (-not (Test-Path $py)) { throw ('解压完成但没有找到 ' + $py) }
+
+# PEP 668 的 EXTERNALLY-MANAGED 标记会让 pip 拒绝安装（uv 托管的 Python 就是
+# 靠这个标记把用户挡住的）。启动器自带的是私有便携环境，装依赖是本职工作，
+# 如果归档里带了这个标记就删掉，否则首次启动装依赖会直接报
+# externally-managed-environment。
+$pep668Marker = Join-Path $LauncherDir 'python\Lib\EXTERNALLY-MANAGED'
+if (Test-Path $pep668Marker) {
+    Remove-Item $pep668Marker -Force
+    Write-Host '[bootstrap] 已移除 EXTERNALLY-MANAGED 标记（启动器私有环境需要允许 pip 安装依赖）'
+}
 
 try { Remove-Item $ArchivePath -Force -ErrorAction SilentlyContinue } catch { }
 Write-Host ('[bootstrap] 便携 Python 就绪: ' + $py)

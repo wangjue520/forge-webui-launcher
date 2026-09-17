@@ -114,6 +114,7 @@
         cmd_args: "--xformers",
         is_windows: true,
         launch: { state: "stopped", text: "尚未启动", url: null },
+        launcher: { version: "2.0.8", commit: "e04e5a6" },
         mirror_status: "当前：已检测为国内网络，下载走镜像加速",
         settings_schema: schema,
         deploy_branches: [

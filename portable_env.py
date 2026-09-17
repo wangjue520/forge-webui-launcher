@@ -420,6 +420,18 @@ def extract_python_tar(archive_path, root_dir, log_cb=None):
     python_exe = os.path.join(root_dir, "python", "python.exe")
     if not os.path.exists(python_exe):
         raise PortableEnvError(f"解压完成但没找到 {python_exe}，归档内部目录结构可能变化了")
+    # PEP 668 的 EXTERNALLY-MANAGED 标记会让 pip 拒绝安装（uv 托管的 Python
+    # 就是靠这个标记挡住 pip 的）。这是启动器自己的私有便携环境，装依赖是
+    # 本职工作，归档里若带标记就删掉，否则部署时装 torch 会直接报
+    # externally-managed-environment。
+    marker = os.path.join(root_dir, "python", "Lib", "EXTERNALLY-MANAGED")
+    if os.path.exists(marker):
+        try:
+            os.remove(marker)
+            if log_cb:
+                log_cb("已移除便携 Python 的 EXTERNALLY-MANAGED 标记（私有环境需要允许 pip 安装依赖）")
+        except OSError:
+            pass
     return python_exe
 
 

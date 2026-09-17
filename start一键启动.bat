@@ -1,27 +1,56 @@
 @echo off
 cd /d "%~dp0"
 title Forge WebUI Æô¶¯Æ÷
-setlocal enabledelayedexpansion
+rem ²»¿ª enabledelayedexpansion£ºÂ·¾¶ÀïÈç¹û´ø ! »á±»ÍÌµô£¬Õâ¸ö½Å±¾Ò²ÓÃ²»µ½Ëü
+setlocal
 
 rem ===================================================================
 rem  Æô¶¯Èë¿Ú£º×Ô¼º°Ñ»·¾³×¼±¸ºÃ£¬ÓÃ»§Ö»ĞèÒªË«»÷ÕâÒ»¸öÎÄ¼ş¡£
 rem
-rem  ×öµÄÊÂ°´Ë³ĞòÊÇ£ºÕÒ Python -> ²é°æ±¾ -> È±ÒÀÀµ¾Í×° -> Æô¶¯¡£
-rem  ÒÀÀµÆëÈ«Ê±ÕâĞ©¼ì²é¼ÓÆğÀ´²»µ½Ò»Ãë£¬²»»áÍÏÂıÈÕ³£Æô¶¯¡£
+rem  ËùÓĞÒÀÀµ¶¼×°½øÆô¶¯Æ÷Ä¿Â¼ÏÂµÄ .venv ĞéÄâ»·¾³£¬¾ø²»ÅöÏµÍ³ Python¡£
+rem  Ô­Òò£ºuv ×°µÄ Python¡¢Linux ·¢ĞĞ°æÊ½µÄ Python »á±»±ê¼ÇÎª
+rem  "externally-managed"£¨PEP 668£©£¬Ö±½ÓÍùÈ«¾Ö pip install »á±»¾Ü¾ø¡£
 rem
-rem  ÕÒ²»µ½ Python Ò²²»»á¿¨ËÀ£º×Ô¶¯ÏÂÔØÒ»¸öÃâ°²×°µÄ±ãĞ¯°æ Python 3.13
-rem  £¨python-build-standalone£¬uv Í¬¿î¹Ù·½¹¹½¨£©µ½±¾Æô¶¯Æ÷µÄ python\
-rem  Ä¿Â¼£¬È«³Ì²»ĞèÒªÓÃ»§ÊÖ¶¯×°ÈÎºÎ¶«Î÷¡£
+rem  Ë³Ğò£º.venv ¿ÉÓÃÇÒÒÀÀµÆë -> Ö±½ÓÆô¶¯£¨ÈÕ³£Æô¶¯×ßÕâÀï£¬²»µ½Ò»Ãë£©
+rem        ·ñÔò£ºÕÒ Python -> ²é°æ±¾ -> ½¨ .venv -> ×°ÒÀÀµ -> Æô¶¯
+rem
+rem  ÕÒ²»µ½ Python Ò²²»»á¿¨ËÀ£º×Ô¶¯ÏÂÔØ±ãĞ¯°æ Python 3.13
+rem  £¨python-build-standalone£¬uv Í¬¿î¹Ù·½¹¹½¨£©µ½±¾Æô¶¯Æ÷µÄ python\ Ä¿Â¼¡£
 rem ===================================================================
 
-set "REQ=requirements.txt"
+set "REQ=%~dp0requirements.txt"
+set "VENV=%~dp0.venv"
+rem ÒıºÅÖ±½Ó°ü½ø±äÁ¿£ºÂ·¾¶¿ÉÄÜ´ø¿Õ¸ñ£¬ºóÃæÃ¿´ÎÕ¹¿ª¶¼µÃ×Ô´øÒıºÅ
+set VPY="%~dp0.venv\Scripts\python.exe"
+set "PIPLOG=%TEMP%\forge_launcher_pip.log"
 set "PY="
+set "REBUILT="
 
-rem ---------- 1. ÕÒÒ»¸öÄÜÓÃµÄ Python ----------
+if not exist "%REQ%" (
+    echo.
+    echo   [x] ÕÒ²»µ½ requirements.txt£¬Æô¶¯Æ÷ÎÄ¼ş²»ÍêÕû£¬ÇëÖØĞÂ½âÑ¹Ò»·İ¡£
+    goto :end_fail
+)
+
+rem ---------- 0. ¿ìËÙÍ¨µÀ£º.venv ÒÑ¾­ÄÜÓÃ ----------
+if exist %VPY% (
+    rem »ù´¡ Python ±»Ğ¶ÔØ/ÒÆ¶¯ºó£¬venv ÀïµÄ python.exe »áÊ§Ğ§£¬ÕâÀïË³±ã¼ì²é
+    %VPY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
+    if errorlevel 1 (
+        echo.
+        echo   [!] ÏÖÓĞµÄ .venv ĞéÄâ»·¾³ÒÑÊ§Ğ§£¬½«×Ô¶¯ÖØ½¨ ...
+        rmdir /s /q "%VENV%" >nul 2>nul
+    ) else (
+        %VPY% -c "import webview, requests" >nul 2>nul
+        if not errorlevel 1 goto :launch
+        goto :install_deps
+    )
+)
+
+:find_python
+rem ---------- 1. ÕÒÒ»¸öÄÜÓÃµÄ Python£¨Ö»ÓÃÀ´´´½¨ .venv£© ----------
 rem ÓÅÏÈÓÃÆô¶¯Æ÷×Ô´øµÄ±ãĞ¯°æ£¨Èç¹û×ö¹ı±ãĞ¯´ò°ü/Ö®Ç°×Ô¶¯ÏÂÔØ¹ı£©
 if exist "%~dp0python\python.exe" (
-    rem ÒıºÅÒªÔÚÕâÀï¾Í°ü½ø±äÁ¿£º±ãĞ¯°æÂ·¾¶¿ÉÄÜ´ø¿Õ¸ñ£¬
-    rem ºóÃæËùÓĞ %PY% µÄÕ¹¿ª¶¼µÃ×Ô´øÒıºÅ²Å²»»á±»²ğ³ÉÁ½½Ø
     set PY="%~dp0python\python.exe"
     goto :got_python
 )
@@ -48,12 +77,12 @@ echo   ============================================================
 echo.
 call :bootstrap_python
 if errorlevel 1 goto :end_fail
-set "PY=%~dp0python\python.exe"
+set PY="%~dp0python\python.exe"
 
 :got_python
 rem ---------- 3. °æ±¾±ØĞë >= 3.10£»Ì«¾É¾Í¸ÄÓÃ±ãĞ¯°æ ----------
 %PY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
-if not errorlevel 1 goto :check_deps
+if not errorlevel 1 goto :make_venv
 
 echo.
 echo   [!] ¼ì²âµ½µÄ Python °æ±¾µÍÓÚ 3.10£¬ÔËĞĞ²»ÁËÕâ¸öÆô¶¯Æ÷¡£
@@ -63,64 +92,127 @@ echo       ½«×Ô¶¯¸ÄÓÃ±ãĞ¯°æ Python 3.13£¨·ÅÔÚÆô¶¯Æ÷Ä¿Â¼Àï£¬²»Ó°ÏìÏµÍ³ÀïÒÑ×°µÄ¾É°
 echo.
 call :bootstrap_python
 if errorlevel 1 goto :end_fail
-set "PY=%~dp0python\python.exe"
+set PY="%~dp0python\python.exe"
 
-:check_deps
-rem ---------- 4. ÒÀÀµÆëÁË¾ÍÖ±½Ó¿ª ----------
-%PY% -c "import webview, requests" >nul 2>nul
-if not errorlevel 1 goto :launch
-
-rem ---------- 5. È±ÒÀÀµ£º×Ô¶¯×° ----------
+:make_venv
+rem ---------- 4. ´´½¨ÏîÄ¿ÄÚĞéÄâ»·¾³ ----------
 echo.
 echo   Ê×´ÎÔËĞĞ£¬ÕıÔÚ×¼±¸ÔËĞĞ»·¾³£¨Ö»ĞèÒªÕâÒ»´Î£©...
-echo   Òª×°µÄ¶«Î÷ºÜĞ¡£¬Ò»°ãÊ®¼¸Ãë¾ÍºÃ¡£
+echo.
+echo   [1/3] ÕıÔÚ´´½¨ĞéÄâ»·¾³ .venv ...
+rem ÓÃ±ê×¼¿â venv ¶ø²»ÊÇ uv venv£º±ê×¼¿â½¨³öÀ´µÄ»·¾³×Ô´ø pip
+%PY% -m venv "%VENV%"
+if errorlevel 1 goto :venv_fail
+if not exist %VPY% goto :venv_fail
+
+:install_deps
+rem ---------- 5. È·±£ .venv ÀïÓĞ pip ----------
+rem ÓÃ uv venv ½¨µÄ»·¾³Ä¬ÈÏ²»´ø pip£¬ÕâÀï²¹ÉÏ£»²¹²»ÉÏ¾ÍÕû¸öÖØ½¨
+%VPY% -m pip --version >nul 2>nul
+if not errorlevel 1 goto :pip_ready
+
+echo   [2/3] ÕıÔÚ×¼±¸ pip ...
+%VPY% -m ensurepip --upgrade >nul 2>nul
+%VPY% -m pip --version >nul 2>nul
+if not errorlevel 1 goto :pip_ready
+
+rem ensurepip Ò²¾È²»»ØÀ´£ºÉ¾µô .venv ÓÃ±ê×¼¿â venv ÖØ½¨Ò»´Î£¨Ö»ÖØ½¨Ò»´Î£¬·ÀÖ¹ËÀÑ­»·£©
+if defined REBUILT goto :venv_fail
+set "REBUILT=1"
+echo   [!] ÏÖÓĞ .venv Àï×°²»ÉÏ pip£¬É¾µôÖØ½¨ ...
+rmdir /s /q "%VENV%" >nul 2>nul
+goto :find_python
+
+:pip_ready
+rem ---------- 6. ×°ÒÀÀµ ----------
+echo   [3/3] ÕıÔÚ°²×°ÒÀÀµ£¨Ò»°ãÊ®¼¸Ãë£¬°²×°ÈÕÖ¾Ê§°ÜÊ±²Å»áÏÔÊ¾£©...
 echo.
 
-rem pip ÓĞ¿ÉÄÜÃ»Ëæ Python Ò»Æğ×°ÉÏ£¬ÏÈÈ·±£ËüÔÚ
-%PY% -m pip --version >nul 2>nul
-if errorlevel 1 (
-    echo   [1/2] ÕıÔÚ×¼±¸ pip ...
-    %PY% -m ensurepip --default-pip >nul 2>nul
-)
-
 rem ¾µÏñË³Ğò¸úÆô¶¯Æ÷ÄÚ²¿±£³ÖÒ»ÖÂ£ºÇå»ª -> °¢Àï -> ¹Ù·½Ô´¡£
-rem Ã¿¸öÔ´¶¼ÊÔÒ»±é£¬¶ø²»ÊÇÊ§°Ü¾Í·ÅÆú ¡ª¡ª ¾µÏñÕ¾ËæÊ±¿ÉÄÜ³é·ç£¬
-rem ¶ø¹Ù·½Ô´ÔÚ¹úÄÚÓÖ¾­³£Á¬²»ÉÏ£¬Ö»ÓĞ°¤¸öÊÔ²ÅÎÈ¡£
-call :try_install "https://pypi.tuna.tsinghua.edu.cn/simple" "Çå»ª¾µÏñ"
-if not errorlevel 1 goto :launch
+rem ·µ»ØÖµ£º0 ³É¹¦£»1 ÒÉËÆÍøÂç/¾µÏñÎÊÌâ£¬»»ÏÂÒ»¸öÔ´£»
+rem         2 ±¾µØ»·¾³ÎÊÌâ£¬»»Ô´Ò²Ã»ÓÃ£¬Ö±½ÓÍ£ÏÂ
+call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "Çå»ª¾µÏñ"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
 
-call :try_install "https://mirrors.aliyun.com/pypi/simple" "°¢ÀïÔÆ¾µÏñ"
-if not errorlevel 1 goto :launch
+call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "°¢ÀïÔÆ¾µÏñ"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
 
-echo   ÕıÔÚ³¢ÊÔ¹Ù·½Ô´ ...
-%PY% -m pip install -r "%REQ%" --disable-pip-version-check --retries 2
-if not errorlevel 1 goto :launch
+call :try_install "" "¹Ù·½Ô´"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
 
 echo.
 echo   ============================================================
 echo    ÒÀÀµ°²×°Ê§°Ü
 echo   ============================================================
 echo.
-echo    ËùÓĞÏÂÔØÔ´¶¼ÊÔ¹ıÁË£¬¶à°ëÊÇÍøÂçÎÊÌâ¡£¿ÉÒÔÕâÑùÅÅ²é£º
+echo    ×îºóÒ»´ÎµÄ°²×°ÈÕÖ¾£º
+echo   ------------------------------------------------------------
+type "%PIPLOG%"
+echo   ------------------------------------------------------------
 echo.
-echo      1. Èç¹ûÄãÔÚÓÃ¼ÓËÙÆ÷/´úÀí£¬ÏÈÈ·ÈÏËüÊÇ¿ª×ÅµÄ£¬È»ºóÖØÊÔ
-echo      2. ¼ì²éÒ»ÏÂÉ±¶¾Èí¼şÓĞÃ»ÓĞÀ¹×¡ pip
-echo      3. ÊÖ¶¯Ö´ĞĞÏÂÃæÕâĞĞ£¬¿´¿´¾ßÌå±¨Ê²Ã´´í£º
+echo    Èı¸öÏÂÔØÔ´¶¼Ã»³É¹¦£¬¶à°ëÊÇÍøÂçÎÊÌâ¡£¿ÉÒÔÕâÑùÅÅ²é£º
 echo.
-echo         %PY% -m pip install -r requirements.txt
+echo      1. Èç¹ûÄãÔÚÓÃ¼ÓËÙÆ÷/´úÀí£¬ÏÈÈ·ÈÏËüÊÇ¿ª×ÅµÄ£¬È»ºóÖØĞÂË«»÷±¾ÎÄ¼ş
+echo      2. ¼ì²éÒ»ÏÂÉ±¶¾Èí¼şÓĞÃ»ÓĞÀ¹×¡ python.exe
+echo      3. Èç¹ûÈÕÖ¾Àï²»ÊÇÍøÂç´íÎó£¬Çë°ÑÉÏÃæµÄÈÕÖ¾½ØÍ¼·´À¡
 echo.
 goto :end_fail
 
+:deps_ok
+rem ×°ÍêÔÙÊµ¼Ê import Ò»´Î£¬·ÀÖ¹"×°³É¹¦ÁËµ«ÆäÊµÃ»×°½øÕâ¸ö»·¾³"
+%VPY% -c "import webview, requests" >nul 2>nul
+if not errorlevel 1 goto :launch
+echo.
+echo   [x] ÒÀÀµÏÔÊ¾ÒÑ°²×°£¬µ« .venv ÀïÈÔÈ»ÎŞ·¨µ¼Èë webview / requests¡£
+echo       ÇëÉ¾³ıÆô¶¯Æ÷Ä¿Â¼ÏÂµÄ .venv ÎÄ¼ş¼ĞºóÖØĞÂË«»÷±¾ÎÄ¼ş¡£
+goto :end_fail
+
+:local_fail
+echo.
+echo   ============================================================
+echo    ÒÀÀµ°²×°Ê§°Ü£¨±¾µØ»·¾³ÎÊÌâ£¬²»ÊÇÍøÂçÎÊÌâ£©
+echo   ============================================================
+echo.
+echo    °²×°ÈÕÖ¾£º
+echo   ------------------------------------------------------------
+type "%PIPLOG%"
+echo   ------------------------------------------------------------
+echo.
+echo    ÕâÖÖ´íÎó»»ÏÂÔØÔ´Ò²Ã»ÓÃ£¬ËùÒÔÃ»ÓĞ¼ÌĞøÖØÊÔ¡£¿ÉÒÔÕâÑù´¦Àí£º
+echo.
+echo      1. É¾³ıÆô¶¯Æ÷Ä¿Â¼ÏÂµÄ .venv ÎÄ¼ş¼Ğ£¬È»ºóÖØĞÂË«»÷±¾ÎÄ¼ş
+echo      2. »¹²»ĞĞµÄ»°£¬Çë°ÑÉÏÃæµÄÈÕÖ¾½ØÍ¼·´À¡
+echo.
+goto :end_fail
+
+:venv_fail
+echo.
+echo   [x] ´´½¨ĞéÄâ»·¾³Ê§°Ü¡£
+echo       µ±Ç°Ê¹ÓÃµÄ Python£º%PY%
+echo       ¿ÉÒÔÉ¾³ıÆô¶¯Æ÷Ä¿Â¼ÏÂµÄ .venv ÎÄ¼ş¼ĞºóÖØÊÔ£»
+echo       Ò²¿ÉÒÔÉ¾µô python ÎÄ¼ş¼Ğ£¨Èç¹ûÓĞ£©£¬ÈÃÆô¶¯Æ÷¸ÄÓÃ±ãĞ¯°æ Python¡£
+goto :end_fail
+
+rem ===================================================================
+rem  :try_install "Ë÷Òı²ÎÊı" "ÏÔÊ¾Ãû"
+rem ===================================================================
 :try_install
 echo   ÕıÔÚÍ¨¹ı %~2 °²×° ...
-%PY% -m pip install -r "%REQ%" -i %1 --disable-pip-version-check --retries 1 --timeout 20
-if errorlevel 1 (
-    echo   %~2 Ã»³É¹¦£¬»»ÏÂÒ»¸öÔ´ÖØÊÔ ...
-    exit /b 1
-)
+%VPY% -m pip install -r "%REQ%" %~1 --disable-pip-version-check --retries 1 --timeout 20 > "%PIPLOG%" 2>&1
+if errorlevel 1 goto :try_install_failed
 echo   [¡Ì] ÒÀÀµ°²×°Íê³É
 echo.
 exit /b 0
+
+:try_install_failed
+rem ÕâĞ©ÊÇ±¾µØ´íÎó£¬»»Ô´ÖØÊÔ´¿ÊôÀË·ÑÊ±¼ä
+findstr /i /c:"externally-managed-environment" /c:"No module named pip" /c:"Permission denied" /c:"¾Ü¾ø·ÃÎÊ" /c:"No space left" "%PIPLOG%" >nul 2>nul
+if not errorlevel 1 exit /b 2
+echo   %~2 Ã»³É¹¦£¬»»ÏÂÒ»¸öÔ´ÖØÊÔ ...
+exit /b 1
 
 rem ===================================================================
 rem  ×Ô¶¯ÏÂÔØ±ãĞ¯°æ Python£¨bootstrap_python.ps1 ¸ÉÖØ»î£¬ÕâÀïÖ»×öµ÷¶ÈºÍ±¨´í£©
@@ -169,9 +261,9 @@ echo   [¡Ì] ±ãĞ¯ Python ÒÑ¾ÍĞ÷
 echo.
 exit /b 0
 
-rem ---------- 6. Æô¶¯ ----------
+rem ---------- 7. Æô¶¯£¨ÓÀÔ¶ÓÃ .venv ÀïµÄ Python£© ----------
 :launch
-%PY% webview_main.py
+%VPY% webview_main.py
 if errorlevel 1 (
     echo.
     echo   ============================================================
