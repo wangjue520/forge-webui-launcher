@@ -142,8 +142,9 @@
         { path: "F:\\m\\pony.safetensors", rel: "ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
       ], total: 2, no_info: 1, is_lora: false }),
       ext_list: () => ok({ ok: true, has_root: true, items: [
-        { name: "adetailer", desc: "After Detailer：脸部/手部自动修复", installed: true },
-        { name: "tagger", desc: "WD14 Tagger 扩展", installed: false },
+        { name: "ADetailer", desc: "脸部/手部自动修复", installed: true },
+        { name: "Tag Autocomplete", desc: "提示词标签自动补全", installed: false },
+        { name: "Prompt All-in-One", desc: "提示词输入框全家桶", installed: false },
       ] }),
       wd14_models: () => ok({ ok: true, model_ready: false, models: [
         { key: "wd-vit-tagger-v3", label: "wd-vit-tagger-v3（默认，速度快，~380MB）", cached: true,

@@ -99,7 +99,8 @@ SETTINGS_BRANCH_OPTIONS = [
 ]
 
 # 常用扩展目录：每一项 (显示名, 简介, url_by_branch, folder_by_branch)
-# url/folder 可以是字符串（两分支通用）或 {"classic":..,"neo":..} 字典
+# url/folder 可以是字符串（两分支通用）或 {"classic":..,"neo":..} 字典；
+# 某个分支给 None 表示该分支不可用（列表里会直接隐藏）
 EXTENSION_CATALOG = [
     (
         "简体中文汉化 (zh_CN)",
@@ -133,16 +134,91 @@ EXTENSION_CATALOG = [
         "stable-diffusion-webui-wd14-tagger",
     ),
     (
+        "Tag Autocomplete",
+        "输入提示词时自动补全 Danbooru/E621 标签、LoRA/嵌入名称和通配符，"
+        "还能自动填入 LoRA 触发词，打标签效率提升很大。"
+        "Neo 分支用的是 TagComplete Neo 分支（Neo 移除了 sd_hijack 导致原版完全失效，"
+        "这个分支专为 Neo 维护，还针对 Gradio 4 做了优化）。",
+        {
+            "classic": "https://github.com/DominikDoom/a1111-sd-webui-tagcomplete.git",
+            "neo": "https://github.com/eduardoabreu81/sd-webui-tagcomplete-neo.git",
+        },
+        {"classic": "a1111-sd-webui-tagcomplete", "neo": "sd-webui-tagcomplete-neo"},
+    ),
+    (
+        "Model Keyword（触发词库）",
+        "自动补全模型/LoRA 触发词的关键词库，Tag Autocomplete 会读取它的 "
+        "lora-keyword.txt 来补全 LoRA 触发词。装完后可以在扩展设置里禁用它本身，"
+        "只留词库给 Tag Autocomplete 用。",
+        "https://github.com/mix1009/model-keyword.git",
+        "model-keyword",
+    ),
+    (
+        "Prompt All-in-One",
+        "提示词输入框全家桶：标签翻译、一键翻译中文提示词、权重快捷调整、"
+        "收藏常用词、历史记录等，中文用户几乎必装。"
+        "Neo 分支用的是 Prompt All-in-One NEO 分支（原版在 Neo 下界面不显示）。",
+        {
+            "classic": "https://github.com/Physton/sd-webui-prompt-all-in-one.git",
+            "neo": "https://github.com/eduardoabreu81/sd-webui-prompt-all-in-one-neo.git",
+        },
+        {"classic": "sd-webui-prompt-all-in-one", "neo": "sd-webui-prompt-all-in-one-neo"},
+    ),
+    (
         "Dynamic Prompts",
-        "支持通配符/随机组合/权重语法批量生成提示词，做批量出图很依赖它。",
-        "https://github.com/adieyal/sd-dynamic-prompts.git",
+        "支持通配符/随机组合/权重语法批量生成提示词，做批量出图很依赖它。"
+        "Neo 分支用的是适配过 Neo 的分支版本。",
+        {
+            "classic": "https://github.com/adieyal/sd-dynamic-prompts.git",
+            "neo": "https://github.com/abzaloff/sd-dynamic-prompts.git",
+        },
         "sd-dynamic-prompts",
     ),
     (
-        "Tag Autocomplete",
-        "输入提示词时自动补全 Danbooru/E621 标签，打标签效率提升很大。",
-        "https://github.com/DominikDoom/a1111-sd-webui-tagcomplete.git",
-        "a1111-sd-webui-tagcomplete",
+        "TIPO（提示词自动生成）",
+        "输入少量标签或一句描述，自动生成完整的 Danbooru 风格提示词。"
+        "模型专为图像生成训练，体积小、NSFW 也能用，抽卡式出图很合适。"
+        "首次使用会自动下载模型。",
+        "https://github.com/KohakuBlueleaf/z-tipo-extension.git",
+        "z-tipo-extension",
+    ),
+    (
+        "Civitai Helper",
+        "扫描本地模型，从 Civitai 拉取预览图和触发词等元数据，"
+        "让 LoRA 卡片显示缩略图、配合 Tag Autocomplete / Prompt All-in-One 自动填触发词。"
+        "Neo 分支用的是跟进 Civitai API 变更的 RED UPDATE 分支。",
+        {
+            "classic": "https://github.com/zixaphir/Stable-Diffusion-Webui-Civitai-Helper.git",
+            "neo": "https://github.com/Replactionap/Stable-Diffusion-Webui-Civitai-Helper-RED-UPDATE.git",
+        },
+        {"classic": "Stable-Diffusion-Webui-Civitai-Helper",
+         "neo": "Stable-Diffusion-Webui-Civitai-Helper-RED-UPDATE"},
+    ),
+    (
+        "Infinite Image Browsing（图片浏览）",
+        "独立的图片浏览页，毫秒级按生成参数检索/筛选历史出图，"
+        "比自带的 PNG Info 一张张翻快得多，图多了以后离不开。"
+        "Neo 分支用的是适配 Neo 的分支版本。",
+        {
+            "classic": "https://github.com/zanllp/sd-webui-infinite-image-browsing.git",
+            "neo": "https://github.com/Dusky-dev/sd-forge_neo-infinite-image-browsing-xl.git",
+        },
+        {"classic": "sd-webui-infinite-image-browsing",
+         "neo": "sd-forge_neo-infinite-image-browsing-xl"},
+    ),
+    (
+        "PNG Info 美化",
+        "给图片信息/生成参数显示上色排版，一眼看清提示词、参数和 LoRA，"
+        "还支持显示 Dynamic Prompts 的原始通配符模板。",
+        "https://github.com/bluelovers/sd-webui-pnginfo-beautify.git",
+        "sd-webui-pnginfo-beautify",
+    ),
+    (
+        "宽高比/分辨率快捷按钮",
+        "在尺寸设置旁加一排常用宽高比和分辨率按钮，点一下直接填好，"
+        "不用每次手输数字。按钮值可以编辑扩展目录下的 txt 文件自定义。",
+        "https://github.com/altoiddealer/--sd-webui-ar-plusplus.git",
+        "--sd-webui-ar-plusplus",
     ),
     (
         "Ultimate SD Upscale",
@@ -151,10 +227,30 @@ EXTENSION_CATALOG = [
         "ultimate-upscale-for-automatic1111",
     ),
     (
+        "Attention Couple（区域提示词）",
+        "把画面分成多个区域分别写提示词，适合多角色构图。"
+        "由 Neo 作者本人维护，Classic 和 Neo 都能用，"
+        "Neo 上用它代替已失效的 Regional Prompter。",
+        "https://github.com/Haoming02/sd-forge-couple.git",
+        "sd-forge-couple",
+    ),
+    (
         "Regional Prompter",
-        "把画面分区域分别用不同提示词控制，适合多角色构图。",
-        "https://github.com/hako-mikan/sd-webui-regional-prompter.git",
-        "sd-webui-regional-prompter",
+        "把画面分区域分别用不同提示词控制，适合多角色构图。"
+        "注意：Neo 移除了 sd_hijack 导致它在 Neo 上无法加载，"
+        "Neo 用户请改用上面的 Attention Couple。",
+        {
+            "classic": "https://github.com/hako-mikan/sd-webui-regional-prompter.git",
+            "neo": None,
+        },
+        {"classic": "sd-webui-regional-prompter", "neo": None},
+    ),
+    (
+        "NegPiP（正向框写负向词）",
+        "在正向提示词框里直接写负向效果的词，比负向框的常规写法力度更强，"
+        "而且 CFG=1（比如用 Turbo LoRA）时负向框会失效、它依然有效。",
+        "https://github.com/Haoming02/sd-forge-negpip.git",
+        "sd-forge-negpip",
     ),
     (
         "Openpose Editor",
@@ -2691,6 +2787,8 @@ def _api_ext_list(self):
     items = []
     for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
         folder = _resolve_by_branch(folder_raw, branch)
+        if not folder or not _resolve_by_branch(url_raw, branch):
+            continue  # 该分支不可用的扩展直接不显示
         installed = bool(ext_dir) and os.path.isdir(os.path.join(ext_dir, folder))
         items.append({"name": name, "desc": desc, "installed": installed})
     return {"ok": True, "items": items, "has_root": bool(root and os.path.isdir(root))}
@@ -2724,9 +2822,12 @@ def _api_ext_install(self, names):
         if name not in (names or []):
             continue
         folder = _resolve_by_branch(folder_raw, branch)
+        url = _resolve_by_branch(url_raw, branch)
+        if not folder or not url:
+            continue  # 该分支不可用
         if os.path.isdir(os.path.join(ext_dir, folder)):
             continue  # 已安装的自动跳过
-        selected.append((name, _resolve_by_branch(url_raw, branch), folder))
+        selected.append((name, url, folder))
     if not selected:
         return {"ok": False, "error": "请先勾选要安装的扩展（已安装的会自动跳过）"}
 
