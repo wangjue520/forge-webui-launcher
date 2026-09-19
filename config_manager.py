@@ -247,8 +247,12 @@ def load_config():
 
 
 def save_config(cfg):
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+    # 先写临时文件再原子替换：直接 "w" 打开会先截断原文件，
+    # 写入中断（断电/磁盘满/杀软）就留下一份空配置，下次启动回到默认
+    tmp_path = CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, CONFIG_PATH)
 
 
 def _lookup(options, value):
@@ -275,18 +279,19 @@ def detect_bundled_git(root_dir):
 
 def _quote_if_needed(path):
     """
-    路径里有空格时补上引号。
+    路径里有空格或 cmd 元字符（&()^ 等）时补上引号。
 
     webui.bat 内部是直接 %PYTHON% 这样展开使用的，没有自己加引号，
     所以 "C:\\ai about\\webui\\python\\python.exe" 这种带空格的路径会被 cmd
-    从空格处切断，把 C:\\ai 当成命令去执行，报 9009（找不到命令）。
+    从空格处切断，把 C:\\ai 当成命令去执行，报 9009（找不到命令）；
+    "D:\\AI&tools\\python.exe" 这种带 & 的更阴——会被当成两条命令拼接执行。
     这里预先把值包上引号，展开后就是一个完整参数。
     路径本身已经带引号时不重复添加。
     """
     path = path.strip()
     if not path or (path.startswith('"') and path.endswith('"')):
         return path
-    if " " in path:
+    if any(c in path for c in ' &()^!%,;~'):
         return f'"{path}"'
     return path
 

@@ -600,6 +600,8 @@ def write_hashlib_patch(venv_dir, log_cb=None):
     启动都会自动加载这个文件，是官方支持的机制，不需要改 Forge 源码）。
     作为部署完成后的保险步骤，不管这次用的是新版还是旧版 Python 都写一份，
     反正补丁本身检测到已有 file_digest 就什么都不做，无害。
+    注意：如果环境里已经有别人写的 sitecustomize.py（某些包装/整合包会带），
+    绝不能整个覆盖——会把原有的初始化逻辑永久抹掉，改为追加（用标记行去重）。
     """
     target_dir = _find_site_packages_dir(venv_dir)
     if not target_dir:
@@ -608,8 +610,25 @@ def write_hashlib_patch(venv_dir, log_cb=None):
         return False
 
     patch_path = os.path.join(target_dir, "sitecustomize.py")
-    with open(patch_path, "w", encoding="utf-8") as f:
-        f.write(HASHLIB_FILE_DIGEST_PATCH)
+    marker = "# 由 Forge WebUI 启动器自动写入"
+    existing = ""
+    if os.path.exists(patch_path):
+        try:
+            with open(patch_path, "r", encoding="utf-8", errors="replace") as f:
+                existing = f.read()
+        except OSError:
+            existing = ""
+    if marker in existing:
+        # 已经是我们写的：直接整文件重写（更新到最新版补丁）
+        with open(patch_path, "w", encoding="utf-8") as f:
+            f.write(HASHLIB_FILE_DIGEST_PATCH)
+    elif existing.strip():
+        # 别人的 sitecustomize.py：追加，不动原有内容
+        with open(patch_path, "a", encoding="utf-8") as f:
+            f.write("\n\n" + HASHLIB_FILE_DIGEST_PATCH)
+    else:
+        with open(patch_path, "w", encoding="utf-8") as f:
+            f.write(HASHLIB_FILE_DIGEST_PATCH)
     if log_cb:
         log_cb(f"已写入 hashlib 兼容性补丁: {patch_path}")
     return True

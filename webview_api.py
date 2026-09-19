@@ -684,6 +684,9 @@ class LauncherApi:
                 kept.append(evt)
         except queue.Empty:
             pass
+        # 回填时非日志事件（ask/state/done 等）排前面：ask 事件丢了，
+        # 等待回答的线程会永远卡住；日志丢几条只是显示缺几行
+        kept.sort(key=lambda e: e.get("type") == "log")
         for evt in kept:
             try:
                 self._emit_q.put_nowait(evt)
@@ -1201,7 +1204,10 @@ class LauncherApi:
     def _launch_port_watcher(self, gen):
         ports = getattr(self, "_launch_watch_ports", None) or list(range(7860, 7870))
         pre_pids = getattr(self, "_launch_pre_pids", None) or set()
-        auto_open = bool(self.cfg.get("auto_open_browser_on_ready", True))
+        # 用户若已在设置里开了 --autolaunch（Forge 自己开浏览器），启动器就
+        # 不再重复打开——否则同一地址会一下弹出两个网页
+        auto_open = (bool(self.cfg.get("auto_open_browser_on_ready", True))
+                     and not bool(self.cfg.get("autolaunch")))
         skipped_logged = set()
         for _ in range(600):  # 每 2 秒一次，最长 20 分钟
             if not self._launch_gen_alive(gen):
@@ -1239,7 +1245,10 @@ class LauncherApi:
 
     def _launch_reader(self, gen):
         proc = self._launch_proc
-        auto_open = bool(self.cfg.get("auto_open_browser_on_ready", True))
+        # 用户若已在设置里开了 --autolaunch（Forge 自己开浏览器），启动器就
+        # 不再重复打开——否则同一地址会一下弹出两个网页
+        auto_open = (bool(self.cfg.get("auto_open_browser_on_ready", True))
+                     and not bool(self.cfg.get("autolaunch")))
         try:
             while True:
                 # read1() 而非 read()：后者会攒满 4096 字节才返回，
@@ -1924,8 +1933,15 @@ def _api_deploy_venv_check(self, target, branch):
 
 
 def _api_deploy_venv_delete(self, target):
-    venv_dir = os.path.join((target or "").strip(), "venv")
+    target = (target or "").strip()
+    if not target or not os.path.isdir(target):
+        return {"ok": False, "error": "目录无效，已取消删除"}
+    venv_dir = os.path.join(target, "venv")
+    if not os.path.isdir(venv_dir):
+        return {"ok": False, "error": "该目录下没有 venv 文件夹"}
     shutil.rmtree(venv_dir, ignore_errors=True)
+    if os.path.isdir(venv_dir):
+        return {"ok": False, "error": "删除失败（文件可能被占用），请手动删除"}
     return {"ok": True}
 
 
@@ -2308,7 +2324,10 @@ def write_sidecar_from_version(model_path, data, digest, api_key=None, fetch_pre
             if not url:
                 continue
             try:
-                resp = requests.get(url, headers=_api_headers(api_key), timeout=30)
+                # 图片 URL 来自 API 数据，可能指向站外主机——Authorization
+                # 只发给 civitai 自己的域名，避免 API Key 泄露给第三方
+                headers = _api_headers(api_key if cd._is_civitai_host(url) else None)
+                resp = requests.get(url, headers=headers, timeout=30)
                 resp.raise_for_status()
                 with open(base + ".preview.png", "wb") as f:
                     f.write(resp.content)

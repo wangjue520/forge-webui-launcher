@@ -101,11 +101,22 @@ def parse_input(text):
     return result
 
 
-def _headers(api_key):
+def _headers(api_key, url=None):
+    """基础请求头。传 url 时按主机白名单决定是否附带 API Key：
+    Authorization 只发给 civitai 自己的域名——API 返回的图片/下载地址可能
+    指向站外主机，Bearer token 跟着过去就泄露了。"""
     headers = {"User-Agent": "ForgeLauncher/1.0"}
-    if api_key:
+    if api_key and (url is None or _is_civitai_host(url)):
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
+
+
+def _is_civitai_host(url):
+    try:
+        host = (url.split("//", 1)[1] if "//" in url else url).split("/", 1)[0].lower()
+    except IndexError:
+        return False
+    return host == "civitai.com" or host.endswith(".civitai.com")
 
 
 def fetch_version_info(parsed, api_key=None):
@@ -301,11 +312,15 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
     """
     os.makedirs(dest_dir, exist_ok=True)
     url = file_info["downloadUrl"]
-    filename = file_info["name"]
+    # 文件名只取单层 basename：API/镜像返回的名字若带路径分隔符或 ..，
+    # 直接 join 会写出下载目录（目录穿越覆盖任意文件）
+    filename = os.path.basename(str(file_info["name"]).replace("\\", "/")).strip()
+    if not filename or filename in (".", ".."):
+        raise CivitaiError(f"服务器返回了非法的文件名: {file_info.get('name')!r}")
     final_path = os.path.join(dest_dir, filename)
     tmp_path = final_path + ".part"
 
-    headers = _headers(api_key)
+    headers = _headers(api_key, url)
     if extra_headers:
         headers.update(extra_headers)
     resume_from = 0
@@ -340,7 +355,12 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
         # 不拦一下的话会把这段 JSON 当成模型文件写进 .part，最后变成莫名其妙的
         # 「哈希校验失败」。
         if "json" in (resp.headers.get("content-type") or "").lower():
-            body = resp.content[:4096]
+            # 流式只读前 4KB：resp.content 会把整个响应体先读进内存，
+            # 异常服务器持续输出时可能耗尽内存
+            body = b""
+            for chunk in resp.iter_content(chunk_size=4096):
+                body = chunk[:4096]
+                break
             resp.close()
             msg = None
             try:
@@ -425,7 +445,7 @@ def download_preview_image(final_path, version_info, api_key=None):
     if not images:
         return None
     preview_path = os.path.splitext(final_path)[0] + ".preview.png"
-    headers = _headers(api_key)
+    headers = _headers(api_key, images[0])
     try:
         resp = requests.get(images[0], headers=headers, timeout=30)
         resp.raise_for_status()

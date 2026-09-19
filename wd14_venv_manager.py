@@ -14,6 +14,7 @@ opencv、datasets...）的全局 Python。这些工具对 numpy/protobuf 版本�
 两边环境互不影响，不会再出现"装好了这个坏了那个"的连锁反应。
 """
 import os
+import shutil
 import subprocess
 import sys
 from collections import deque
@@ -95,6 +96,17 @@ def _check_deps_importable():
     return result.returncode == 0
 
 
+def _pip_available():
+    """venv 里的 pip 是否可用。创建过程被中断的 venv 会有 python.exe 没 pip，
+    只检查解释器存在会永远卡在"装依赖必失败"的状态，必须识别出来重建。"""
+    try:
+        r = subprocess.run([venv_python_path(), "-m", "pip", "--version"],
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def create_venv(log_cb=None):
     if is_venv_present():
         return
@@ -143,6 +155,10 @@ def install_dependencies(log_cb=None, cfg=None):
 
 def ensure_ready(log_cb=None, force_reinstall=False, cfg=None):
     """确保独立 venv 存在且依赖齐全，返回 venv 的 python 路径"""
+    if is_venv_present() and not _pip_available():
+        if log_cb:
+            log_cb("检测到隔离环境不完整（缺少 pip，可能上次创建被中断），重建 ...")
+        shutil.rmtree(VENV_DIR, ignore_errors=True)
     if not is_venv_present():
         create_venv(log_cb)
         install_dependencies(log_cb, cfg)

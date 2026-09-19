@@ -103,8 +103,16 @@
 
   /* ---------- 模态框（Promise 化） ---------- */
   // buttons: [{id, label, kind: "primary"|"accent"|"danger"|""}] —— resolve(id)；Esc/无按钮时不自动关闭
+  // 单例 DOM：新弹窗打开时，没关闭的旧弹窗按 "cancel" 自动完结——
+  // 否则旧弹窗的 Promise 永远悬挂，后台 _ask 线程会一直等回答（部署卡死）
+  let modalActiveFinish = null;
   App.modal = function (title, bodyHtml, buttons, opts) {
     opts = opts || {};
+    if (modalActiveFinish) {
+      const stale = modalActiveFinish;
+      modalActiveFinish = null;
+      try { stale("cancel"); } catch (e) { /* 已完结的忽略 */ }
+    }
     return new Promise((resolve) => {
       const mask = $("#modal-mask");
       $("#modal-title").textContent = title;
@@ -112,11 +120,16 @@
       body.innerHTML = bodyHtml;
       const btnBox = $("#modal-buttons");
       btnBox.innerHTML = "";
+      let finished = false;
       const finish = (val) => {
+        if (finished) return;
+        finished = true;
+        if (modalActiveFinish === finish) modalActiveFinish = null;
         mask.hidden = true;
         if (opts.onClose) opts.onClose(body, val);
         resolve(val);
       };
+      modalActiveFinish = finish;
       (buttons || [{ id: "ok", label: "确定", kind: "primary" }]).forEach((b) => {
         const el = document.createElement("button");
         el.className = "btn" + (b.kind ? " btn-" + b.kind : "");

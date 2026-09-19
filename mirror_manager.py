@@ -206,14 +206,15 @@ def pip_index_args(use_mirror, mirror_index=0):
     """
     返回追加给 pip 的参数列表。
     mirror_index 用于失败后换下一个镜像重试。
+    注意不加 --trusted-host：清华/阿里/腾讯镜像都是有效证书的 HTTPS，
+    trusted-host 会放宽对该主机的校验，中间人可借此投递恶意安装包。
     """
     if not use_mirror:
         return []
     if mirror_index >= len(PYPI_MIRRORS):
         return []
     _name, url = PYPI_MIRRORS[mirror_index]
-    host = url.split("//", 1)[1].split("/", 1)[0]
-    return ["-i", url, "--trusted-host", host]
+    return ["-i", url]
 
 
 def github_url(url, use_mirror, proxy_index=0):
@@ -264,10 +265,8 @@ def pip_env_overrides(use_mirror, cuda_tag=None):
     if not use_mirror:
         return {}
     _name, index = PYPI_MIRRORS[0]
-    host = index.split("//", 1)[1].split("/", 1)[0]
     env = {
         "PIP_INDEX_URL": index,
-        "PIP_TRUSTED_HOST": host,
         # 断点续传和超时放宽，2GB 级别的包在国内网络下很容易触发默认超时
         "PIP_RETRIES": "5",
         "PIP_TIMEOUT": "60",

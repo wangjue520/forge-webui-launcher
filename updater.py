@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import zipfile
 from datetime import datetime
 
@@ -74,9 +75,14 @@ def _find_git_exe(cfg=None):
 def _git(git_exe, *args, timeout=30):
     # 不用 text=True：Windows 中文系统按 GBK 解码，git 输出里的 UTF-8 字符
     # （提交信息、文件名）会直接炸 UnicodeDecodeError
-    r = subprocess.run([git_exe, "-C", APP_DIR, *args],
-                       capture_output=True, timeout=timeout,
-                       creationflags=_NO_WINDOW)
+    try:
+        r = subprocess.run([git_exe, "-C", APP_DIR, *args],
+                           capture_output=True, timeout=timeout,
+                           creationflags=_NO_WINDOW)
+    except subprocess.TimeoutExpired:
+        # 统一成 UpdateError：调用方按它换下一个源/代理重试，
+        # 否则一次超时就会跳过整个镜像兜底链
+        raise UpdateError(f"git {' '.join(args[:2])} 超时（{timeout} 秒）")
     out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
     err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
     if r.returncode != 0:
@@ -157,7 +163,7 @@ def _candidate_urls(url, cfg, log_cb):
     urls = [url]
     try:
         import mirror_manager as mm
-        if mm.resolve_github_mode(cfg, log_cb):
+        if mm.resolve_github_mode(cfg or {}, log_cb):
             mirrored = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
             urls = [u for u in mirrored if u != url] + [url]
     except Exception:
@@ -229,7 +235,7 @@ def _update_via_git(git_exe, cfg, log_cb):
     sources = ["origin"]
     try:
         import mirror_manager as mm
-        if mm.resolve_github_mode(cfg, log_cb):
+        if mm.resolve_github_mode(cfg or {}, log_cb):
             sources = [mm.github_url(REPO_URL, True, i)
                        for i in range(len(mm.GITHUB_PROXIES))] + ["origin"]
     except Exception:
@@ -314,12 +320,25 @@ def _update_via_zip(cfg, log_cb, progress_cb, cancel_flag):
     return remote
 
 
+_UPDATE_LOCK = threading.Lock()
+
+
 def perform_update(cfg=None, log_cb=None, progress_cb=None, cancel_flag=None):
     """
     一键更新主入口。返回 {"version","commit","count"}（新版本信息）。
     成功后自动把新版本号写进项目里的 version.json。
     注意：覆盖的是源码文件，正在运行的启动器进程不受影响，重启后生效。
+    同一时刻只允许一个更新事务（两个更新交错覆盖源码必然出坏文件）。
     """
+    if not _UPDATE_LOCK.acquire(blocking=False):
+        raise UpdateError("已有更新任务在进行中，请等它结束")
+    try:
+        return _perform_update_locked(cfg, log_cb, progress_cb, cancel_flag)
+    finally:
+        _UPDATE_LOCK.release()
+
+
+def _perform_update_locked(cfg, log_cb, progress_cb, cancel_flag):
     local = get_local_info(cfg)
     git_exe = _find_git_exe(cfg)
     use_git = git_exe and os.path.isdir(os.path.join(APP_DIR, ".git"))

@@ -383,7 +383,12 @@ def find_local_model_file(webui_root, role, name, branch=""):
     if not folders:
         return None
 
-    target_stem = os.path.splitext(os.path.basename(str(name).replace("\\", "/")))[0].strip().lower()
+    base_name = os.path.basename(str(name).replace("\\", "/"))
+    stem, ext = os.path.splitext(base_name)
+    # 只剥已知模型扩展名：元数据里的名字可能不带扩展名但本身带点
+    # （"anime.v2"），无差别 splitext 会把 ".v2" 也剥掉，导致匹配不到
+    # "anime.v2.safetensors" 或错配到 "anime.safetensors"
+    target_stem = (stem if ext.lower() in _MODEL_FILE_EXTS else base_name).strip().lower()
     if not target_stem:
         return None
 
