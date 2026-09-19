@@ -26,6 +26,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher_config.json")
 
@@ -376,6 +377,29 @@ def sync_venv_pyvenv_cfg(root_dir, python_exe, log_cb=None):
     return True
 
 
+def venv_is_usable(venv_dir):
+    """venv 是否完好可用：有解释器且 pip 可用。
+
+    背景：bootstrap 下载的 python-build-standalone 便携构建（uv 同款）没有
+    完整的 ensurepip，由它 `python -m venv` 建出来的 venv 有 python.exe
+    却没有 pip（Neo 官方 README 因此要求用 `uv venv --seed` 建环境），
+    Forge 的 launch.py 走到装依赖一步必炸 "No module named pip"。
+    这种残缺 venv 留着没有任何价值，判定为不可用以触发清理/绕行。
+    """
+    if os.name == "nt":
+        py = os.path.join(venv_dir, "Scripts", "python.exe")
+    else:
+        py = os.path.join(venv_dir, "bin", "python")
+    if not os.path.exists(py):
+        return False
+    try:
+        r = subprocess.run([py, "-m", "pip", "--version"],
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
 def build_launch_env_overrides(cfg, root_dir):
     """
     生成要覆盖注入子进程环境变量的字典（只包含需要覆盖的项，值为空的不放进去，
@@ -385,8 +409,10 @@ def build_launch_env_overrides(cfg, root_dir):
     overrides = {}
 
     custom_python = (cfg.get("custom_python_path") or "").strip()
+    bundled_python = ""
     if not custom_python:
-        custom_python = detect_bundled_python(root_dir) or ""
+        bundled_python = detect_bundled_python(root_dir) or ""
+        custom_python = bundled_python
     if custom_python:
         overrides["PYTHON"] = _quote_if_needed(custom_python)
 
@@ -419,7 +445,19 @@ def build_launch_env_overrides(cfg, root_dir):
         if git_dir and git_dir != custom_git:
             overrides["PATH"] = git_dir + ";" + os.environ.get("PATH", "")
 
-    overrides["VENV_DIR"] = "venv"
+    if bundled_python:
+        # 自带的便携 Python 是这个环境专用的，依赖直接装进去即可（秋叶整合包
+        # 就是这么干的）。而且 bootstrap 下载的 python-build-standalone 便携
+        # 构建 ensurepip 不全，由它建出的 venv 没有 pip，webui.bat 走 venv
+        # 必炸 "No module named pip"。Forge/A1111 的约定：VENV_DIR=- 表示
+        # 跳过 venv、直接用 %PYTHON%。
+        # 例外：旧版本部署留下的完好 venv（依赖已装好）继续用，别浪费。
+        overrides["VENV_DIR"] = (
+            "venv" if venv_is_usable(os.path.join(root_dir, "venv")) else "-")
+    else:
+        # 用户自己的 Python 或系统 PATH 里的 Python（可能还装着别的工具）——
+        # 必须套 venv，不能把 Forge 的 torch 等几个 GB 的依赖灌进去。
+        overrides["VENV_DIR"] = "venv"
     overrides["COMMANDLINE_ARGS"] = build_commandline_args(cfg)
 
     # Forge 的 launch.py 会自己调 pip 装 torch 等依赖（2GB 级别），

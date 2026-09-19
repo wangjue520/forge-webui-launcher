@@ -1116,6 +1116,21 @@ class LauncherApi:
             except OSError as e:
                 return {"ok": False, "error": f"无法修改 webui-user.bat：{e}"}
 
+        # 删掉残缺 venv（缺 python.exe 或没有 pip）：便携 Python
+        #（python-build-standalone）的 ensurepip 不全，由它建出来的 venv
+        # 没有 pip，webui.bat 走到装依赖一步必炸 "No module named pip"。
+        # 删掉后 build_launch_env_overrides 会给便携 Python 走 VENV_DIR=-
+        #（不用 venv，依赖直接装进便携 Python），自定义 Python 则由
+        # webui.bat 自动重建。
+        venv_dir = os.path.join(root, "venv")
+        if os.path.isdir(venv_dir) and not cm.venv_is_usable(venv_dir):
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            if not os.path.isdir(venv_dir):
+                log(f"[启动器] 检测到残缺的 venv（缺 python.exe 或 pip），已删除: {venv_dir}\n")
+            else:
+                log(f"[启动器] 检测到残缺的 venv 但删除失败（可能被占用），"
+                    f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
+
         # 静默修复 venv\pyvenv.cfg 里过期的 home 路径（安装目录被移动/改名后
         # 最常见的启动失败原因）
         resolved_python = (self.cfg.get("custom_python_path") or "").strip()
@@ -1535,6 +1550,10 @@ def _deploy_flow(self, target, branch, use_portable):
         # ---- 3. venv 版本检测（不一致时问用户）----
         required = pe.PYTHON_VERSION_BY_BRANCH.get(branch, "3.10")
         venv_dir = os.path.join(target, "venv")
+        # 残缺 venv（缺 python.exe/pip）没有保留价值，先清掉再做版本判断
+        if os.path.isdir(venv_dir) and not cm.venv_is_usable(venv_dir):
+            log(f"[部署] 检测到残缺的 venv（缺 python.exe 或 pip），删除后按需重建: {venv_dir}\n")
+            shutil.rmtree(venv_dir, ignore_errors=True)
         mismatch, detail = pe.check_venv_version_mismatch(venv_dir, required)
         if mismatch:
             log(f"[部署] {detail}\n")
@@ -1573,7 +1592,7 @@ def _deploy_flow(self, target, branch, use_portable):
                 log(f"[部署] 检查 venv pyvenv.cfg 时出错（不影响继续部署）: {e}\n")
 
         env_overrides = cm.build_launch_env_overrides(self.cfg, target)
-        log("\n[部署] 首次运行 webui.bat（自动创建虚拟环境并安装依赖，可能需要较长时间）\n")
+        log("\n[部署] 首次运行 webui.bat（自动安装依赖，可能需要较长时间）\n")
         log(f"[部署] COMMANDLINE_ARGS = {env_overrides.get('COMMANDLINE_ARGS', '')}\n")
         for k, v in env_overrides.items():
             if k != "COMMANDLINE_ARGS":
@@ -1596,7 +1615,9 @@ def _deploy_flow(self, target, branch, use_portable):
         log("\n[部署] WebUI 已能正常启动（验证用临时进程已停止），继续收尾 ...\n")
 
         # ---- 5. hashlib 兼容补丁（保险步骤，新版 Python 下补丁自动不生效）----
-        pe.write_hashlib_patch(venv_dir, log_cb=lambda m: log(m + "\n"))
+        # 有 venv 写 venv 里；走 VENV_DIR=-（没用 venv）时写进便携 Python 本体
+        patch_target = venv_dir if os.path.isdir(venv_dir) else os.path.join(target, "python")
+        pe.write_hashlib_patch(patch_target, log_cb=lambda m: log(m + "\n"))
 
         # ---- 6. 收尾：路径/分支写回配置，通知前端刷新 ----
         self.cfg["webui_root"] = target
@@ -1769,7 +1790,8 @@ def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
 
 def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     """
-    首次运行 webui.bat：创建 venv、装依赖、把 WebUI 起起来验证能跑通。
+    首次运行 webui.bat：装依赖（建 venv 或直接装进便携 Python，取决于
+    build_launch_env_overrides 给出的 VENV_DIR）、把 WebUI 起起来验证能跑通。
 
     返回 True 表示成功（输出里出现了 "Running on local URL"，或端口探测
     发现 WebUI 已在监听——有些 webui.bat 会把输出重定向走，管道里一个字
