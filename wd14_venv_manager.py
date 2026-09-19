@@ -16,14 +16,42 @@ opencv、datasets...）的全局 Python。这些工具对 numpy/protobuf 版本�
 import os
 import subprocess
 import sys
+from collections import deque
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_DIR = os.path.join(APP_DIR, "wd14_venv")
 
-# 特意钉死 numpy<2 ——这是实际踩过的坑：onnxruntime 的 C 扩展在 numpy 2.x
+# 特意钉死 numpy 版本范围——这是实际踩过的坑：onnxruntime 的 C 扩展在 numpy 2.x
 # 环境下有时会初始化失败，报一个没有任何消息内容的裸 ImportError，
 # 很难排查，锁定版本范围直接避开这个问题。
-DEPENDENCIES = ["numpy<2", "pillow", "onnxruntime", "requests"]
+# 但注意另一个方向的坑：numpy 1.x 最高只出到 cp312 的预编译包，
+# Python 3.13+（bootstrap_python.ps1 下载的便携 Python 就是 3.13）装 numpy<2
+# 只能退回去从源码编译，用户机器上没有编译器，所有镜像源都会以同样的方式失败，
+# 表现为"换源/开关代理都没用"。Python 3.13 能装的 onnxruntime（1.19+）
+# 已经修复了 numpy 2 兼容问题，所以 3.13+ 直接用 numpy 2.x。
+DEPENDENCIES_COMMON = ["pillow", "onnxruntime", "requests"]
+
+
+def _venv_py_version():
+    """venv 里 Python 的 (major, minor)。查不到就退回启动器自身的版本。"""
+    try:
+        r = subprocess.run(
+            [venv_python_path(), "-c",
+             "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if r.returncode == 0:
+            major, minor = r.stdout.strip().split(".")[:2]
+            return int(major), int(minor)
+    except Exception:
+        pass
+    return sys.version_info[:2]
+
+
+def dependency_specs():
+    ver = _venv_py_version()
+    numpy_spec = "numpy>=2,<3" if ver >= (3, 13) else "numpy<2"
+    return [numpy_spec] + DEPENDENCIES_COMMON
 
 
 class VenvError(Exception):
@@ -40,17 +68,22 @@ def is_venv_present():
     return os.path.exists(venv_python_path())
 
 
-def _run_streamed(cmd, log_cb=None):
+def _run_streamed(cmd, log_cb=None, tail_lines=15):
+    """跑子过程并把输出逐行推到日志；返回 (返回码, 输出尾部几行)。
+    尾部留给报错用——"安装失败"四个字用户没法排查，真正的原因在 pip 输出里。"""
+    tail = deque(maxlen=tail_lines)
     process = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, encoding="utf-8", errors="replace",
     )
     for line in process.stdout:
         line = line.rstrip("\n")
-        if line and log_cb:
-            log_cb(line)
+        if line:
+            tail.append(line)
+            if log_cb:
+                log_cb(line)
     process.wait()
-    return process.returncode
+    return process.returncode, list(tail)
 
 
 def _check_deps_importable():
@@ -68,15 +101,16 @@ def create_venv(log_cb=None):
     base_python = sys.executable
     if log_cb:
         log_cb(f"正在创建独立虚拟环境 (使用 {base_python}) ...")
-    rc = _run_streamed([base_python, "-m", "venv", VENV_DIR], log_cb=log_cb)
+    rc, _ = _run_streamed([base_python, "-m", "venv", VENV_DIR], log_cb=log_cb)
     if rc != 0 or not is_venv_present():
         raise VenvError("创建虚拟环境失败，请检查系统 Python 是否完整（是否包含 venv 模块）")
 
 
 def install_dependencies(log_cb=None, cfg=None):
     py = venv_python_path()
+    deps = dependency_specs()
     if log_cb:
-        log_cb(f"正在隔离环境中安装依赖: {', '.join(DEPENDENCIES)} ...")
+        log_cb(f"正在隔离环境中安装依赖: {', '.join(deps)} ...")
     base = [py, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location"]
 
     # 国内网络下依次尝试各个 PyPI 镜像，全部失败再用默认源兜底
@@ -89,13 +123,22 @@ def install_dependencies(log_cb=None, cfg=None):
         except Exception:
             pass
 
+    last_tail = []
     for i, extra in enumerate(attempts):
         if log_cb and i > 0:
             log_cb("上一个源失败，换用下一个源重试 ...")
-        rc = _run_streamed(base + extra + DEPENDENCIES, log_cb=log_cb)
+        rc, last_tail = _run_streamed(base + extra + deps, log_cb=log_cb)
         if rc == 0:
             return
-    raise VenvError("隔离环境依赖安装失败，请检查网络连接")
+    detail = "\n".join(last_tail[-8:])
+    raise VenvError(
+        "隔离环境依赖安装失败。pip 最后的输出：\n" + (detail or "（无输出）") +
+        "\n\n排查建议：\n"
+        "· 如果上面是超时/连接重置/SSLError：换网络，或开/关代理后重试\n"
+        "· 如果是 No matching distribution / 需要编译：Python 版本太新，"
+        "该版本的预编译包还没出，请到「关于」里反馈\n"
+        "· 如果在用代理：确认代理允许命令行程序走（TUN/增强模式），"
+        "或给终端设置 HTTP_PROXY/HTTPS_PROXY 环境变量")
 
 
 def ensure_ready(log_cb=None, force_reinstall=False, cfg=None):
