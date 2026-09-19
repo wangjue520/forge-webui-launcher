@@ -154,13 +154,13 @@ if not errorlevel 1 goto :deps_ok
 call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
 if errorlevel 2 goto :local_fail
 if not errorlevel 1 goto :deps_ok
-call :try_install "" "官方源"
+call :try_install "-i https://pypi.org/simple" "官方源"
 if errorlevel 2 goto :local_fail
 if not errorlevel 1 goto :deps_ok
 goto :all_failed
 
 :order_global
-call :try_install "" "官方源"
+call :try_install "-i https://pypi.org/simple" "官方源"
 if errorlevel 2 goto :local_fail
 if not errorlevel 1 goto :deps_ok
 call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "清华镜像"

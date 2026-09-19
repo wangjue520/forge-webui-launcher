@@ -1116,23 +1116,9 @@ class LauncherApi:
             except OSError as e:
                 return {"ok": False, "error": f"无法修改 webui-user.bat：{e}"}
 
-        # 删掉残缺 venv（缺 python.exe 或没有 pip）：便携 Python
-        #（python-build-standalone）的 ensurepip 不全，由它建出来的 venv
-        # 没有 pip，webui.bat 走到装依赖一步必炸 "No module named pip"。
-        # 删掉后 build_launch_env_overrides 会给便携 Python 走 VENV_DIR=-
-        #（不用 venv，依赖直接装进便携 Python），自定义 Python 则由
-        # webui.bat 自动重建。
-        venv_dir = os.path.join(root, "venv")
-        if os.path.isdir(venv_dir) and not cm.venv_is_usable(venv_dir):
-            shutil.rmtree(venv_dir, ignore_errors=True)
-            if not os.path.isdir(venv_dir):
-                log(f"[启动器] 检测到残缺的 venv（缺 python.exe 或 pip），已删除: {venv_dir}\n")
-            else:
-                log(f"[启动器] 检测到残缺的 venv 但删除失败（可能被占用），"
-                    f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
-
-        # 静默修复 venv\pyvenv.cfg 里过期的 home 路径（安装目录被移动/改名后
-        # 最常见的启动失败原因）
+        # 先静默修复 venv\pyvenv.cfg 里过期的 home 路径（安装目录被移动/改名后
+        # 最常见的启动失败原因）。必须在删除判断之前做：目录移动后 venv 的
+        # python.exe 启动桩会失效，不先修好它，完好的 venv 会被误判成残缺。
         resolved_python = (self.cfg.get("custom_python_path") or "").strip()
         if not resolved_python:
             resolved_python = cm.detect_bundled_python(root) or ""
@@ -1142,6 +1128,21 @@ class LauncherApi:
                                         lambda m: log(m + "\n"))
             except OSError as e:
                 log(f"[启动器] 检查 venv pyvenv.cfg 时出错（不影响继续启动）: {e}\n")
+
+        # 删掉【确认损坏】的 venv（缺 python.exe 或确定没有 pip）：便携 Python
+        #（python-build-standalone）的 ensurepip 不全，由它建出来的 venv
+        # 可能没有 pip，webui.bat 走到装依赖一步必炸 "No module named pip"。
+        # 删掉后 build_launch_env_overrides 会给便携 Python 走 VENV_DIR=-
+        #（不用 venv，依赖直接装进便携 Python），自定义 Python 则由
+        # webui.bat 自动重建。注意：检测超时/失败的不算确认损坏，不删。
+        venv_dir = os.path.join(root, "venv")
+        if cm.venv_is_definitely_broken(venv_dir):
+            shutil.rmtree(venv_dir, ignore_errors=True)
+            if not os.path.isdir(venv_dir):
+                log(f"[启动器] 检测到残缺的 venv（缺 python.exe 或 pip），已删除: {venv_dir}\n")
+            else:
+                log(f"[启动器] 检测到残缺的 venv 但删除失败（可能被占用），"
+                    f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
 
         args_str = cm.build_commandline_args(self.cfg)
         env_overrides = cm.build_launch_env_overrides(self.cfg, root)
@@ -1550,8 +1551,19 @@ def _deploy_flow(self, target, branch, use_portable):
         # ---- 3. venv 版本检测（不一致时问用户）----
         required = pe.PYTHON_VERSION_BY_BRANCH.get(branch, "3.10")
         venv_dir = os.path.join(target, "venv")
-        # 残缺 venv（缺 python.exe/pip）没有保留价值，先清掉再做版本判断
-        if os.path.isdir(venv_dir) and not cm.venv_is_usable(venv_dir):
+        # 先修 pyvenv.cfg 的过期 home 路径（目录被移动/改名后 venv 启动桩会
+        # 失效），再判断 venv 是否残缺——顺序反了会把完好的 venv 误删
+        resolved_python = (self.cfg.get("custom_python_path") or "").strip()
+        if not resolved_python:
+            resolved_python = cm.detect_bundled_python(target) or ""
+        if resolved_python:
+            try:
+                cm.sync_venv_pyvenv_cfg(target, resolved_python, lambda m: log(m + "\n"))
+            except OSError as e:
+                log(f"[部署] 检查 venv pyvenv.cfg 时出错（不影响继续部署）: {e}\n")
+        # 确认损坏的 venv（缺 python.exe/pip）没有保留价值，先清掉再做版本判断；
+        # 检测超时/失败的不算确认损坏，不删
+        if cm.venv_is_definitely_broken(venv_dir):
             log(f"[部署] 检测到残缺的 venv（缺 python.exe 或 pip），删除后按需重建: {venv_dir}\n")
             shutil.rmtree(venv_dir, ignore_errors=True)
         mismatch, detail = pe.check_venv_version_mismatch(venv_dir, required)
@@ -1582,15 +1594,6 @@ def _deploy_flow(self, target, branch, use_portable):
             raise _DeployCancelled()
 
         # ---- 4. 运行一次 webui.bat，让 Forge 自己建 venv 装依赖 ----
-        resolved_python = (self.cfg.get("custom_python_path") or "").strip()
-        if not resolved_python:
-            resolved_python = cm.detect_bundled_python(target) or ""
-        if resolved_python:
-            try:
-                cm.sync_venv_pyvenv_cfg(target, resolved_python, lambda m: log(m + "\n"))
-            except OSError as e:
-                log(f"[部署] 检查 venv pyvenv.cfg 时出错（不影响继续部署）: {e}\n")
-
         env_overrides = cm.build_launch_env_overrides(self.cfg, target)
         log("\n[部署] 首次运行 webui.bat（自动安装依赖，可能需要较长时间）\n")
         log(f"[部署] COMMANDLINE_ARGS = {env_overrides.get('COMMANDLINE_ARGS', '')}\n")

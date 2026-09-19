@@ -377,27 +377,36 @@ def sync_venv_pyvenv_cfg(root_dir, python_exe, log_cb=None):
     return True
 
 
-def venv_is_usable(venv_dir):
-    """venv 是否完好可用：有解释器且 pip 可用。
+def _venv_health(venv_dir):
+    """venv 健康检查，返回 "ok" / "broken" / "unknown"。
 
-    背景：bootstrap 下载的 python-build-standalone 便携构建（uv 同款）没有
-    完整的 ensurepip，由它 `python -m venv` 建出来的 venv 有 python.exe
-    却没有 pip（Neo 官方 README 因此要求用 `uv venv --seed` 建环境），
-    Forge 的 launch.py 走到装依赖一步必炸 "No module named pip"。
-    这种残缺 venv 留着没有任何价值，判定为不可用以触发清理/绕行。
+    "broken" 只表示【确认坏】：解释器缺失，或 pip 明确返回非零。
+    超时、OSError 等【检测失败】一律归 "unknown"——慢磁盘、杀软扫描
+    都能把 pip --version 拖过 30 秒，这时删错环境的代价（几个 GB 依赖
+    重下）远大于暂时留着它，宁可保守。
     """
     if os.name == "nt":
         py = os.path.join(venv_dir, "Scripts", "python.exe")
     else:
         py = os.path.join(venv_dir, "bin", "python")
     if not os.path.exists(py):
-        return False
+        return "broken"
     try:
         r = subprocess.run([py, "-m", "pip", "--version"],
                            capture_output=True, timeout=30)
-        return r.returncode == 0
+        return "ok" if r.returncode == 0 else "broken"
     except Exception:
-        return False
+        return "unknown"
+
+
+def venv_is_usable(venv_dir):
+    """能否继续使用：只有确认坏了才算不可用（检测失败时保守视为可用）"""
+    return _venv_health(venv_dir) != "broken"
+
+
+def venv_is_definitely_broken(venv_dir):
+    """是否确认损坏（删除判断专用——拿不准的一律不删，防误删完好环境）"""
+    return os.path.isdir(venv_dir) and _venv_health(venv_dir) == "broken"
 
 
 def build_launch_env_overrides(cfg, root_dir):
