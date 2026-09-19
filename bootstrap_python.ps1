@@ -1,4 +1,4 @@
-#Requires -Version 3.0
+﻿#Requires -Version 3.0
 # Forge WebUI 启动器 - 便携 Python 自动引导脚本
 #
 # 用途：start一键启动.bat 在系统里找不到任何可用 Python 时调用本脚本，

@@ -14,14 +14,25 @@ HuggingFace。国内直连这些站点普遍慢且容易断（实测 torch 那�
    关停或限速，写死依赖单一镜像是不负责任的，所以每个环节都保留原站兜底。
 3) 用户可以在界面上强制指定"自动/总是用镜像/总是用原站"，覆盖自动检测。
 
-检测方法：并发请求一个国内站点和一个国外站点，比较可达性和延迟。不采用
-"查 IP 归属地"那种方案——用户可能在国内用代理，那种情况下走原站反而更快，
-实测延迟才是真实情况的反映。
+检测方法：优先查出口 IP 的归属地（国内 -> 镜像，国外 -> 原站），
+IP 查询接口全部失败时退回"并发请求国内/国外站点比延迟"的实测方案。
+挂代理的用户出口 IP 显示为代理所在国，判定为国外、直连原站——
+这正是想要的行为（代理下走原站通常更快）。
 """
 import concurrent.futures
+import re
 import time
 
 import requests
+
+# ---- IP 归属地探测（首选信号）----
+# 免 key、体量小、国内外都有节点的接口，任意一个通就行
+_COUNTRY_ENDPOINTS = [
+    "https://ipapi.co/country/",
+    "http://ip-api.com/line/?fields=countryCode",
+    "https://ipinfo.io/country",
+]
+_COUNTRY_TIMEOUT = 5
 
 # ---- 探测用的目标 ----
 # 选择原则：体量小、响应快、本身就是我们后续真正要用的服务
@@ -64,17 +75,37 @@ def _probe(url):
         return None
 
 
+def detect_country_code():
+    """查询出口 IP 的国家代码（如 "CN"/"US"），所有接口都失败返回 None"""
+    for url in _COUNTRY_ENDPOINTS:
+        try:
+            r = requests.get(url, timeout=_COUNTRY_TIMEOUT)
+            if r.ok:
+                code = r.text.strip().upper()
+                if re.fullmatch(r"[A-Z]{2}", code):
+                    return code
+        except requests.RequestException:
+            continue
+    return None
+
+
 def detect_network_environment():
     """
-    并发探测国内/国外站点，返回 "cn" 或 "global"。
+    返回 "cn" 或 "global"。
 
-    判定逻辑：
+    首选：查出口 IP 归属地——CN 判国内，其他一律判国外（挂了代理的国内
+    用户出口 IP 在境外，此时直连原站本来就更快，判国外是正确行为）。
+    IP 查询接口全部失败时退回延迟实测兜底：
       - 国外不可达、国内可达            -> cn（典型的国内裸连环境）
       - 两边都可达，但国内明显更快      -> cn
-      - 国外可达且不慢                  -> global（可能在国外，或挂了代理）
+      - 国外可达且不慢                  -> global
       - 两边都不可达                    -> global（网络本身有问题，
                                           用原站至少行为可预期）
     """
+    country = detect_country_code()
+    if country:
+        return "cn" if country == "CN" else "global"
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         f_cn = pool.submit(_probe, _PROBE_CN)
         f_global = pool.submit(_probe, _PROBE_GLOBAL)

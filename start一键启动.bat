@@ -12,10 +12,12 @@ rem  原因：uv 装的 Python、Linux 发行版式的 Python 会被标记为
 rem  "externally-managed"（PEP 668），直接往全局 pip install 会被拒绝。
 rem
 rem  顺序：.venv 可用且依赖齐 -> 直接启动（日常启动走这里，不到一秒）
-rem        否则：找 Python -> 查版本 -> 建 .venv -> 装依赖 -> 启动
+rem        否则：便携 Python（没有就先自动下载）-> 建 .venv -> 装依赖 -> 启动
 rem
-rem  找不到 Python 也不会卡死：自动下载便携版 Python 3.13
-rem  （python-build-standalone，uv 同款官方构建）到本启动器的 python\ 目录。
+rem  不挑系统里装的 Python（版本/来源千奇百怪，是"打不开"的最大来源）：
+rem  统一自动下载便携版 Python 3.13（python-build-standalone，uv 同款官方
+rem  构建）到本启动器的 python\ 目录，任何电脑上环境完全一致。
+rem  装依赖时按 IP 归属地自动选择镜像：国内走国内镜像，国外走官方源。
 rem ===================================================================
 
 set "REQ=%~dp0requirements.txt"
@@ -48,15 +50,29 @@ if exist %VPY% (
 )
 
 :find_python
-rem ---------- 1. 找一个能用的 Python（只用来创建 .venv） ----------
-rem 优先用启动器自带的便携版（如果做过便携打包/之前自动下载过）
+rem ---------- 1. 统一使用便携 Python：任何电脑上表现都一样 ----------
+rem 不挑系统里装的 Python——版本太旧的、uv 托管被 PEP 668 锁死的、
+rem 微软商店占位 stub、被杀软动过的……千奇百怪，是"打不开一键启动"
+rem 反馈的最大来源。永远用启动器目录 python\ 下的便携版（3.13），
+rem 没有就先自动下载；下载失败才退回系统 Python 兜底。
 if exist "%~dp0python\python.exe" (
     set PY="%~dp0python\python.exe"
     goto :got_python
 )
 
-rem 其次用 py 启动器。它比直接叫 python 可靠：Windows 自带一个
-rem "python" 假命令，敲下去只会打开应用商店，而 py 不受这个影响。
+echo.
+echo   正在准备便携版 Python（只需下载一次，约 30MB）...
+call :bootstrap_python
+if not errorlevel 1 (
+    set PY="%~dp0python\python.exe"
+    goto :got_python
+)
+
+rem ---------- 2. 便携版下载失败：退回系统 Python 兜底 ----------
+rem 注意顺序：py 启动器优先于 python 命令——Windows 自带一个 "python"
+rem 假命令，敲下去只会打开应用商店，而 py 不受这个影响。
+echo.
+echo   [!] 便携 Python 下载失败，改用系统里已安装的 Python 试试 ...
 py -3 -c "import sys" >nul 2>nul
 if not errorlevel 1 (
     set "PY=py -3"
@@ -69,15 +85,8 @@ if not errorlevel 1 (
     goto :got_python
 )
 
-rem ---------- 2. 系统里一个 Python 都没有：自动下载便携版 ----------
-echo.
-echo   ============================================================
-echo    没有检测到 Python —— 正在自动准备便携版 Python
-echo   ============================================================
-echo.
-call :bootstrap_python
-if errorlevel 1 goto :end_fail
-set PY="%~dp0python\python.exe"
+echo   [x] 系统里也没有可用的 Python，无法继续。
+goto :end_fail
 
 :got_python
 rem ---------- 3. 版本必须 >= 3.10；太旧就改用便携版 ----------
@@ -128,21 +137,40 @@ rem ---------- 6. 装依赖 ----------
 echo   [3/3] 正在安装依赖（一般十几秒，安装日志失败时才会显示）...
 echo.
 
-rem 镜像顺序跟启动器内部保持一致：清华 -> 阿里 -> 官方源。
-rem 返回值：0 成功；1 疑似网络/镜像问题，换下一个源；
-rem         2 本地环境问题，换源也没用，直接停下
+rem 按 IP 归属地决定镜像顺序：国内 -> 镜像优先；国外 -> 官方源优先。
+rem 检测不到时按国内处理（用户大多数在国内，且官方源始终排在最后兜底）。
+rem :try_install 返回值：0 成功；1 疑似网络/镜像问题，换下一个源；
+rem                      2 本地环境问题，换源也没用，直接停下
+set "REGION="
+call :detect_region
+
+if /i "%REGION%"=="CN" goto :order_cn
+if not "%REGION%"=="" goto :order_global
+
+:order_cn
 call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "清华镜像"
 if errorlevel 2 goto :local_fail
 if not errorlevel 1 goto :deps_ok
+call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
+call :try_install "" "官方源"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
+goto :all_failed
 
+:order_global
+call :try_install "" "官方源"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
+call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "清华镜像"
+if errorlevel 2 goto :local_fail
+if not errorlevel 1 goto :deps_ok
 call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
 if errorlevel 2 goto :local_fail
 if not errorlevel 1 goto :deps_ok
 
-call :try_install "" "官方源"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
-
+:all_failed
 echo.
 echo   ============================================================
 echo    依赖安装失败
@@ -153,13 +181,29 @@ echo   ------------------------------------------------------------
 type "%PIPLOG%"
 echo   ------------------------------------------------------------
 echo.
-echo    三个下载源都没成功，多半是网络问题。可以这样排查：
+echo    所有下载源都试过了，多半是网络问题。可以这样排查：
 echo.
-echo      1. 如果你在用加速器/代理，先确认它是开着的，然后重新双击本文件
-echo      2. 检查一下杀毒软件有没有拦住 python.exe
-echo      3. 如果日志里不是网络错误，请把上面的日志截图反馈
+echo      1. 如果你在用加速器/代理，先确认它是开着的，然后重试
+echo      2. 检查一下杀毒软件有没有拦住 pip
+echo      3. 把日志里的报错截图发给作者
 echo.
 goto :end_fail
+
+rem ===================================================================
+rem  :detect_region —— 查询出口 IP 的国家代码写入 %REGION%（查不到留空）
+rem ===================================================================
+:detect_region
+for /f "delims=" %%r in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0detect_region.ps1"') do set "REGION=%%r"
+if /i "%REGION%"=="CN" (
+    echo   检测到国内网络环境，安装依赖优先走国内镜像 ...
+) else (
+    if "%REGION%"=="" (
+        echo   未能检测网络归属地，按国内处理（镜像优先，官方源兜底）...
+    ) else (
+        echo   检测到海外网络环境（%REGION%），安装依赖优先走官方源 ...
+    )
+)
+exit /b 0
 
 :deps_ok
 rem 装完再实际 import 一次，防止"装成功了但其实没装进这个环境"
