@@ -182,7 +182,7 @@
         o.textContent = b.label;
         branchSel.appendChild(o);
       });
-      branchSel.value = App.cfg.webui_branch || "classic";
+      branchSel.value = App.cfg.webui_branch || "neo2";
 
       rebuildBranchDependent();
 

@@ -39,42 +39,60 @@
   }
 
   async function onStart() {
-    const target = $("#deploy-target").value.trim();
-    const branch = $("#deploy-branch").value;
-    const usePortable = $("#deploy-portable").checked;
+    if (running) return;
+    // 整个函数包一层兜底：预检查之后的任何异常（弹窗、返回值解析等）都必须
+    // 给出可见反馈，不能让按钮"点了没反应"
+    $("#deploy-start").disabled = true;
+    try {
+      const target = $("#deploy-target").value.trim();
+      const branch = $("#deploy-branch").value;
+      const usePortable = $("#deploy-portable").checked;
 
-    let pre;
-    try { pre = await App.api.deploy_precheck(target, branch, usePortable); }
-    catch (e) { App.toast("检查失败：" + e.message, "error"); return; }
+      let pre;
+      try { pre = await App.api.deploy_precheck(target, branch, usePortable); }
+      catch (e) { App.toast("检查失败：" + e.message, "error"); return; }
+      if (!pre || typeof pre !== "object") {
+        App.toast("检查失败：后端未返回有效结果", "error");
+        return;
+      }
 
-    const issues = pre.issues || [];
-    const errors = issues.filter((i) => i.level === "error");
-    if (errors.length) {
-      await App.modal("无法开始部署", App.esc(errors.map((i) => i.text).join("\n\n")),
-        [{ id: "ok", label: "知道了", kind: "primary" }]);
-      return;
-    }
-    const warns = issues.filter((i) => i.level === "warn");
-    if (warns.length) {
-      const v = await App.modal("部署前提醒", App.esc(warns.map((i) => i.text).join("\n\n")), [
-        { id: "go", label: "仍然继续部署", kind: "primary" },
-        { id: "cancel", label: "取消" },
-      ]);
-      if (v !== "go") return;
-    } else if (!pre.already_installed) {
-      const v = await App.modal("确认开始部署",
-        App.esc(`即将把 Forge WebUI 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。`),
-        [
-          { id: "go", label: "开始部署", kind: "primary" },
+      const issues = Array.isArray(pre.issues) ? pre.issues : [];
+      const errors = issues.filter((i) => i.level === "error");
+      if (errors.length || pre.ok === false) {
+        const text = errors.length
+          ? errors.map((i) => i.text).join("\n\n")
+          : "预检查未通过，请检查安装目录和网络后重试。";
+        await App.modal("无法开始部署", App.esc(text),
+          [{ id: "ok", label: "知道了", kind: "primary" }]);
+        return;
+      }
+      const warns = issues.filter((i) => i.level === "warn");
+      if (warns.length) {
+        const v = await App.modal("部署前提醒", App.esc(warns.map((i) => i.text).join("\n\n")), [
+          { id: "go", label: "仍然继续部署", kind: "primary" },
           { id: "cancel", label: "取消" },
         ]);
-      if (v !== "go") return;
-    }
+        if (v !== "go") return;
+      } else if (!pre.already_installed) {
+        const v = await App.modal("确认开始部署",
+          App.esc(`即将把 Forge WebUI 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。`),
+          [
+            { id: "go", label: "开始部署", kind: "primary" },
+            { id: "cancel", label: "取消" },
+          ]);
+        if (v !== "go") return;
+      }
 
-    try {
-      const r = await App.api.deploy_start(target, branch, usePortable);
-      if (r && r.ok === false) App.toast(r.error || "启动部署失败", "error");
-    } catch (e) { App.toast("启动部署失败：" + e.message, "error"); }
+      try {
+        const r = await App.api.deploy_start(target, branch, usePortable);
+        if (r && r.ok === false) App.toast(r.error || "启动部署失败", "error");
+      } catch (e) { App.toast("启动部署失败：" + e.message, "error"); }
+    } catch (e) {
+      console.error(e);
+      App.toast("操作失败：" + ((e && e.message) || e), "error");
+    } finally {
+      if (!running) $("#deploy-start").disabled = false;
+    }
   }
 
   async function venvCheck() {
@@ -128,7 +146,7 @@
         o.value = b.key; o.textContent = b.label;
         sel.appendChild(o);
       });
-      sel.value = (App.cfg.webui_branch === "neo2") ? "neo2" : "classic";
+      sel.value = (App.cfg.webui_branch === "classic") ? "classic" : "neo2";
 
       if (App.cfg.webui_root) {
         $("#deploy-target").value = App.cfg.webui_root;

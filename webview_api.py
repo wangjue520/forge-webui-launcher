@@ -88,14 +88,14 @@ NEO_BRANCH = "neo"
 _NEO_KEYS = ("neo", "neo2")
 
 DEPLOY_BRANCH_OPTIONS = [
+    ("Neo 版（Haoming02 社区维护分支，推荐）", "neo2"),
     ("常规版 / Classic（lllyasviel 官方仓库）", "classic"),
-    ("Neo 版（Haoming02 社区维护分支）", "neo2"),
 ]
 
 SETTINGS_BRANCH_OPTIONS = [
-    ("常规版 / Classic", "classic"),
+    ("Neo 版（新版参数：--normalvram / --force-fpXX，推荐）", "neo2"),
     ("Neo 版（旧版参数：--always-xxx-vram / --all-in-fpXX）", "neo"),
-    ("Neo 版（新版参数：--normalvram / --force-fpXX）", "neo2"),
+    ("常规版 / Classic", "classic"),
 ]
 
 # 常用扩展目录：每一项 (显示名, 简介, url_by_branch, folder_by_branch)
@@ -1337,14 +1337,19 @@ def _api_deploy_env_detect(self):
 
     git_path = shutil.which("git")
     py_path = shutil.which("python") or shutil.which("python3")
+    # 勾选了便携环境时，系统没装 Python/Git 不影响部署——直接告诉用户，
+    # 否则"未检测到 Python，请先安装"会误导他们去装根本不需要的东西
+    portable = bool(self.cfg.get("use_portable_env", True))
+    git_text = (f"已检测到 ({_ver([git_path, '--version']) or git_path})" if git_path
+                else "未检测到系统 Git（已勾选便携环境，部署时会自动下载，不影响）" if portable
+                else "未检测到 Git，请先安装：https://git-scm.com/download/win")
+    py_text = (f"已检测到 ({_ver([py_path, '--version']) or py_path})" if py_path
+               else "未检测到系统 Python（已勾选便携环境，部署时会自动下载，不影响）" if portable
+               else "未检测到 Python，请先安装：https://www.python.org/downloads/")
     return {
         "ok": True,
-        "git": {"found": bool(git_path),
-                "text": f"已检测到 ({_ver([git_path, '--version']) or git_path})" if git_path
-                        else "未检测到 Git，请先安装：https://git-scm.com/download/win"},
-        "python": {"found": bool(py_path),
-                   "text": f"已检测到 ({_ver([py_path, '--version']) or py_path})" if py_path
-                           else "未检测到 Python，请先安装：https://www.python.org/downloads/"},
+        "git": {"found": bool(git_path) or portable, "text": git_text},
+        "python": {"found": bool(py_path) or portable, "text": py_text},
     }
 
 
@@ -1430,6 +1435,8 @@ def _api_deploy_start(self, target, branch, use_portable):
         if self._deploy_running:
             return {"ok": False, "error": "已有部署任务在进行中"}
         target = (target or "").strip()
+        if not target:
+            return {"ok": False, "error": "请先选择安装目录"}
         try:
             os.makedirs(target, exist_ok=True)
         except OSError as e:
@@ -1442,7 +1449,14 @@ def _api_deploy_start(self, target, branch, use_portable):
         self._deploy_cancel.clear()
         self._deploy_running = True
     self._emit("deploy", "state", running=True)
-    self._spawn(lambda: self._deploy_flow(target, branch, use_portable), name="deploy")
+    try:
+        self._spawn(lambda: self._deploy_flow(target, branch, use_portable), name="deploy")
+    except Exception:
+        # 线程没能起来就回滚状态，否则 _deploy_running 永远卡在 True，
+        # 之后每次都只提示"已有部署任务在进行中"
+        self._deploy_running = False
+        self._emit("deploy", "state", running=False)
+        return {"ok": False, "error": "无法启动部署线程：\n" + traceback.format_exc()[-500:]}
     return {"ok": True}
 
 
@@ -2827,7 +2841,7 @@ def _api_open_output_folder(self, which):
 def _api_ext_list(self):
     root = (self.cfg.get("webui_root") or "").strip()
     ext_dir = os.path.join(root, "extensions") if root else None
-    branch = self.cfg.get("webui_branch", "classic")
+    branch = self.cfg.get("webui_branch", "neo2")
     items = []
     for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
         folder = _resolve_by_branch(folder_raw, branch)
@@ -2845,7 +2859,7 @@ def _api_ext_install(self, names):
     if not root:
         return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录"}
     ext_dir = os.path.join(root, "extensions")
-    branch = self.cfg.get("webui_branch", "classic")
+    branch = self.cfg.get("webui_branch", "neo2")
 
     # git 选取顺序与部署/启动保持一致：自定义路径 > 便携版 > 系统 PATH
     #（用户手动指定的 git 优先——便携版可能损坏，正是用户绕开它的原因）
