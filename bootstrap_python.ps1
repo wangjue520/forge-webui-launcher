@@ -50,11 +50,18 @@ function Test-GithubDirect {
 }
 
 function Get-JsonWithFallback([string]$url, [bool]$useProxy) {
+    # 直连优先，但直连失败一定要再试代理：Test-GithubDirect 测的是 github.com，
+    # 而这里请求的是 raw.githubusercontent.com / api.github.com——国内常见
+    # github.com 能通、raw/api 被墙，此时若不走代理就只能落到会过期的固定版本兜底。
+    # 安全性不受影响：下载物最终都要过 sha256 校验（fail-closed）。
     $candidates = @($url)
     if ($useProxy) {
         $candidates = @()
         foreach ($p in $proxyPrefixes) { $candidates += ($p + $url) }
         $candidates += $url
+    }
+    else {
+        foreach ($p in $proxyPrefixes) { $candidates += ($p + $url) }
     }
     $lastErr = $null
     foreach ($u in $candidates) {
@@ -123,11 +130,16 @@ function Get-ExpectedHash($asset, [bool]$useProxy) {
     #>
     $sumsHash = $null
     if ($asset.SumsUrl) {
+        # 与 Get-JsonWithFallback 同理：直连失败也要试代理，不能仅凭
+        # github.com 的探测结果放弃（objects.githubusercontent.com 独立被墙很常见）
         $candidates = @($asset.SumsUrl)
         if ($useProxy) {
             $candidates = @()
             foreach ($p in $proxyPrefixes) { $candidates += ($p + $asset.SumsUrl) }
             $candidates += $asset.SumsUrl
+        }
+        else {
+            foreach ($p in $proxyPrefixes) { $candidates += ($p + $asset.SumsUrl) }
         }
         foreach ($u in $candidates) {
             try {
@@ -198,26 +210,35 @@ foreach ($p in $proxyPrefixes) { $candidates += ($p + $asset.Url) }
 
 $downloaded = $false
 $lastErr = $null
-foreach ($u in $candidates) {
-    try {
-        Write-Host ('[bootstrap] 下载: ' + $u)
-        Download-File $u $ArchivePath
-        if (Test-FileHash $ArchivePath $expectedHash) {
-            $downloaded = $true
-            break
-        }
-        $actualHash = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLower()
-        $lastErr = ('校验失败！期望 ' + $expectedHash + '，实际 ' + $actualHash + '——该地址返回的内容被篡改或损坏，换下一个地址')
-        Write-Host ('[bootstrap] ' + $lastErr)
+# 两轮完整重试：加速代理对大文件经常抖动（限速、断流），第一轮全挂、
+# 第二轮就好是常态——这就是用户反馈"第一次失败、再点一遍就成功"的
+# 主要来源之一，在脚本内部消化掉，别让用户手动重开
+for ($pass = 1; $pass -le 2 -and -not $downloaded; $pass++) {
+    if ($pass -gt 1) {
+        Write-Host '[bootstrap] 第一轮全部失败，5 秒后再完整重试一轮 ...'
+        Start-Sleep -Seconds 5
     }
-    catch {
-        $lastErr = $_.Exception.Message
-        Write-Host ('[bootstrap] 下载失败: ' + $lastErr)
+    foreach ($u in $candidates) {
+        try {
+            Write-Host ('[bootstrap] 下载: ' + $u)
+            Download-File $u $ArchivePath
+            if (Test-FileHash $ArchivePath $expectedHash) {
+                $downloaded = $true
+                break
+            }
+            $actualHash = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLower()
+            $lastErr = ('校验失败！期望 ' + $expectedHash + '，实际 ' + $actualHash + '——该地址返回的内容被篡改或损坏，换下一个地址')
+            Write-Host ('[bootstrap] ' + $lastErr)
+        }
+        catch {
+            $lastErr = $_.Exception.Message
+            Write-Host ('[bootstrap] 下载失败: ' + $lastErr)
+        }
     }
 }
 if (-not $downloaded) {
     Remove-Item $ArchivePath -Force -ErrorAction SilentlyContinue
-    throw ('所有候选地址都失败或校验不通过。最后错误: ' + $lastErr)
+    throw ('所有候选地址都失败或校验不通过（已自动重试两轮）。最后错误: ' + $lastErr)
 }
 
 Write-Host ('[bootstrap] 校验通过，解压到 ' + $LauncherDir + ' ...')

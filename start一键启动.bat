@@ -1,4 +1,8 @@
 @echo off
+rem 本文件是 GBK 编码：把控制台切到 936 才能在非中文系统（英文/日文 Windows、
+rem 或开了 UTF-8 Beta 的系统）上正常显示中文提示，否则全是乱码、用户看不到排查指引。
+rem 936 代码页在所有 Windows 版本上都可用，只影响显示，不影响脚本逻辑。
+chcp 936 >nul 2>nul
 cd /d "%~dp0"
 title Forge WebUI 启动器
 rem 不开 enabledelayedexpansion：路径里如果带 ! 会被吞掉，这个脚本也用不到它
@@ -68,6 +72,16 @@ if not errorlevel 1 (
     goto :got_python
 )
 
+rem 首次下载最常见的失败原因是代理抖动/杀软扫描新文件，都是一过性的。
+rem 自动等几秒重试一次，把"用户要自己再双击一遍"变成 bat 内部消化掉。
+echo   [!] 第一次尝试没成功，3 秒后自动再试一次 ...
+timeout /t 3 /nobreak >nul 2>nul
+call :bootstrap_python
+if not errorlevel 1 (
+    set PY="%~dp0python\python.exe"
+    goto :got_python
+)
+
 rem ---------- 2. 便携版下载失败：退回系统 Python 兜底 ----------
 rem 注意顺序：py 启动器优先于 python 命令——Windows 自带一个 "python"
 rem 假命令，敲下去只会打开应用商店，而 py 不受这个影响。
@@ -111,6 +125,14 @@ echo.
 echo   [1/3] 正在创建虚拟环境 .venv ...
 rem 用标准库 venv 而不是 uv venv：标准库建出来的环境自带 pip
 %PY% -m venv "%VENV%"
+if errorlevel 1 (
+    rem 便携 Python 刚下载/解压完时杀软可能还在扫描，首次创建偶发失败，
+    rem 等几秒清掉半成品重试一次，通常就能过
+    echo   [!] 虚拟环境创建没成功，3 秒后自动重试一次 ...
+    timeout /t 3 /nobreak >nul 2>nul
+    rmdir /s /q "%VENV%" >nul 2>nul
+    %PY% -m venv "%VENV%"
+)
 if errorlevel 1 goto :venv_fail
 if not exist %VPY% goto :venv_fail
 
@@ -209,6 +231,17 @@ exit /b 0
 rem 装完再实际 import 一次，防止"装成功了但其实没装进这个环境"
 %VPY% -c "import webview, requests" >nul 2>nul
 if not errorlevel 1 goto :launch
+rem 装完却导不进：环境很可能装坏了（杀软动了文件/磁盘写入被拦）。
+rem 以前到这一步只能让用户手动删 .venv 再双击——这就是"第一次失败、
+rem 第二次就好"的一个来源；现在自动删掉重建一次（只一次，防死循环）
+if defined REBUILT goto :deps_import_fail
+set "REBUILT=1"
+echo.
+echo   [!] 依赖装好了但导入失败，自动重建 .venv 再试一次 ...
+rmdir /s /q "%VENV%" >nul 2>nul
+goto :find_python
+
+:deps_import_fail
 echo.
 echo   [x] 依赖显示已安装，但 .venv 里仍然无法导入 webview / requests。
 echo       请删除启动器目录下的 .venv 文件夹后重新双击本文件。
@@ -245,6 +278,9 @@ rem  :try_install "索引参数" "显示名"
 rem ===================================================================
 :try_install
 echo   正在通过 %~2 安装 ...
+rem 先删旧日志：pip 如果连启动都没成功（比如 venv 损坏），日志文件就还是
+rem 上一次运行的内容，失败时 type 出来一份过时日志会严重误导排查
+if exist "%PIPLOG%" del /f /q "%PIPLOG%" >nul 2>nul
 %VPY% -m pip install -r "%REQ%" %~1 --disable-pip-version-check --retries 1 --timeout 20 > "%PIPLOG%" 2>&1
 if errorlevel 1 goto :try_install_failed
 echo   [√] 依赖安装完成
@@ -252,8 +288,11 @@ echo.
 exit /b 0
 
 :try_install_failed
-rem 这些是本地错误，换源重试纯属浪费时间
-findstr /i /c:"externally-managed-environment" /c:"No module named pip" /c:"Permission denied" /c:"拒绝访问" /c:"No space left" "%PIPLOG%" >nul 2>nul
+rem 这些是本地错误，换源重试纯属浪费时间。
+rem 注意权限错误的消息随系统语言走：中文系统是"拒绝访问"，
+rem 英文系统是 "Access is denied"，两个都要匹配，否则英文系统上
+rem 权限问题会被误判成网络问题、白跑三个源
+findstr /i /c:"externally-managed-environment" /c:"No module named pip" /c:"Permission denied" /c:"Access is denied" /c:"拒绝访问" /c:"No space left" "%PIPLOG%" >nul 2>nul
 if not errorlevel 1 exit /b 2
 echo   %~2 没成功，换下一个源重试 ...
 exit /b 1
@@ -307,6 +346,19 @@ exit /b 0
 
 rem ---------- 7. 启动（永远用 .venv 里的 Python） ----------
 :launch
+rem WebView2 预检：精简版/LTSC 系统可能没装运行时，缺了启动必白屏崩溃，
+rem 提前给出明确指引，比事后从 pywebview 的报错里猜友好得多。
+rem 正式版运行时注册在 {F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} 下，64 位系统
+rem 在 WOW6432Node，用户级安装在 HKCU，两处都查不到才提示（只提示不拦截）。
+reg query "HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul
+if errorlevel 1 reg query "HKCU\SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}" /v pv >nul 2>nul
+if errorlevel 1 (
+    echo.
+    echo   [!] 未检测到 Edge WebView2 运行时，界面可能打不开（白屏）。
+    echo       如果启动后白屏，请安装微软官方 WebView2 Runtime 后重试：
+    echo       https://developer.microsoft.com/microsoft-edge/webview2/
+    echo.
+)
 %VPY% webview_main.py
 if errorlevel 1 (
     echo.
