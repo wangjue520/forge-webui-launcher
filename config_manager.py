@@ -480,6 +480,9 @@ def build_launch_env_overrides(cfg, root_dir):
         import mirror_manager as mm
         if mm.resolve_mode(cfg):
             overrides.update(mm.pip_env_overrides(True))
+            # HuggingFace 模型下载也要走镜像——否则部署成功后的首次运行
+            # 才撞墙（CLIP/VAE/模型下载超时），体验最差
+            overrides["HF_ENDPOINT"] = mm.HF_MIRROR
             # torch 专用的关键一步：Forge 装 torch 时在命令行显式传了
             # --extra-index-url，会盖掉 PIP_EXTRA_INDEX_URL 环境变量，只能靠
             # Forge 原生支持的 TORCH_INDEX_URL 覆盖（否则国内裸连
@@ -496,6 +499,62 @@ def build_launch_env_overrides(cfg, root_dir):
         pass  # 加速是锦上添花，任何异常都不该影响正常启动
 
     return overrides
+
+
+# ============================================================
+# 子进程环境卫生（环境污染消毒）
+# ============================================================
+# 用户系统里残留的这些变量会劫持便携环境的行为，而且都是小白自己绝对
+# 查不出来的：PYTHONHOME/PYTHONPATH 让便携 Python 起不来或导入错包；
+# PIP_TARGET/PIP_USER 让依赖装进系统目录、venv 里 import 不到；
+# PIP_NO_INDEX/PIP_FIND_LINKS 让 pip 假装找不到包；GIT_DIR 等让 git
+# 操作错误的仓库；CONDA*/VIRTUAL_ENV 干扰解释器选择；HF_HUB_OFFLINE
+# 会害死首次模型下载。统一剥掉，再叠加我们自己的覆盖变量。
+_ENV_STRIP_EXACT = {
+    "PYTHONHOME", "PYTHONPATH", "PYTHONSTARTUP", "PYTHONUSERBASE",
+    "VIRTUAL_ENV", "VIRTUAL_ENV_PROMPT", "__PYVENV_LAUNCHER__",
+    "PIP_TARGET", "PIP_USER", "PIP_REQUIRE_VIRTUALENV",
+    "PIP_NO_INDEX", "PIP_FIND_LINKS", "PIP_CONSTRAINT", "PIP_REQUIRE_HASHES",
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+    "GIT_ASKPASS", "SSH_ASKPASS", "HF_HUB_OFFLINE",
+}
+_ENV_STRIP_PREFIX = ("CONDA",)
+
+
+def _empty_gitconfig_path():
+    """供 GIT_CONFIG_GLOBAL 指向的空白配置文件：隔离用户全局 .gitconfig 里
+    的残留代理、url.insteadOf 重写、credential helper（过期代理地址和弹
+    凭据窗是 clone 失败/卡死的常见来源）。不用 NUL——Windows 上 git 读
+    NUL 的行为不可靠。注意不设 GIT_CONFIG_NOSYSTEM：便携 Git 的吊销检查
+    关闭写在它自己的 etc/gitconfig（系统级）里，禁掉会让那个修复失效。"""
+    d = os.path.join(os.path.dirname(CONFIG_PATH), "tmp")
+    os.makedirs(d, exist_ok=True)
+    f = os.path.join(d, "empty_gitconfig")
+    if not os.path.exists(f):
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write("# 启动器故意留空：隔离用户全局 git 配置污染\n")
+    return f
+
+
+def build_subprocess_env(cfg, root_dir):
+    """给 webui.bat / git 等子进程用的干净环境：剥掉污染变量 + 叠加启动器
+    覆盖变量 + git 交互隔离。代理变量（HTTP_PROXY 等）保留——显式设过
+    代理环境的用户通常需要它。"""
+    env = {}
+    for k, v in os.environ.items():
+        if k in _ENV_STRIP_EXACT or any(k.startswith(p) for p in _ENV_STRIP_PREFIX):
+            continue
+        env[k] = v
+    env.update(build_launch_env_overrides(cfg, root_dir))
+    try:
+        env["GIT_CONFIG_GLOBAL"] = _empty_gitconfig_path()
+    except OSError:
+        pass
+    # 任何需要交互的 git 场景（凭据弹窗/终端提问）都立刻报错，
+    # 而不是把部署卡死在没有输出的黑盒里
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GCM_INTERACTIVE"] = "never"
+    return env
 
 
 def build_commandline_args(cfg):

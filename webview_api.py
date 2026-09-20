@@ -1149,7 +1149,6 @@ class LauncherApi:
 
         args_str = cm.build_commandline_args(self.cfg)
         env_overrides = cm.build_launch_env_overrides(self.cfg, root)
-
         log(f"[启动器] 正在启动 {WEBUI_ENTRY_SCRIPT} ...\n")
         log(f"[启动器] COMMANDLINE_ARGS = {args_str}\n")
         for k, v in env_overrides.items():
@@ -1170,8 +1169,7 @@ class LauncherApi:
         self._launch_watch_ports = watch_ports
         self._launch_pre_pids = pre_pids
 
-        env = dict(os.environ)
-        env.update(env_overrides)
+        env = cm.build_subprocess_env(self.cfg, root)
         try:
             self._launch_proc = subprocess.Popen(
                 ["cmd.exe", "/c", WEBUI_ENTRY_SCRIPT] if os.name == "nt" else ["sh", "webui.sh"],
@@ -1425,6 +1423,13 @@ def _api_deploy_precheck(self, target, branch, use_portable):
                            "text": "未检测到 Python，请先安装：https://www.python.org/downloads/\n"
                                    "（或者勾选「自动下载便携版 Python + Git」跳过这个要求）"})
 
+    # 硬件/磁盘/杀软等环境预检（几秒就能查完，放到下载几个 GB 之前）
+    try:
+        import deploy_preflight as pf
+        issues.extend(pf.precheck_issues(target))
+    except Exception:
+        pass
+
     has_error = any(i["level"] == "error" for i in issues)
     return {"ok": not has_error, "issues": issues, "already_installed": already_installed}
 
@@ -1475,6 +1480,36 @@ def _deploy_flow(self, target, branch, use_portable):
     log = lambda t: self._emit("deploy", "log", text=t)
     progress = lambda d, t: self._emit("deploy", "progress", downloaded=d, total=t)
     try:
+        # 环境预警：杀软拦截和时钟错乱是部署失败的两大隐形杀手，先告诉用户
+        try:
+            import deploy_preflight as pf
+            avs = pf.detect_antivirus()
+            if avs:
+                log(f"[环境] 检测到安全软件运行中（{'、'.join(avs)}），"
+                    "如遇拦截/查杀弹窗请选择「允许」或「信任」\n")
+            skew = pf.clock_skew_seconds()
+            if skew and skew > 300:
+                log(f"[环境] 警告：系统时钟偏差约 {int(skew / 60)} 分钟，"
+                    "所有 HTTPS 证书校验都会失败——请先到系统设置里校准时间\n")
+        except Exception:
+            pass
+
+        # 子进程环境：消毒（剥掉 PYTHON*/PIP_*/GIT_* 等污染变量）+ 启动器
+        # 覆盖变量 + git 交互隔离。部署专用：TEMP/缓存重定向到目标盘，
+        # 防 C 盘 TEMP 爆满（pip 装 torch 的临时文件好几个 GB）
+        def make_env():
+            e = cm.build_subprocess_env(self.cfg, target)
+            try:
+                tmp_dir = os.path.join(target, ".launcher_tmp")
+                os.makedirs(tmp_dir, exist_ok=True)
+                e["TEMP"] = tmp_dir
+                e["TMP"] = tmp_dir
+                e["PIP_CACHE_DIR"] = os.path.join(target, ".launcher_cache", "pip")
+            except OSError:
+                pass
+            return e
+        deploy_env = make_env()
+
         bundled_python = os.path.join(target, "python", "python.exe")
         bundled_git = os.path.join(target, "git", "cmd", "git.exe")
         need_python = use_portable and not os.path.exists(bundled_python)
@@ -1530,7 +1565,7 @@ def _deploy_flow(self, target, branch, use_portable):
             for program, args, cwd in base_steps:
                 if self._deploy_cancel.is_set():
                     raise _DeployCancelled()
-                rc = self._deploy_run_cmd(program, args, cwd, log)
+                rc = self._deploy_run_cmd(program, args, cwd, log, env=deploy_env)
                 if rc != 0:
                     log(f"\n[部署] 上一步骤返回非零退出码 ({rc})，请检查日志确认是否有报错，"
                         "确认无误后可以重新点击「开始部署」继续（已完成的步骤会被跳过）\n")
@@ -1542,14 +1577,15 @@ def _deploy_flow(self, target, branch, use_portable):
                 if self._deploy_cancel.is_set():
                     raise _DeployCancelled()
                 rc = self._deploy_run_cmd(
-                    git_exe, ["-C", target, "config", "remote.origin.url", u], parent, log)
+                    git_exe, ["-C", target, "config", "remote.origin.url", u],
+                    parent, log, env=deploy_env)
                 if rc != 0:
                     log(f"\n[部署] 设置远程地址失败（退出码 {rc}），请检查日志\n")
                     return
                 rc = self._deploy_run_cmd(
                     git_exe, ["-C", target, "-c", "http.lowSpeedLimit=1000",
                               "-c", "http.lowSpeedTime=120", "fetch", "origin", ref],
-                    parent, log, timeout=1800)
+                    parent, log, env=deploy_env, timeout=1800)
                 if rc == 0:
                     fetched = True
                     break
@@ -1561,7 +1597,8 @@ def _deploy_flow(self, target, branch, use_portable):
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
             rc = self._deploy_run_cmd(
-                git_exe, ["-C", target, "checkout", "-f", "-B", ref, f"origin/{ref}"], parent, log)
+                git_exe, ["-C", target, "checkout", "-f", "-B", ref, f"origin/{ref}"],
+                parent, log, env=deploy_env)
             if rc != 0:
                 log(f"\n[部署] 检出代码失败（退出码 {rc}），请检查日志\n")
                 return
@@ -1616,6 +1653,23 @@ def _deploy_flow(self, target, branch, use_portable):
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
 
+        # ---- 3.5 torch 预下载（断点续传 + 多源轮换，绕开 pip 下载器）----
+        # pip 下 2GB+ 的 wheel 没有断点续传，下到 90% 断线就整个重来；
+        # 启动器先自己把 wheel 拉下来（Range 续传 + sha256 校验 + 多个镜像
+        # 按顺序试），本地装好后 Forge 检测到 torch 已存在就会跳过自己安装。
+        # 任何失败都不阻断——Forge 的自装路径（已注入 TORCH_INDEX_URL）兜底。
+        try:
+            import torch_bootstrap
+            torch_bootstrap.ensure_torch(target, self.cfg, log, progress,
+                                         self._deploy_cancel)
+        except _DeployCancelled:
+            raise
+        except Exception as e:
+            log(f"[部署] torch 预下载异常（不影响继续，Forge 会自行安装）: {e}\n")
+
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+
         # ---- 4. 运行一次 webui.bat，让 Forge 自己建 venv 装依赖 ----
         env_overrides = cm.build_launch_env_overrides(self.cfg, target)
         log("\n[部署] 首次运行 webui.bat（自动安装依赖，可能需要较长时间）\n")
@@ -1625,14 +1679,24 @@ def _deploy_flow(self, target, branch, use_portable):
                 log(f"[部署] {k} = {v}\n")
         log("\n")
 
-        env = dict(os.environ)
-        env.update(env_overrides)
+        # 注意：环境在 clone 完之后重新构造——torch 索引镜像要从克隆下来的
+        # launch_utils.py 里提取 cuda tag，流程开头构造时源码还不存在
+        env = make_env()
         # 注意：webui.bat 装完依赖会真的把 WebUI 服务起起来，然后一直占着
         # 进程不退出。部署的目标是把环境装到「能启动」，所以流式读输出、
         # 出现监听地址就判定成功并停掉这个临时进程继续收尾——否则部署会
         # 永远卡在这里（之前唯一的出路是点「取消」，而取消又被当成失败
         # 处理，配置写回/hashlib 补丁全部跳过）。
-        if not self._deploy_run_webui_until_ready(target, log, env):
+        ready, tail = self._deploy_run_webui_until_ready(target, log, env)
+        if not ready and not self._deploy_cancel.is_set():
+            # 失败分类：只有特征符合网络问题才换源重试（镜像→官方），
+            # 其他错误（版本冲突/磁盘满/权限）换源纯属浪费时间
+            if _looks_like_network_failure(tail) and env.get("TORCH_INDEX_URL"):
+                log("\n[部署] 失败特征疑似网络问题，自动改用官方源重试一次 ...\n")
+                env2 = dict(env)
+                env2.pop("TORCH_INDEX_URL", None)  # 回到 Forge 默认官方源
+                ready, tail = self._deploy_run_webui_until_ready(target, log, env2)
+        if not ready:
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
             log("\n[部署] 依赖安装或启动失败（上面的日志应有具体报错），"
@@ -1644,6 +1708,24 @@ def _deploy_flow(self, target, branch, use_portable):
         # 有 venv 写 venv 里；走 VENV_DIR=-（没用 venv）时写进便携 Python 本体
         patch_target = venv_dir if os.path.isdir(venv_dir) else os.path.join(target, "python")
         pe.write_hashlib_patch(patch_target, log_cb=lambda m: log(m + "\n"))
+        # 补丁属于"收尾改动"，写完后必须复测——上面验证通过的是打补丁前的状态
+        try:
+            smoke_py = (os.path.join(venv_dir, "Scripts", "python.exe")
+                        if os.path.isdir(venv_dir)
+                        else os.path.join(target, "python", "python.exe"))
+            if os.path.exists(smoke_py):
+                r = subprocess.run(
+                    [smoke_py, "-c",
+                     "import hashlib; assert hasattr(hashlib, 'file_digest')"],
+                    capture_output=True, timeout=60, creationflags=_NO_WINDOW)
+                if r.returncode == 0:
+                    log("[部署] hashlib 补丁验证通过\n")
+                else:
+                    log("[部署] 警告：hashlib 补丁未生效，如果启动报 "
+                        "hashlib has no attribute file_digest，"
+                        "请点本页的「写入 hashlib 兼容补丁」重试\n")
+        except Exception as e:
+            log(f"[部署] hashlib 补丁验证异常（不影响结果）: {e}\n")
 
         # ---- 6. 收尾：路径/分支写回配置，通知前端刷新 ----
         self.cfg["webui_root"] = target
@@ -1819,13 +1901,14 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     首次运行 webui.bat：装依赖（建 venv 或直接装进便携 Python，取决于
     build_launch_env_overrides 给出的 VENV_DIR）、把 WebUI 起起来验证能跑通。
 
-    返回 True 表示成功（输出里出现了 "Running on local URL"，或端口探测
-    发现 WebUI 已在监听——有些 webui.bat 会把输出重定向走，管道里一个字
-    节都没有，靠解析输出判断就绪会永远卡住；此时停掉这个临时进程，部署
-    继续收尾）。
-    返回 False 表示失败（进程在就绪之前就退出了，或超过 timeout 秒的总
-    时限——webui.bat 失败路径的 exit code 并不可靠，不能拿返回码当判断
-    依据；总时限默认 5400 秒 = 90 分钟，torch 几个 GB 的慢网也要装得下）。
+    返回 (ready, tail)：ready 表示成功（输出里出现了 "Running on local URL"，
+    或端口探测发现 WebUI 已在监听——有些 webui.bat 会把输出重定向走，管道里
+    一个字节都没有，靠解析输出判断就绪会永远卡住；此时停掉这个临时进程，
+    部署继续收尾）；tail 是进程输出的最后 8KB，供调用方做失败原因分类
+    （网络问题换源重试，其他问题直接报错）。
+    失败：进程在就绪之前就退出了，或超过 timeout 秒的总时限——webui.bat
+    失败路径的 exit code 并不可靠，不能拿返回码当判断依据；总时限默认
+    5400 秒 = 90 分钟，torch 几个 GB 的慢网也要装得下）。
 
     部署期间需要用户做的决策（venv 版本不一致）已经在此之前处理完，
     这个方法只管跑和看。
@@ -1841,7 +1924,7 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
         )
     except OSError as e:
         log(f"[部署] 无法启动进程: {e}\n")
-        return False
+        return False, ""
     proc = self._deploy_proc
     # 单独起一个读线程：主循环用队列拿输出并轮询取消标记。
     # 不能直接在主循环里 read()——管道没输出时 read 会一直阻塞，
@@ -1896,8 +1979,13 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
                 last_probe_ts = now
                 for p in probe_ports:
                     try:
-                        with socket.create_connection(("127.0.0.1", p), timeout=0.5):
-                            pass
+                        with socket.create_connection(("127.0.0.1", p), timeout=0.5) as s:
+                            # 光 TCP 连通不够——可能是误占端口的其他服务，
+                            # 发个 HTTP 请求确认对端真的是 Web 服务
+                            s.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                            resp = s.recv(64)
+                        if not resp.startswith(b"HTTP/"):
+                            continue
                     except OSError:
                         continue
                     ready = True
@@ -1917,7 +2005,7 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
             text = cm.decode_process_output(chunk)
             log(text)
             combined = tail + text
-            tail = combined[-2000:]
+            tail = combined[-8000:]
             if _URL_RE.search(combined):
                 ready = True
                 log("\n[部署] 检测到 WebUI 监听地址，首次运行验证通过\n")
@@ -1933,7 +2021,20 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
                 log("[部署] 等待临时进程退出超时（15 秒），进程可能仍有残留，"
                     "如后续端口被占用请手动结束 python.exe\n")
         self._deploy_proc = None
-    return ready
+    return ready, tail
+
+
+# webui.bat 失败输出里的网络类特征。只有这些才值得换源重试；
+# 版本冲突/磁盘满/权限错误换源纯属浪费时间。
+_NETWORK_FAIL_RE = re.compile(
+    r"ReadTimeout|ConnectTimeout|ConnectionError|SSLError|"
+    r"Failed to establish|Connection reset|timed out|"
+    r"Couldn't install PyTorch|No matching distribution|"
+    r"Temporary failure|10054|10060|10061", re.IGNORECASE)
+
+
+def _looks_like_network_failure(tail_text):
+    return bool(tail_text) and bool(_NETWORK_FAIL_RE.search(tail_text))
 
 
 def _api_deploy_venv_check(self, target, branch):
