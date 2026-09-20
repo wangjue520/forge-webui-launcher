@@ -480,6 +480,18 @@ def build_launch_env_overrides(cfg, root_dir):
         import mirror_manager as mm
         if mm.resolve_mode(cfg):
             overrides.update(mm.pip_env_overrides(True))
+            # torch 专用的关键一步：Forge 装 torch 时在命令行显式传了
+            # --extra-index-url，会盖掉 PIP_EXTRA_INDEX_URL 环境变量，只能靠
+            # Forge 原生支持的 TORCH_INDEX_URL 覆盖（否则国内裸连
+            # download.pytorch.org 必炸 "Couldn't install PyTorch"）。
+            # cuda tag 从克隆下来的 launch_utils.py 里提取，保证跟 Forge
+            # 当前版本要装的完全一致；提取不到就不注入，保持官方默认。
+            # 用户自己在系统环境里设过 TORCH_COMMAND / TORCH_INDEX_URL 的
+            # 不插手——用户显式配置优先级最高。
+            if "TORCH_COMMAND" not in os.environ and "TORCH_INDEX_URL" not in os.environ:
+                torch_mirror = mm.forge_torch_mirror_index(root_dir)
+                if torch_mirror:
+                    overrides["TORCH_INDEX_URL"] = torch_mirror
     except Exception:
         pass  # 加速是锦上添花，任何异常都不该影响正常启动
 

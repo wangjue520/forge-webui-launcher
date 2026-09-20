@@ -20,6 +20,7 @@ IP 查询接口全部失败时退回"并发请求国内/国外站点比延迟"�
 这正是想要的行为（代理下走原站通常更快）。
 """
 import concurrent.futures
+import os
 import re
 import time
 
@@ -49,8 +50,15 @@ PYPI_MIRRORS = [
 ]
 
 # PyTorch 的 cu1xx wheel 不在普通 PyPI 里，需要专门的镜像路径。
-# 清华镜像把 download.pytorch.org 的 whl 目录整个同步了过来。
-PYTORCH_MIRROR_BASE = "https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels"
+# 上海交大是 download.pytorch.org/whl 的完整同步，且更新最及时（2026 年实测
+# 只有它同步了 cu130，清华/阿里/中科大/南大/北外都还没有）；清华作为备选。
+PYTORCH_MIRROR_BASES = [
+    "https://mirror.sjtu.edu.cn/pytorch-wheels",
+    "https://mirrors.tuna.tsinghua.edu.cn/pytorch-wheels",
+]
+
+# Forge launch.py 里官方 torch 索引的固定前缀，用于识别 cuda tag
+PYTORCH_OFFICIAL_WHL = "https://download.pytorch.org/whl"
 
 # HuggingFace 镜像：hf-mirror.com 是国内广泛使用的 HF 反向代理，
 # 路径结构跟官方完全一致，只需替换域名。
@@ -242,35 +250,65 @@ def huggingface_url(url, use_mirror):
     return url.replace("https://huggingface.co", HF_MIRROR)
 
 
-def torch_index_url(use_mirror, cuda_tag):
-    """
-    torch 的 cu1xx wheel 索引地址。
-    cuda_tag 形如 "cu121" / "cu126"，跟 Forge 自己请求的版本保持一致。
-    """
-    if not use_mirror:
-        return f"https://download.pytorch.org/whl/{cuda_tag}"
-    return f"{PYTORCH_MIRROR_BASE}/{cuda_tag}"
+# Forge modules/launch_utils.py 里默认 torch 索引的写法（Neo/Classic 相同）：
+#   torch_index_url = os.environ.get("TORCH_INDEX_URL", "https://download.pytorch.org/whl/cu130")
+_LAUNCH_UTILS_INDEX_RE = re.compile(
+    r'''TORCH_INDEX_URL["']\s*,\s*["']([^"']+)["']''')
+
+# cuXX/cpu 这类 tag 的合法形式，防止正则吃到奇怪的东西拼出坏 URL
+_CUDA_TAG_RE = re.compile(r'^(cu[0-9]+|cpu)$')
 
 
-def pip_env_overrides(use_mirror, cuda_tag=None):
+def forge_torch_mirror_index(root_dir):
+    """
+    读取 <root>/modules/launch_utils.py，提取 Forge 默认 TORCH_INDEX_URL 里的
+    cuda tag，返回对应的国内镜像索引地址；读不到/不是官方 pytorch 索引就返回
+    None（调用方不注入，Forge 保持官方默认）。
+
+    为什么必须走 TORCH_INDEX_URL 而不是 PIP_EXTRA_INDEX_URL：
+    Forge 装 torch 时在 pip 命令行显式传了 --extra-index-url，pip 里命令行参数
+    的优先级高于环境变量，注入 PIP_EXTRA_INDEX_URL 根本到不了 torch 这一步——
+    这是国内用户部署报 "Couldn't install PyTorch / Error code: 1" 的根因。
+    Forge 原生支持 TORCH_INDEX_URL 环境变量覆盖（Neo/Classic 都有），用它才行。
+    """
+    launch_utils = os.path.join(root_dir, "modules", "launch_utils.py")
+    try:
+        with open(launch_utils, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return None
+    m = _LAUNCH_UTILS_INDEX_RE.search(text)
+    if not m:
+        return None
+    default_url = m.group(1).strip()
+    if not default_url.startswith(PYTORCH_OFFICIAL_WHL + "/"):
+        return None  # XPU/AMD 等非官方 CUDA 索引，不动它
+    tag = default_url[len(PYTORCH_OFFICIAL_WHL) + 1:].strip("/")
+    if not _CUDA_TAG_RE.match(tag):
+        return None
+    return f"{PYTORCH_MIRROR_BASES[0]}/{tag}"
+
+
+def pip_env_overrides(use_mirror):
     """
     生成注入给 webui.bat 子进程的环境变量，让 Forge 内部自己调用的 pip
-    也走镜像——这是最关键的一环：torch 那 2.4GB 是 Forge 的 launch.py
+    也走镜像——这是最关键的一环：torch 等几个 GB 的包是 Forge 的 launch.py
     自己装的，不经过我们的代码，只能通过环境变量影响它。
 
-    PIP_INDEX_URL / PIP_EXTRA_INDEX_URL 是 pip 官方支持的环境变量，
-    优先级低于命令行参数，所以不会覆盖 Forge 显式指定的 --extra-index-url，
-    但能改变默认索引，大部分包因此走镜像。
+    PIP_INDEX_URL 是 pip 官方支持的环境变量，优先级低于命令行参数，所以不会
+    覆盖 Forge 显式指定的 --extra-index-url（torch 走 TORCH_INDEX_URL 处理，
+    见 forge_torch_mirror_index），但能改变默认索引，大部分包因此走镜像。
     """
     if not use_mirror:
         return {}
     _name, index = PYPI_MIRRORS[0]
-    env = {
+    return {
         "PIP_INDEX_URL": index,
         # 断点续传和超时放宽，2GB 级别的包在国内网络下很容易触发默认超时
         "PIP_RETRIES": "5",
         "PIP_TIMEOUT": "60",
+        # 用户 pip.ini 里可能残留着失效的镜像/代理配置（"所有源连环失败"的常见
+        # 来源），注入空配置文件让 pip 只受我们显式注入的变量影响。需要自定义
+        # pip.ini 的高级用户可以在界面上选「总是用原站」，本函数不会被调用。
+        "PIP_CONFIG_FILE": os.devnull,
     }
-    if cuda_tag:
-        env["PIP_EXTRA_INDEX_URL"] = torch_index_url(True, cuda_tag)
-    return env
