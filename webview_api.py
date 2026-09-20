@@ -87,6 +87,17 @@ NEO_REPO = "https://github.com/Haoming02/sd-webui-forge-classic.git"
 NEO_BRANCH = "neo"
 _NEO_KEYS = ("neo", "neo2")
 
+# 自动部署反复失败时的最后退路：完整 Forge Neo 整合包（百度网盘）。
+# 用户手动下载解压后，在「环境部署」页选择解压目录再点「开始部署」，
+# 会检测到已有安装、跳过源码下载，只补齐环境。
+PAN_FALLBACK_TEXT = (
+    "备用方案：如果自动部署反复失败，可以手动下载完整的 Forge Neo 整合包——\n\n"
+    "百度网盘: https://pan.baidu.com/s/1SV-YxTe-5DhA4PPjDk-neQ?pwd=26u8\n"
+    "提取码: 26u8\n\n"
+    "下载解压后，在「环境部署」页的「安装目录」里选择解压出来的文件夹，"
+    "再点一次「开始部署」即可（检测到已有安装会自动跳过源码下载，只补齐环境）。"
+)
+
 DEPLOY_BRANCH_OPTIONS = [
     ("Neo 版（Haoming02 社区维护分支，推荐）", "neo2"),
     ("常规版 / Classic（lllyasviel 官方仓库）", "classic"),
@@ -1592,6 +1603,9 @@ def _deploy_flow(self, target, branch, use_portable):
                 log(f"\n[部署] 从该地址拉取失败（退出码 {rc}），换下一个地址重试 ...\n")
             if not fetched:
                 log("\n[部署] 所有候选地址都拉取失败，请检查网络/代理设置后重新点击「开始部署」\n")
+                self._emit("deploy", "error", title="源码下载失败",
+                           text="从 GitHub 及所有加速代理拉取 Forge 源码都失败了。"
+                                "请检查网络/代理后重新点击「开始部署」。\n\n" + PAN_FALLBACK_TEXT)
                 return
 
             if self._deploy_cancel.is_set():
@@ -1701,6 +1715,10 @@ def _deploy_flow(self, target, branch, use_portable):
                 raise _DeployCancelled()
             log("\n[部署] 依赖安装或启动失败（上面的日志应有具体报错），"
                 "排查修复后可以重新点击「开始部署」继续（已完成的步骤会被跳过）\n")
+            self._emit("deploy", "error", title="部署失败",
+                       text="依赖安装或启动失败（部署日志里应有具体报错）。"
+                            "排查修复后重新点击「开始部署」即可继续，已完成的步骤会自动跳过。\n\n"
+                            + PAN_FALLBACK_TEXT)
             return
         log("\n[部署] WebUI 已能正常启动（验证用临时进程已停止），继续收尾 ...\n")
 
@@ -1738,11 +1756,13 @@ def _deploy_flow(self, target, branch, use_portable):
         self._emit("deploy", "cancelled")
     except pe.PortableEnvError as e:
         log(f"\n[部署] 便携环境下载失败: {e}\n")
-        self._emit("deploy", "error", title="便携环境下载失败", text=str(e))
+        self._emit("deploy", "error", title="便携环境下载失败",
+                   text=str(e) + "\n\n" + PAN_FALLBACK_TEXT)
     except Exception:
         detail = traceback.format_exc()
         log(f"\n[部署] 发生未预期的错误:\n{detail}\n")
-        self._emit("deploy", "error", title="部署失败", text=detail[-1500:])
+        self._emit("deploy", "error", title="部署失败",
+                   text=detail[-1500:] + "\n\n" + PAN_FALLBACK_TEXT)
     finally:
         self._deploy_running = False
         self._deploy_proc = None
