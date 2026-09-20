@@ -416,6 +416,22 @@
       catch (e) { console.error("页面初始化失败: " + name, e); }
     }
 
+    // 内置 HTTP 服务器偶发丢请求（见 webview_main.py 的 backlog 补丁），个别
+    // js 没加载上时对应页面的按钮会完全没反应。缺模块就自动刷新一次——此时
+    // 浏览器缓存已热，第二次几乎必好；用 sessionStorage 保证只刷一次不死循环
+    const EXPECTED_PAGES = ["launch", "settings", "deploy", "civitai", "models", "extensions", "wd14", "meta"];
+    const missing = EXPECTED_PAGES.filter((p) => !App.pages[p]);
+    if (missing.length) {
+      console.error("页面模块未加载完整，自动刷新一次:", missing);
+      if (!sessionStorage.getItem("reloaded-for-missing-modules")) {
+        sessionStorage.setItem("reloaded-for-missing-modules", "1");
+        location.reload();
+        return;
+      }
+      App.toast("部分页面加载失败（" + missing.join("、") + "），建议重启启动器", "error", 8000);
+    }
+    sessionStorage.removeItem("reloaded-for-missing-modules");
+
     const startPage = new URLSearchParams(location.search).get("page");
     App.showPage(PAGE_TITLES[startPage] ? startPage : "launch");
     App.ready = true;

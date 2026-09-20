@@ -25,6 +25,43 @@ from webview_api import LauncherApi
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _patch_http_server_backlog():
+    """
+    pywebview 用 wsgiref 起内置 HTTP 服务器给界面供文件，wsgiref 默认监听队列
+    （backlog）只有 5。页面加载时浏览器同时发起十几个 js/css 请求，系统一忙
+    （杀软扫描等）accept 不过来，多余的连接直接被拒——表现为随机几个页面
+    模块没加载上：按钮没反应、功能缺失，重启又好了（用户反馈"第一次打不开
+    第二次就好"的根源之一）。这里把 backlog 提到 128 并开 daemon_threads，
+    其余行为与 pywebview 自带的 ThreadedAdapter 完全一致。
+    结构对不上（pywebview 改版）就静默退回默认实现，绝不影响启动。
+    """
+    try:
+        import bottle
+        from socketserver import ThreadingMixIn
+        from wsgiref.simple_server import WSGIRequestHandler, WSGIServer, make_server
+        import webview.http as wh
+
+        class BigBacklogAdapter(bottle.ServerAdapter):
+            def run(self, handler):
+                if self.quiet:
+                    class QuietHandler(WSGIRequestHandler):
+                        def log_request(*args, **_):
+                            pass
+                    self.options["handler_class"] = QuietHandler
+
+                class ThreadAdapter(ThreadingMixIn, WSGIServer):
+                    daemon_threads = True
+                    request_queue_size = 128
+
+                server = make_server(self.host, self.port, handler,
+                                     server_class=ThreadAdapter, **self.options)
+                server.serve_forever()
+
+        wh.ThreadedAdapter = BigBacklogAdapter
+    except Exception:
+        pass
+
+
 def _bind_dom_events(window, api):
     """绑定拖放事件。
 
@@ -48,6 +85,7 @@ def _bind_dom_events(window, api):
 
 
 def main():
+    _patch_http_server_backlog()
     api = LauncherApi()
     window = webview.create_window(
         "Forge WebUI 启动器",

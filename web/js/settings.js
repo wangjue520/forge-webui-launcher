@@ -78,6 +78,7 @@
 
     renderInfo(e) {
       this.lastInfo = e;
+      this._doneSeq = this._checkSeq;  // 喂狗：结果到了，超时看门狗不再触发
       if (!e.ok) {
         $("#up-remote").textContent = "检查失败";
         this.setStatus(e.error || "检查更新失败", true);
@@ -95,6 +96,15 @@
 
     async check(silent) {
       if (!silent) { this.setStatus("正在检查更新…"); $("#up-remote").textContent = "检查中…"; }
+      // 看门狗：后端任何异常路径（事件丢失/线程死掉）都会让"正在检查"挂到天荒地老，
+      // 60 秒没收到 update_info 就按失败显示，让用户能重试而不是干等
+      const mySeq = (this._checkSeq = (this._checkSeq || 0) + 1);
+      setTimeout(() => {
+        if (this._checkSeq === mySeq && this._doneSeq !== mySeq) {
+          $("#up-remote").textContent = "检查超时";
+          this.setStatus("检查超时：60 秒没有收到结果，请检查网络后重试", true);
+        }
+      }, 60000);
       try { await App.api.launcher_check_update(); } // 结果走 launcher/update_info 事件
       catch (e) { this.setStatus("检查失败：" + e.message, true); }
     },
