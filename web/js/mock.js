@@ -1,13 +1,33 @@
-/* mock.js — 无 pywebview 环境（如直接双击 html 或截图预览）时的桩实现。
-   只在 window.pywebview 不存在时生效，真实运行时被自动跳过。
+/* mock.js — 演示数据桩，仅在显式预览（地址带 ?mock=1）且没有 pywebview 时生效。
 
-   注意：这里绝不能返回任何看起来像"真实检测结果"的数据（路径、已安装状态等），
-   否则桥接层加载失败时用户会把演示数据当成自己电脑的真实情况
-   （真实案例：mock 里写死了 F:\ 路径，用户在根本没有 F 盘的电脑上
-   看到"已检测到 WebUI 安装"）。所有演示数据必须明显标注，且页面底部
-   会常驻一条"预览模式"提示条。 */
+   为什么不能靠"加载时没有 window.pywebview"就自动启用：
+   pywebview 的桥接对象是异步注入的，注入比页面脚本慢半拍的机器上，
+   mock 会抢先接管整个界面，把假数据当成真实检测结果展示（真实案例：
+   一台没有 F 盘的电脑上显示"F:\ 下已检测到 WebUI 安装"）。
+   所以正式运行时这里什么都不做——真连不上后端只给提示条，绝不喂假数据。 */
 (function () {
   if (window.pywebview) return;
+
+  function showBanner(text) {
+    const bar = document.createElement("div");
+    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;" +
+      "background:#7f1d1d;color:#fecaca;padding:8px 14px;font-size:13px;" +
+      "text-align:center;line-height:1.5;box-shadow:0 -2px 8px rgba(0,0,0,.4);";
+    bar.textContent = text;
+    document.body.appendChild(bar);
+  }
+
+  if (!/[?&]mock=1\b/.test(location.search)) {
+    // 非预览：2 秒后桥接还没来才是真失败（桥接注入本身慢一点很正常）
+    window.addEventListener("DOMContentLoaded", () => {
+      setTimeout(() => {
+        if (window.pywebview) return;
+        showBanner("未能连接到启动器后端（pywebview 桥接未建立）。请关闭本窗口，" +
+                   "通过 start一键启动.bat 重新打开；反复出现请检查 WebView2 运行时是否正常。");
+      }, 2000);
+    });
+    return;
+  }
 
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
 
@@ -254,15 +274,10 @@
   });
 
   // 让 pywebviewready 事件在预览环境也能触发；同时常驻一条明显的
-  // "预览模式"提示条——桥接层加载失败时用户必须知道界面上的都是假数据
+  // "预览模式"提示条——演示数据绝不能被当成真实检测结果
   window.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => window.dispatchEvent(new Event("pywebviewready")), 100);
-    const bar = document.createElement("div");
-    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;" +
-      "background:#7f1d1d;color:#fecaca;padding:8px 14px;font-size:13px;" +
-      "text-align:center;line-height:1.5;box-shadow:0 -2px 8px rgba(0,0,0,.4);";
-    bar.textContent = "预览模式：未能连接到启动器后端，页面上的路径、检测结果均为演示数据，" +
-      "不代表这台电脑的真实情况。请通过 start一键启动.bat 正常打开启动器。";
-    document.body.appendChild(bar);
+    showBanner("预览模式（?mock=1）：未连接到启动器后端，页面上的路径、" +
+               "检测结果均为演示数据，不代表这台电脑的真实情况。");
   });
 })();

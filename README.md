@@ -101,6 +101,9 @@ python webview_main.py
 
 ## 前端联调小技巧
 
-直接用浏览器打开 `web/index.html` 也能预览界面：`js/mock.js` 会在没有
-pywebview 的环境里注入一套假数据。支持 `?page=xxx` 直接定位到某个页面，
-例如 `web/index.html?page=models`。
+用浏览器打开 `web/index.html?mock=1` 可以预览界面：`js/mock.js` 会注入一套
+标注了"演示数据"的假数据，页面底部有常驻提示条。**不带 `?mock=1` 时 mock 不会
+启用**——这是故意的：pywebview 桥接是异步注入的，靠"加载时还没有桥接对象"来
+自动启用 mock 会和真实注入赛跑，慢机器上会把假数据当真。正式运行下若 2 秒后
+桥接仍未建立，只显示"未能连接后端"提示条。支持 `?page=xxx` 直接定位到某个页面，
+例如 `web/index.html?mock=1&page=models`。
