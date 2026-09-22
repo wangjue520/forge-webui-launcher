@@ -1346,19 +1346,17 @@ def _api_deploy_env_detect(self):
 
     git_path = shutil.which("git")
     py_path = shutil.which("python") or shutil.which("python3")
-    # 勾选了便携环境时，系统没装 Python/Git 不影响部署——直接告诉用户，
-    # 否则"未检测到 Python，请先安装"会误导他们去装根本不需要的东西
-    portable = bool(self.cfg.get("use_portable_env", True))
+    # 系统里没装 Python/Git 不再是部署的门槛：检测不到就在部署时自动下载
+    # 便携版补上（见 _deploy_flow 的 need_python/need_git 兜底），所以这里
+    # 直接如实告知"将自动下载"，而不是叫用户自己去装
     git_text = (f"已检测到 ({_ver([git_path, '--version']) or git_path})" if git_path
-                else "未检测到系统 Git（已勾选便携环境，部署时会自动下载，不影响）" if portable
-                else "未检测到 Git，请先安装：https://git-scm.com/download/win")
+                else "未检测到系统 Git——不影响，部署时会自动下载便携版 Git")
     py_text = (f"已检测到 ({_ver([py_path, '--version']) or py_path})" if py_path
-               else "未检测到系统 Python（已勾选便携环境，部署时会自动下载，不影响）" if portable
-               else "未检测到 Python，请先安装：https://www.python.org/downloads/")
+               else "未检测到系统 Python——不影响，部署时会自动下载便携版 Python")
     return {
         "ok": True,
-        "git": {"found": bool(git_path) or portable, "text": git_text},
-        "python": {"found": bool(py_path) or portable, "text": py_text},
+        "git": {"found": True, "text": git_text},
+        "python": {"found": True, "text": py_text},
     }
 
 
@@ -1423,16 +1421,19 @@ def _api_deploy_precheck(self, target, branch, use_portable):
                     "无法从这里修复。建议换成不含这些字符的路径。",
         })
 
-    if not use_portable:
-        if not ((self.cfg.get("custom_git_path") or "").strip() or shutil.which("git")):
-            issues.append({"level": "error",
-                           "text": "未检测到 Git，请先安装：https://git-scm.com/download/win\n"
-                                   "（或者勾选「自动下载便携版 Python + Git」跳过这个要求；"
-                                   "也可以在「设置」页手动指定 Git 路径）"})
-        if not (shutil.which("python") or shutil.which("python3")):
-            issues.append({"level": "error",
-                           "text": "未检测到 Python，请先安装：https://www.python.org/downloads/\n"
-                                   "（或者勾选「自动下载便携版 Python + Git」跳过这个要求）"})
+    # 系统没装 Python/Git 不再拦截部署：部署流程会自动下载便携版补上
+    # （_deploy_flow 里的 need_python/need_git 兜底），这里只作提醒
+    missing = []
+    if not ((self.cfg.get("custom_git_path") or "").strip() or shutil.which("git")):
+        missing.append("Git")
+    if not (shutil.which("python") or shutil.which("python3")):
+        missing.append("Python")
+    if missing:
+        issues.append({
+            "level": "warn", "id": "auto_portable_env",
+            "text": f"没有检测到系统 {' 和 '.join(missing)}。不用担心——部署时会自动"
+                    "下载便携版补上（约 100~150MB，只装进安装目录，不影响系统）。",
+        })
 
     # 硬件/磁盘/杀软等环境预检（几秒就能查完，放到下载几个 GB 之前）
     try:
@@ -1523,11 +1524,18 @@ def _deploy_flow(self, target, branch, use_portable):
 
         bundled_python = os.path.join(target, "python", "python.exe")
         bundled_git = os.path.join(target, "git", "cmd", "git.exe")
-        need_python = use_portable and not os.path.exists(bundled_python)
-        need_git = use_portable and not os.path.exists(bundled_git)
+        # 便携版下载的触发条件：用户勾选了便携环境，或者系统里根本检测不到。
+        # 后者是自动兜底——没装 Python/Git 的电脑不该被一句"请先安装"拦在门外
+        custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
+        has_sys_git = bool(shutil.which("git")) or bool(custom_git and os.path.exists(custom_git))
+        has_sys_python = bool(shutil.which("python") or shutil.which("python3"))
+        need_python = not os.path.exists(bundled_python) and (use_portable or not has_sys_python)
+        need_git = not os.path.exists(bundled_git) and (use_portable or not has_sys_git)
 
         # ---- 1. 便携版 Python / Git ----
         if need_python or need_git:
+            if not use_portable:
+                log("[部署] 系统未检测到 Python/Git，自动改为下载便携版补齐\n")
             log(f"[部署] 准备下载便携环境 (Python: {'需要' if need_python else '已存在，跳过'}, "
                 f"Git: {'需要' if need_git else '已存在，跳过'})\n")
             self._deploy_portable_env(target, branch, need_python, need_git, log, progress)

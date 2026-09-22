@@ -1,12 +1,18 @@
 /* mock.js — 无 pywebview 环境（如直接双击 html 或截图预览）时的桩实现。
-   只在 window.pywebview 不存在时生效，真实运行时被自动跳过。 */
+   只在 window.pywebview 不存在时生效，真实运行时被自动跳过。
+
+   注意：这里绝不能返回任何看起来像"真实检测结果"的数据（路径、已安装状态等），
+   否则桥接层加载失败时用户会把演示数据当成自己电脑的真实情况
+   （真实案例：mock 里写死了 F:\ 路径，用户在根本没有 F 盘的电脑上
+   看到"已检测到 WebUI 安装"）。所有演示数据必须明显标注，且页面底部
+   会常驻一条"预览模式"提示条。 */
 (function () {
   if (window.pywebview) return;
 
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
 
   const mockConfig = {
-    webui_root: "F:\\sd-webui-forge-aki",
+    webui_root: "",
     custom_python_path: "",
     custom_git_path: "",
     webui_branch: "neo2",
@@ -88,9 +94,9 @@
     ],
     vae_neo2: [
       { label: "自动", key: "auto" },
-      { label: "FP16 --vae-in-fp16", key: "fp16" },
       { label: "FP32 --vae-in-fp32", key: "fp32" },
       { label: "BF16 --vae-in-bf16", key: "bf16" },
+      { label: "FP16 --vae-in-fp16", key: "fp16" },
     ],
     text_enc_neo2: [
       { label: "自动", key: "auto" },
@@ -107,47 +113,49 @@
     ],
   };
 
+  // 预览模式下所有"检测/查询"类接口都返回空或明确的演示提示，
+  // 绝不伪造"检测到安装/检测到便携版"这类会被当真的结论。
   window.pywebview = {
     api: {
       get_state: () => ok({
         config: mockConfig,
-        cmd_args: "--xformers",
+        cmd_args: "",
         is_windows: true,
         launch: { state: "stopped", text: "尚未启动", url: null },
-        launcher: { version: "2.0.8", commit: "e04e5a6" },
-        mirror_status: "当前：已检测为国内网络，下载走镜像加速",
+        launcher: { version: "0.0.0", commit: "preview" },
+        mirror_status: "（预览模式，无真实检测结果）",
         settings_schema: schema,
         deploy_branches: [
-          { label: "Neo 2.0（新架构，推荐）", key: "neo2" },
-          { label: "经典版（classic）", key: "classic" },
+          { label: "Neo 版（Haoming02 社区维护分支，推荐）", key: "neo2" },
+          { label: "常规版 / Classic（lllyasviel 官方仓库）", key: "classic" },
         ],
         settings_branches: [
-          { label: "Neo 2.0（推荐）", key: "neo2" },
-          { label: "Neo", key: "neo" },
-          { label: "经典版（classic）", key: "classic" },
+          { label: "Neo 版（新版参数，推荐）", key: "neo2" },
+          { label: "Neo 版（旧版参数）", key: "neo" },
+          { label: "常规版 / Classic", key: "classic" },
         ],
       }),
-      update_config: () => ok({ ok: true, cmd_args: "--xformers" }),
-      launch_env_detect: () => ok({ python: "F:\\sd-webui-forge-aki\\python\\python.exe（便携版）", git: "F:\\sd-webui-forge-aki\\git\\cmd\\git.exe（便携版）" }),
-      launch_precheck: () => ok({ ok: true, issues: [] }),
-      choose_directory: () => ok({ ok: true, path: "F:\\some\\folder" }),
+      update_config: () => ok({ ok: true, cmd_args: "" }),
+      launch_env_detect: () => ok({ python: "", git: "" }),
+      launch_precheck: () => ok({ ok: false, issues: [{ level: "error", text: "预览模式：未连接后端，无法检测" }] }),
+      choose_directory: () => ok({ ok: true, path: "" }),
       choose_images: () => ok({ ok: true, paths: [] }),
-      models_categories: () => ok({ ok: true, root: "F:\\sd-webui-forge-aki\\models", categories: [
+      models_categories: () => ok({ ok: true, root: "", categories: [
         { label: "Stable-diffusion", is_lora: false }, { label: "Lora", is_lora: true },
         { label: "VAE", is_lora: false }, { label: "ControlNet", is_lora: false },
         { label: "embeddings", is_lora: false }, { label: "hypernetworks", is_lora: false },
         { label: "upscaler", is_lora: false }] }),
       models_list: () => ok({ ok: true, is_lora: false, files: [
-        { path: "F:\\m\\v1-5.safetensors", rel: "v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
-        { path: "F:\\m\\pony.safetensors", rel: "ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
+        { path: "", rel: "（演示数据）v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
+        { path: "", rel: "（演示数据）ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
       ], total: 2, no_info: 1, is_lora: false }),
-      ext_list: () => ok({ ok: true, has_root: true, items: [
-        { name: "ADetailer", desc: "脸部/手部自动修复", installed: true },
-        { name: "Tag Autocomplete", desc: "提示词标签自动补全", installed: false },
-        { name: "Prompt All-in-One", desc: "提示词输入框全家桶", installed: false },
+      ext_list: () => ok({ ok: true, has_root: false, items: [
+        { name: "ADetailer（演示）", desc: "脸部/手部自动修复", installed: false },
+        { name: "Tag Autocomplete（演示）", desc: "提示词标签自动补全", installed: false },
+        { name: "Prompt All-in-One（演示）", desc: "提示词输入框全家桶", installed: false },
       ] }),
       wd14_models: () => ok({ ok: true, model_ready: false, models: [
-        { key: "wd-vit-tagger-v3", label: "wd-vit-tagger-v3（默认，速度快，~380MB）", cached: true,
+        { key: "wd-vit-tagger-v3", label: "wd-vit-tagger-v3（默认，速度快，~380MB）", cached: false,
           urls: ["https://hf-mirror.com/SmilingWolf/wd-vit-tagger-v3/tree/main",
                  "https://huggingface.co/SmilingWolf/wd-vit-tagger-v3/tree/main"] },
         { key: "wd-eva02-large-tagger-v3", label: "wd-eva02-large-tagger-v3（精度更高）", cached: false,
@@ -165,7 +173,7 @@
       meta_deep: () => ok({ ok: true, has_meta: false }),
       reveal_image: () => ok({ ok: true }),
       meta_load: () => ok({
-        ok: true, path: "F:\\outputs\\txt2img\\00012-1234567890.png",
+        ok: true, path: "（预览环境假数据）example.png",
         preview: null, preview_size: 2 * 1048576, source: "NovelAI", tone: "nai",
         file_info: "832×1216　·　PNG　·　1420 KB", has_meta: true, from_sidecar: false,
         prompt: "2girls, school uniform, cherry blossoms, best quality",
@@ -190,7 +198,7 @@
             scope: "civitai", type: "info", ok: true,
             info: {
               source: "liblib",
-              model_name: "F.1-黑神话悟空-Lora",
+              model_name: "（演示数据）F.1-黑神话悟空-Lora",
               model_type: "LoRA（按文件大小猜测）",
               version_name: "FLUX-黑神话悟空-lora",
               base_model: "FLUX.1",
@@ -202,13 +210,13 @@
                 { name: "flux_wukong_v2.safetensors", version_name: "FLUX-黑神话悟空-lora v2", sizeKB: 245760, primary: false, unavailable: false },
               ],
             },
-            folder: "models/Lora", dest: "F:\\sd-webui-forge-aki\\models\\Lora",
+            folder: "models/Lora", dest: "（预览模式：请先设置 WebUI 根目录）",
           } : {
             scope: "civitai", type: "info", ok: true,
-            info: { source: "civitai", model_name: "示例模型", model_type: "LORA", version_name: "v1.0", base_model: "SDXL 1.0",
+            info: { source: "civitai", model_name: "示例模型（演示数据）", model_type: "LORA", version_name: "v1.0", base_model: "SDXL 1.0",
                     page_url: "https://civitai.com/models/12345?modelVersionId=67890",
                     files: [{ name: "example.safetensors", sizeKB: 233472, primary: true }] },
-            folder: "models/Lora", dest: "F:\\sd-webui-forge-aki\\models\\Lora",
+            folder: "models/Lora", dest: "（预览模式：请先设置 WebUI 根目录）",
           };
           window.App && window.App.onEvent(evt);
         }, 200);
@@ -216,23 +224,22 @@
       },
       settings_verify_liblib_token: (t) => t ? ok({ ok: true, nickname: "预览用户" }) : ok({ ok: true, nickname: "" }),
       deploy_env_detect: () => ok({ ok: true,
-        git: { found: true, text: "已检测到 (git version 2.47.0.windows.1)" },
-        python: { found: true, text: "未检测到系统 Python（已勾选便携环境，部署时会自动下载，不影响）" } }),
-      deploy_check_dir: () => ok({ ok: true, status: "ok", message: "检测到该目录已经是一个 WebUI 安装（存在 webui.bat），可直接点击部署来补齐/更新虚拟环境依赖" }),
+        git: { found: false, text: "（预览模式，无真实检测结果）" },
+        python: { found: false, text: "（预览模式，无真实检测结果）" } }),
+      deploy_check_dir: () => ok({ ok: true, status: "warn", message: "预览模式：未连接后端，无法检测目录" }),
       models_detail: () => ok({ ok: true, preview: null,
-        file: { name: "ponyDiffusionV6.safetensors", size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
+        file: { name: "ponyDiffusionV6.safetensors（演示）", size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
         civitai: { modelName: "Pony Diffusion V6 XL", modelType: "Checkpoint", versionName: "V6", baseModel: "Pony", sha256_short: "67ab2fd684ec...",
           modelId: 257749, versionId: 290640, liblibUuid: "", liblibVersionUuid: "",
           trainedWords: ["score_9, score_8_up, score_7_up", "anthro pony"], trainedWordsSource: "civitai" },
         safetensors: { kind: "Checkpoint", arch: "SDXL", note: "UNet 结构符合 SDXL 特征", train_rows: [["ss_resolution", "1024x1024"]], tags: ["anime", "score_9", "score_8_up"] } }),
       models_set_trained_words: (p, w) => ok({ ok: true, count: (w || []).length }),
-      models_bind_liblib: () => ok({ ok: true, modelName: "示例 LoRA", words: 2 }),
-      open_output_folder: (which) => ok({ ok: true, path: "F:\\sd-webui-forge-aki\\outputs" }),
-      output_dirs_info: () => ok({ ok: true, root: "F:\\sd-webui-forge-aki\\outputs",
-        txt2img: "F:\\sd-webui-forge-aki\\outputs\\txt2img-images",
-        img2img: "F:\\sd-webui-forge-aki\\outputs\\img2img-images",
-        date_subdir: true, exists: { root: true, txt2img: true, img2img: true } }),
-      wd14_add_clipboard_image: () => ok({ ok: true, path: "F:\\launcher\\clipboard_inbox\\paste_20260909.png" }),
+      models_bind_liblib: () => ok({ ok: true, modelName: "示例 LoRA（演示）", words: 2 }),
+      open_output_folder: (which) => ok({ ok: false, error: "预览模式：未连接后端" }),
+      output_dirs_info: () => ok({ ok: true, root: "",
+        txt2img: "", img2img: "",
+        date_subdir: true, exists: { root: false, txt2img: false, img2img: false } }),
+      wd14_add_clipboard_image: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       _noop: () => ok({}),
     },
   };
@@ -246,8 +253,16 @@
     },
   });
 
-  // 让 pywebviewready 事件在预览环境也能触发
+  // 让 pywebviewready 事件在预览环境也能触发；同时常驻一条明显的
+  // "预览模式"提示条——桥接层加载失败时用户必须知道界面上的都是假数据
   window.addEventListener("DOMContentLoaded", () => {
     setTimeout(() => window.dispatchEvent(new Event("pywebviewready")), 100);
+    const bar = document.createElement("div");
+    bar.style.cssText = "position:fixed;left:0;right:0;bottom:0;z-index:99999;" +
+      "background:#7f1d1d;color:#fecaca;padding:8px 14px;font-size:13px;" +
+      "text-align:center;line-height:1.5;box-shadow:0 -2px 8px rgba(0,0,0,.4);";
+    bar.textContent = "预览模式：未能连接到启动器后端，页面上的路径、检测结果均为演示数据，" +
+      "不代表这台电脑的真实情况。请通过 start一键启动.bat 正常打开启动器。";
+    document.body.appendChild(bar);
   });
 })();
