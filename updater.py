@@ -11,7 +11,7 @@
    解压后覆盖到启动器目录——但跳过用户私有/运行期生成的内容
    （launcher_config.json、便携 python/、wd14_venv/ 等，见 PRESERVE_TOP）。
 
-版本号规则：BASE_VERSION + 提交数（如 2.0.42），每次更新自动累加、
+版本号规则：BASE_VERSION + 提交数（如 3.0.42），每次更新自动累加、
 写进项目根目录的 version.json。有 .git 时直接按 git 提交数实时算，
 永远准确；纯 ZIP 用户以 version.json 为准（每次更新时重写）。
 提交数从 GitHub API 分页响应的 Link 头里取（per_page=1 时最后一页
@@ -41,7 +41,7 @@ REPO_URL = f"https://github.com/{REPO}.git"
 ZIP_URL = f"https://codeload.github.com/{REPO}/zip/refs/heads/{BRANCH}"
 COMMITS_API = f"https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_page=1"
 
-BASE_VERSION = "2.0"
+BASE_VERSION = "3.0"
 VERSION_FILE = os.path.join(APP_DIR, "version.json")
 
 # 覆盖更新时要跳过的顶层名字：用户私有配置、自动下载的运行环境、缓存。
@@ -50,6 +50,7 @@ PRESERVE_TOP = {
     ".git", ".venv", "python", "git", "venv", "wd14_venv", "wd_tagger_models", "tmp",
     "clipboard_inbox",
     "launcher_config.json", "model_hash_cache.json", "version.json",
+    "launcher_data", "launcher_config.json.v2.bak",
 }
 
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0

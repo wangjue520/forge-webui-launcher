@@ -1,0 +1,334 @@
+/* ============================================================
+   开屏动画 v3 — 明日方舟：终末地风格
+   浅灰工业纸面 / 等高线地形 / 轨道环 / 刻度尺 / 柠檬黄色块擦除 / 等宽标注
+   相位 class 由 js/splash.js 按时间轴加到 #splash 上：
+     p-on → p-line → p-open → p-orbit → p-title → p-info → (p-out1 → p-out2)
+   ============================================================ */
+#splash {
+  --sp-paper: #e4e5e1;
+  --sp-paper-2: #d7d8d3;
+  --sp-ink: #121316;
+  --sp-mut: rgba(18, 19, 22, .52);
+  --sp-faint: rgba(18, 19, 22, .14);
+  --sp-yel: #fff200;
+  --sp-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+  --sp-disp: "Bahnschrift", "DIN Alternate", "Segoe UI", "Arial Narrow", sans-serif;
+  --sp-ease: cubic-bezier(.76, 0, .24, 1);
+  --sp-out: cubic-bezier(.16, 1, .3, 1);
+
+  position: fixed; inset: 0; z-index: 500;
+  background: #16171c;               /* 与窗口底色一致，开窗瞬间不闪 */
+  overflow: hidden; cursor: default;
+  font-family: var(--sp-disp);
+  color: var(--sp-ink);
+}
+#splash.p-out2 { background: transparent; }
+
+/* ---------- 0. 通电：黄点 → 横向发丝线 ---------- */
+.sp-power {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.sp-dot {
+  position: absolute; width: 9px; height: 9px; background: var(--sp-yel);
+  transform: rotate(45deg) scale(0);
+  transition: transform .26s cubic-bezier(.2, 1.8, .4, 1), opacity .12s;
+}
+.sp-hair {
+  position: absolute; left: 50%; top: 50%; width: 0; height: 1px;
+  background: var(--sp-yel); transform: translate(-50%, -50%);
+  box-shadow: 0 0 18px rgba(255, 242, 0, .55);
+  transition: width .34s var(--sp-ease);
+}
+#splash.p-on   .sp-dot  { transform: rotate(45deg) scale(1); }
+#splash.p-line .sp-dot  { opacity: 0; }
+#splash.p-line .sp-hair { width: 100%; }
+#splash.p-open .sp-power { opacity: 0; transition: opacity .2s .35s; }
+
+/* ---------- 1. 纸面从发丝线处上下展开 ---------- */
+.sp-scene {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(900px 620px at 72% 50%, rgba(255, 255, 255, .55), transparent 70%),
+    linear-gradient(180deg, var(--sp-paper), var(--sp-paper-2));
+  clip-path: inset(50% 0 50% 0);
+  transition: clip-path .52s var(--sp-ease);
+}
+#splash.p-open .sp-scene { clip-path: inset(0 0 0 0); }
+#splash.p-out2 .sp-scene { opacity: 0; }   /* 不能用 visibility：标题的 sp-appear 动画会把子元素强制 visible */
+
+/* 等高线（canvas 由 splash.js 用噪声 + marching squares 画） */
+.sp-topo {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  opacity: 0; transform: scale(1.07);
+  -webkit-mask-image: linear-gradient(90deg, transparent 8%, rgba(0,0,0,.35) 34%, #000 60%);
+          mask-image: linear-gradient(90deg, transparent 8%, rgba(0,0,0,.35) 34%, #000 60%);
+  transition: opacity .7s .12s ease, transform 2.6s var(--sp-out);
+}
+#splash.p-open .sp-topo { opacity: 1; transform: scale(1); }
+
+.sp-grid {
+  position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--sp-faint) 1px, transparent 1px),
+    linear-gradient(90deg, var(--sp-faint) 1px, transparent 1px),
+    linear-gradient(rgba(18,19,22,.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(18,19,22,.045) 1px, transparent 1px);
+  background-size: 200px 200px, 200px 200px, 40px 40px, 40px 40px;
+  background-position: -1px -1px;
+  -webkit-mask-image: radial-gradient(ellipse at 50% 50%, #000 40%, transparent 85%);
+          mask-image: radial-gradient(ellipse at 50% 50%, #000 40%, transparent 85%);
+  opacity: 0; transition: opacity .5s .2s;
+}
+#splash.p-open .sp-grid { opacity: 1; }
+
+/* 刻度尺 */
+.sp-ruler { position: absolute; pointer-events: none; transition: transform .7s .22s var(--sp-out); }
+.sp-ruler-top {
+  left: 60px; right: 60px; top: 30px; height: 9px;
+  background:
+    repeating-linear-gradient(90deg, var(--sp-ink) 0 1px, transparent 1px 50px) top / 100% 9px no-repeat,
+    repeating-linear-gradient(90deg, rgba(18,19,22,.4) 0 1px, transparent 1px 10px) top / 100% 4px no-repeat;
+  transform: scaleX(0); transform-origin: left;
+}
+.sp-ruler-left {
+  left: 30px; top: 60px; bottom: 60px; width: 9px;
+  background:
+    repeating-linear-gradient(180deg, var(--sp-ink) 0 1px, transparent 1px 50px) left / 9px 100% no-repeat,
+    repeating-linear-gradient(180deg, rgba(18,19,22,.4) 0 1px, transparent 1px 10px) left / 4px 100% no-repeat;
+  transform: scaleY(0); transform-origin: top;
+}
+#splash.p-open .sp-ruler { transform: none; }
+
+/* ---------- 2. 轨道环 ---------- */
+.sp-orbit {
+  position: absolute; top: 50%; right: -5%;
+  width: min(700px, 84vh); height: min(700px, 84vh);
+  transform: translateY(-50%) rotate(-24deg) scale(.94);
+  opacity: 0; overflow: visible;
+  transition: opacity .3s, transform 1.4s var(--sp-out);
+  fill: none;
+}
+#splash.p-orbit .sp-orbit { opacity: 1; transform: translateY(-50%) rotate(0deg) scale(1); }
+.sp-orbit circle { fill: none; }
+.sp-orb-ticks circle {
+  stroke: rgba(18,19,22,.38); stroke-width: 9;
+  stroke-dasharray: 1 8.145;           /* 2π·262 ≈ 1646 → 180 格 */
+}
+.sp-orb-ticks, .sp-orb-arc { transform-box: view-box; transform-origin: 300px 300px; }
+.sp-orb-ticks { animation: sp-spin 60s linear infinite reverse; }
+.sp-orb-main {
+  stroke: rgba(18,19,22,.55); stroke-width: 1.2;
+  stroke-dasharray: 1483; stroke-dashoffset: 1483;   /* 2π·236 */
+  transition: stroke-dashoffset 1.2s var(--sp-ease);
+}
+#splash.p-orbit .sp-orb-main { stroke-dashoffset: 0; }
+.sp-orb-dash  { stroke: rgba(18,19,22,.28); stroke-width: 1; stroke-dasharray: 3 7; }
+.sp-orb-inner { stroke: rgba(18,19,22,.18); stroke-width: 1; }
+.sp-orb-arc { opacity: 0; transition: opacity .3s .5s; animation: sp-spin 9s linear infinite; }
+#splash.p-orbit .sp-orb-arc { opacity: 1; }
+.sp-orb-arc circle { stroke: var(--sp-ink); stroke-width: 4; stroke-dasharray: 150 1333; }
+.sp-orb-arc rect { fill: var(--sp-yel); stroke: var(--sp-ink); stroke-width: 1.6; }
+.sp-orb-cross path { stroke: rgba(18,19,22,.45); stroke-width: 1; }
+.sp-orb-label { fill: rgba(18,19,22,.55); stroke: none; font: 10px var(--sp-mono); letter-spacing: .22em; }
+
+/* 地图标记点 */
+.sp-pin {
+  position: absolute; left: 60%; top: 23%;
+  display: flex; align-items: flex-start; gap: 10px;
+  opacity: 0; transform: translateY(6px);
+  transition: opacity .3s .3s, transform .5s .3s var(--sp-out);
+}
+.sp-pin i {
+  position: relative; width: 11px; height: 11px; margin-top: 3px;
+  background: var(--sp-yel); outline: 1.5px solid var(--sp-ink); outline-offset: 0;
+}
+.sp-pin i::after {       /* 引线 */
+  content: ""; position: absolute; left: 5px; top: 11px; width: 1px; height: 46px;
+  background: linear-gradient(var(--sp-ink), transparent);
+}
+.sp-pin span { font: 10px/1.5 var(--sp-mono); letter-spacing: .18em; color: var(--sp-ink); }
+.sp-pin em { font-style: normal; color: var(--sp-mut); letter-spacing: .1em; }
+#splash.p-info .sp-pin { opacity: 1; transform: none; }
+
+/* ---------- HUD 角标 ---------- */
+.sp-hud {
+  position: absolute; top: 50px;
+  display: flex; flex-direction: column; gap: 6px;
+  font: 10px var(--sp-mono); letter-spacing: .24em; color: var(--sp-ink);
+  opacity: 0; transition: opacity .3s .3s, transform .6s .3s var(--sp-out);
+}
+.sp-hud span { color: var(--sp-mut); letter-spacing: .16em; }
+.sp-hud b { display: inline-block; background: var(--sp-ink); color: var(--sp-yel); padding: 1px 5px; margin-right: 8px; font-weight: normal; }
+.sp-hud-tl { left: 60px;  transform: translateX(-14px); }
+.sp-hud-tr { right: 60px; transform: translateX(14px); text-align: right; }
+.sp-clock { color: var(--sp-ink) !important; font-size: 12px; letter-spacing: .2em !important; }
+#splash.p-open .sp-hud { opacity: 1; transform: none; }
+
+/* ---------- 3. 主标题 ---------- */
+.sp-core {
+  position: absolute; left: 8.5%; top: 50%;
+  transform: translateY(-62%);
+}
+.sp-kicker {
+  display: flex; align-items: center; gap: 10px;
+  font: 11px var(--sp-mono); letter-spacing: .3em; color: var(--sp-ink);
+  opacity: 0; transform: translateX(-16px);
+  transition: opacity .25s, transform .5s var(--sp-out);
+}
+.sp-kicker b {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; background: var(--sp-ink); color: var(--sp-yel);
+  font-size: 10px; letter-spacing: 0;
+}
+.sp-kicker span { color: var(--sp-mut); letter-spacing: .2em; font-family: "Microsoft YaHei UI", sans-serif; font-size: 11px; }
+#splash.p-title .sp-kicker { opacity: 1; transform: none; }
+
+.sp-title-wrap { position: relative; display: inline-block; margin: 16px 0 18px; }
+.sp-title {
+  display: flex; align-items: stretch;
+  font: 700 clamp(72px, 9.6vw, 124px)/.86 var(--sp-disp);
+  letter-spacing: .03em; white-space: nowrap;
+  visibility: hidden;
+}
+#splash.p-title .sp-title { animation: sp-appear 0s .25s forwards; }
+.sp-t2 {
+  position: relative; margin-left: .22em; padding: .06em .18em .1em;
+  background: var(--sp-ink); color: var(--sp-paper);
+  font-size: .5em; align-self: center; letter-spacing: .12em;
+  line-height: 1.15;
+}
+.sp-t2::after {          /* 黄色切角小标 */
+  content: ""; position: absolute; right: 0; bottom: 0; width: .34em; height: .09em;
+  background: var(--sp-yel);
+}
+.sp-t2::before {         /* 右上角斜切 */
+  content: ""; position: absolute; right: -1px; top: -1px;
+  border-style: solid; border-width: 0 .16em .16em 0;
+  border-color: transparent var(--sp-paper) transparent transparent;
+}
+.sp-sweep {              /* 黄色色块擦过，标题在它背后出现 */
+  position: absolute; inset: -8px -14px; background: var(--sp-yel);
+  transform: scaleX(0); transform-origin: 0 50%;
+  pointer-events: none;
+}
+.sp-sweep::after {       /* 色块前沿的黑色细条 */
+  content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 6px; background: var(--sp-ink);
+}
+#splash.p-title .sp-sweep { animation: sp-sweep .62s cubic-bezier(.7, 0, .3, 1) forwards; }
+
+.sp-meta {
+  display: flex; align-items: center; gap: 16px;
+  font: 12px var(--sp-mono); letter-spacing: .34em; color: rgba(18,19,22,.72);
+}
+.sp-meta > * { opacity: 0; transform: translateX(-18px); }
+.sp-meta-line { width: 64px; height: 2px; background: var(--sp-ink); transform-origin: left; }
+.sp-ver {
+  font: 700 14px var(--sp-disp); letter-spacing: .08em; color: var(--sp-ink);
+  background: var(--sp-yel); padding: 4px 14px 3px 12px;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+}
+.sp-ver b { font-weight: 700; font-variant-numeric: tabular-nums; }
+#splash.p-info .sp-meta-line { animation: sp-grow .5s var(--sp-out) forwards; }
+#splash.p-info .sp-meta-txt  { animation: sp-slide .5s .06s var(--sp-out) forwards; }
+#splash.p-info .sp-ver       { animation: sp-slide .5s .14s var(--sp-out) forwards; }
+
+/* ---------- 4. 启动日志 + 分段进度条 ---------- */
+.sp-log {
+  position: absolute; left: 8.5%; bottom: 122px; width: 340px;
+  display: flex; flex-direction: column; gap: 5px;
+  font: 10.5px var(--sp-mono); letter-spacing: .16em; color: var(--sp-ink);
+}
+.sp-log-row {
+  display: flex; align-items: center;
+  opacity: 0; transform: translateX(-10px);
+  transition: opacity .2s, transform .4s var(--sp-out);
+}
+.sp-log-row.show { opacity: 1; transform: none; }
+.sp-log-row span { width: 50px; color: var(--sp-mut); }
+.sp-log-row i { flex: 1; margin: 0 10px; border-bottom: 1px dotted rgba(18,19,22,.35); transform: translateY(-3px); }
+.sp-log-row em {
+  font-style: normal; min-width: 42px; text-align: center; padding: 1px 6px;
+  background: var(--sp-ink); color: var(--sp-yel);
+}
+.sp-log-bridge em { background: transparent; color: var(--sp-ink); outline: 1px solid var(--sp-ink); outline-offset: -1px; animation: sp-blink .8s steps(1) infinite; }
+.sp-log-bridge.ok em { background: var(--sp-ink); color: var(--sp-yel); outline: 0; animation: none; }
+
+.sp-progress {
+  position: absolute; left: 8.5%; right: 8.5%; bottom: 66px;
+  opacity: 0; transition: opacity .3s .2s;
+}
+#splash.p-info .sp-progress { opacity: 1; }
+.sp-prog-head {
+  display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;
+  font: 10px var(--sp-mono); letter-spacing: .3em; color: var(--sp-mut);
+}
+.sp-prog-cn { font: 11px "Microsoft YaHei UI", sans-serif; letter-spacing: .2em; margin-left: 14px; font-weight: normal; }
+.sp-pct { font: 700 24px/1 var(--sp-disp); letter-spacing: .06em; color: var(--sp-ink); font-variant-numeric: tabular-nums; }
+.sp-pct::after { content: "%"; font-size: 12px; margin-left: 2px; color: var(--sp-mut); }
+.sp-segs { display: grid; grid-template-columns: repeat(48, 1fr); gap: 3px; }
+.sp-segs i { height: 7px; background: rgba(18,19,22,.1); }
+.sp-segs i.on { background: var(--sp-ink); }
+.sp-segs i.head { background: var(--sp-yel); outline: 1px solid var(--sp-ink); outline-offset: -1px; }
+
+/* ---------- 底栏 ---------- */
+.sp-foot {
+  position: absolute; left: 60px; right: 60px; bottom: 24px;
+  display: flex; align-items: center; gap: 28px;
+  font: 9.5px var(--sp-mono); letter-spacing: .26em; color: var(--sp-mut);
+  opacity: 0; transition: opacity .4s .35s;
+}
+#splash.p-open .sp-foot { opacity: 1; }
+.sp-foot b { color: var(--sp-ink); font-weight: normal; }
+.sp-tri { color: var(--sp-ink); letter-spacing: .4em; }
+.sp-barcode {
+  width: 92px; height: 12px;
+  background:
+    repeating-linear-gradient(90deg, var(--sp-ink) 0 2px, transparent 2px 5px, var(--sp-ink) 5px 6px, transparent 6px 9px, var(--sp-ink) 9px 12px, transparent 12px 14px);
+}
+.sp-skip { margin-left: auto; opacity: 0; }
+#splash.sp-ready .sp-skip { opacity: 1; animation: sp-blink 1.2s steps(1) infinite; }
+#splash.sp-ready { cursor: pointer; }
+
+/* ---------- 5. 撤场：黑条 + 黄条擦过，露出主界面 ---------- */
+.sp-wipe {
+  position: absolute; inset: 0; pointer-events: none;
+  transform: scaleX(0); transform-origin: 0 50%;
+}
+.sp-wipe-k { background: var(--sp-ink); }
+.sp-wipe-y { background: var(--sp-yel); }
+.sp-wipe-y::after {      /* 黄条上的斜纹警示带 */
+  content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 18px; transform: translateY(-50%);
+  background: repeating-linear-gradient(-45deg, var(--sp-ink) 0 10px, transparent 10px 20px);
+  opacity: .9;
+}
+#splash.p-out1 .sp-wipe-k { transition: transform .3s var(--sp-ease); transform: scaleX(1); }
+#splash.p-out1 .sp-wipe-y { transition: transform .3s .07s var(--sp-ease); transform: scaleX(1); }
+#splash.p-out2 .sp-wipe   { transform-origin: 100% 50%; transform: scaleX(0); }
+#splash.p-out2 .sp-wipe-y { transition: transform .34s var(--sp-ease); }
+#splash.p-out2 .sp-wipe-k { transition: transform .34s .08s var(--sp-ease); }
+
+/* ---------- keyframes ---------- */
+@keyframes sp-spin   { to { transform: rotate(360deg); } }
+@keyframes sp-appear { to { visibility: visible; } }
+@keyframes sp-blink  { 50% { opacity: .15; } }
+@keyframes sp-grow   { from { opacity: 1; transform: scaleX(0); } to { opacity: 1; transform: scaleX(1); } }
+@keyframes sp-slide  { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@keyframes sp-sweep {
+  0%   { transform: scaleX(0); transform-origin: 0 50%; }
+  46%  { transform: scaleX(1); transform-origin: 0 50%; }
+  47%  { transform: scaleX(1); transform-origin: 100% 50%; }
+  100% { transform: scaleX(0); transform-origin: 100% 50%; }
+}
+
+/* 小窗口：收起次要装饰 */
+@media (max-width: 900px), (max-height: 600px) {
+  .sp-pin, .sp-hud-tr span:last-child, .sp-log { display: none; }
+  .sp-orbit { right: -22%; opacity: .6; }
+}
+
+/* 系统开启「减少动态效果」：去掉旋转和位移，只保留淡入淡出 */
+@media (prefers-reduced-motion: reduce) {
+  #splash *, #splash *::before, #splash *::after { animation-duration: .01s !important; animation-iteration-count: 1 !important; }
+  .sp-scene, .sp-orbit, .sp-topo, .sp-wipe { transition-duration: .15s !important; }
+}

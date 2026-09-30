@@ -4,7 +4,7 @@ rem 或开了 UTF-8 Beta 的系统）上正常显示中文提示，否则全是乱码、用户看不到排查指
 rem 936 代码页在所有 Windows 版本上都可用，只影响显示，不影响脚本逻辑。
 chcp 936 >nul 2>nul
 cd /d "%~dp0"
-title Forge WebUI 启动器
+title WWY 启动器
 rem 不开 enabledelayedexpansion：路径里如果带 ! 会被吞掉，这个脚本也用不到它
 setlocal
 

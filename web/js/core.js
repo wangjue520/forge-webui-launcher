@@ -193,8 +193,8 @@
   // 下面用一串不等距的关键点描述这个节奏，段与段之间速度差好几倍，
   // 再给每段配不同的缓动，加一点随机抖动让每次都不完全一样。
   App.topbar = (function () {
-    const el = () => $("#topbar");
-    const fill = () => $("#topbar .topbar-fill");
+    const el = () => $("#loadbar");
+    const fill = () => $("#loadbar .topbar-fill");
 
     // [到达时刻(ms), 目标百分比, 缓动]
     //  out  = 先快后慢（冲一下然后顶住，像连上了但还在等数据）
@@ -302,20 +302,41 @@
   /* ---------- 页面导航 ---------- */
   const PAGE_TITLES = {
     launch: "一键启动",
+    instances: "实例管理",
     settings: "高级选项",
+    launcher: "启动器设置",
     deploy: "环境部署",
     civitai: "模型下载 · Civitai / liblib",
     models: "模型管理",
+    outputs: "输出管理",
     extensions: "常用插件",
     wd14: "WD14 标签反推",
     meta: "图片信息",
   };
 
+  // 页头上方的英文编号（终末地风格的等宽标注）
+  const PAGE_CODES = {
+    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY",
+    civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
+    wd14: "WD14 TAGGER", meta: "IMAGE META",
+  };
+
   App.showPage = function (name) {
+    const prev = App.currentPage;
+    if (prev && prev !== name && App.pages[prev] && App.pages[prev].onHide) {
+      try { App.pages[prev].onHide(); } catch (e) { console.error(e); }
+    }
     App.currentPage = name;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
     $$(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));
     $("#page-title").textContent = PAGE_TITLES[name] || name;
+    const code = $("#page-code");
+    if (code) {
+      // 编号跟侧栏上看到的一致（隐藏的页面不占号）
+      const visible = $$(".nav-item").filter((b) => !b.hidden).map((b) => b.dataset.page);
+      const idx = visible.indexOf(name);
+      code.textContent = String(idx + 1).padStart(2, "0") + " // " + (PAGE_CODES[name] || name.toUpperCase());
+    }
     const mod = App.pages[name];
     if (mod && mod.onShow) mod.onShow();
   };
@@ -338,6 +359,9 @@
 
   function bindConfigControls() {
     $$("[data-cfg]").forEach((el) => {
+      // 高级选项页的控件是按实例分别保存的，由 settings.js 自己绑定
+      // （可以编辑非当前实例），不走这里的全局保存
+      if (el.closest("#page-settings")) return;
       const key = el.dataset.cfg;
       el.addEventListener("change", async () => {
         App.cfg[key] = controlValue(el);
@@ -372,12 +396,20 @@
       if (mod && mod.onDropped) mod.onDropped(e.paths || []);
     });
 
-    App.on("app", "confirm_exit", async () => {
+    App.on("app", "confirm_exit", async (e) => {
+      // 后端会带上正在运行的实例名单；没有（旧后端）就从本地状态算
+      let names = (e && e.names) || [];
+      if (!names.length) {
+        names = ((App.instances && App.instances.instances) || [])
+          .filter((i) => i.status && i.status.running)
+          .map((i) => i.name).filter(Boolean);
+      }
+      const what = names.length ? names.map((n) => "「" + n + "」").join("、") : "当前实例";
       const v = await App.modal(
-        "WebUI 正在运行",
-        "Forge WebUI 还在后台运行中。直接退出启动器而不结束它，会造成端口被占用、显存不释放等问题。",
+        names.length > 1 ? "多个实例正在运行" : `${what}正在运行`,
+        `${what}还在后台运行中。直接退出启动器而不结束，会造成端口被占用、显存不释放等问题。`,
         [
-          { id: "kill", label: "结束 WebUI 并退出", kind: "danger" },
+          { id: "kill", label: names.length > 1 ? "全部结束并退出" : "结束并退出", kind: "danger" },
           { id: "exit", label: "不结束，直接退出" },
           { id: "cancel", label: "取消" },
         ]
@@ -409,6 +441,8 @@
     App.cfg = App.state.config || {};
     App.refreshConfigControls();
     App.refreshCmdPreview(App.state.cmd_args);
+    // 界面风格：后端配置为准，同步进 localStorage（开屏动画下次启动读它）
+    if (window.WWYThemes) window.WWYThemes.apply(App.cfg.ui_theme || "terminal", true);
 
     // 初始化各页面模块
     for (const [name, mod] of Object.entries(App.pages)) {
@@ -419,7 +453,8 @@
     // 内置 HTTP 服务器偶发丢请求（见 webview_main.py 的 backlog 补丁），个别
     // js 没加载上时对应页面的按钮会完全没反应。缺模块就自动刷新一次——此时
     // 浏览器缓存已热，第二次几乎必好；用 sessionStorage 保证只刷一次不死循环
-    const EXPECTED_PAGES = ["launch", "settings", "deploy", "civitai", "models", "extensions", "wd14", "meta"];
+    const EXPECTED_PAGES = ["launch", "settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta",
+                            "instances", "outputs"];
     const missing = EXPECTED_PAGES.filter((p) => !App.pages[p]);
     if (missing.length) {
       console.error("页面模块未加载完整，自动刷新一次:", missing);
@@ -432,8 +467,12 @@
     }
     sessionStorage.removeItem("reloaded-for-missing-modules");
 
-    const startPage = new URLSearchParams(location.search).get("page");
-    App.showPage(PAGE_TITLES[startPage] ? startPage : "launch");
+    if (App.applyChrome) App.applyChrome(App.state);
+    // 切换实例后会重载页面，回到切换前所在的页面
+    let startPage = new URLSearchParams(location.search).get("page");
+    try { startPage = sessionStorage.getItem("return-page") || startPage; sessionStorage.removeItem("return-page"); } catch (e) {}
+    const navBtn = $(`.nav-item[data-page="${startPage}"]`);
+    App.showPage(PAGE_TITLES[startPage] && navBtn && !navBtn.hidden ? startPage : "launch");
     App.ready = true;
     if (window.Splash) window.Splash.ready();
   }

@@ -203,7 +203,9 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
     else:
         bases = [official] + [f"{b}/{tag}" for b in mm.PYTORCH_MIRROR_BASES]
 
-    cache_dir = os.path.join(root_dir, ".launcher_cache", "wheels")
+    # wheel 缓存放在启动器目录，所有实例共用（第二个实例不用再下 2GB 的 torch）
+    cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "launcher_data", "cache", "wheels")
     os.makedirs(cache_dir, exist_ok=True)
 
     cancel = (lambda: cancel_event.is_set()) if cancel_event is not None else None

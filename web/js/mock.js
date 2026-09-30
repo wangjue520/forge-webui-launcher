@@ -92,6 +92,14 @@
       { label: "超低 --novram", key: "novram" },
       { label: "纯 CPU --cpu", key: "cpu" },
     ],
+    vram_comfy: [
+      { label: "由 ComfyUI 自动管理（推荐，不加任何参数）", key: "auto" },
+      { label: "高显存 --gpu-only", key: "gpu_only" },
+      { label: "中等 --normalvram", key: "normal" },
+      { label: "低 --lowvram", key: "low" },
+      { label: "超低 --novram", key: "novram" },
+      { label: "纯 CPU --cpu", key: "cpu" },
+    ],
     precision_legacy: [
       { label: "自动（默认）", key: "auto" },
       { label: "全 FP16 --all-in-fp16", key: "fp16" },
@@ -156,15 +164,40 @@
         ],
       }),
       update_config: () => ok({ ok: true, cmd_args: "" }),
+      instance_config_get: () => ok({ ok: true, iid: "demo", config: mockConfig, cmd_args: "" }),
+      instance_config_update: () => ok({ ok: true, cmd_args: "" }),
       launch_env_detect: () => ok({ python: "", git: "" }),
       launch_precheck: () => ok({ ok: false, issues: [{ level: "error", text: "预览模式：未连接后端，无法检测" }] }),
       choose_directory: () => ok({ ok: true, path: "" }),
       choose_images: () => ok({ ok: true, paths: [] }),
       models_categories: () => ok({ ok: true, root: "", categories: [
-        { label: "Stable-diffusion", is_lora: false }, { label: "Lora", is_lora: true },
-        { label: "VAE", is_lora: false }, { label: "ControlNet", is_lora: false },
-        { label: "embeddings", is_lora: false }, { label: "hypernetworks", is_lora: false },
-        { label: "upscaler", is_lora: false }] }),
+        { label: "Stable-diffusion", is_lora: false, path: "D:\\AI\\webui\\models\\Stable-diffusion（演示）" },
+        { label: "Lora", is_lora: true, path: "D:\\AI\\webui\\models\\Lora（演示）" },
+        { label: "VAE", is_lora: false, path: "D:\\AI\\webui\\models\\VAE（演示）" },
+        { label: "ControlNet", is_lora: false, path: "" },
+        { label: "embeddings", is_lora: false, path: "" }, { label: "hypernetworks", is_lora: false, path: "" },
+        { label: "upscaler", is_lora: false, path: "" }] }),
+      // 拖拽上传演示：路径里带 lora 的当作 LoRA；开始后用定时器模拟进度事件
+      models_import_plan: (cat, paths) => {
+        const lora = (paths || []).filter((p) => /lora/i.test(p)).length;
+        return ok({ ok: true, target_label: cat === 1 ? "Lora" : "Stable-diffusion", target_dir: "D:\\AI\\webui\\models（演示）",
+          count: paths.length, to_copy: paths.length, skip: 0, rename: [], ignored: [], ignored_count: 0,
+          counts: { lora, full: paths.length - lora }, total_text: "1.2 GB", no_space: false, free_text: "",
+          suggest_index: (cat !== 1 && lora === paths.length) ? 1 : null, suggest_label: "Lora" });
+      },
+      models_import_start: (cat, paths) => {
+        let pct = 0;
+        const t = setInterval(() => {
+          pct = Math.min(100, pct + 7);
+          window.App.onEvent({ scope: "models", type: "import_progress", i: 1, n: paths.length, name: "演示模型.safetensors", pct });
+          if (pct >= 100) {
+            clearInterval(t);
+            window.App.onEvent({ scope: "models", type: "import_done", cat_index: cat, copied: paths.length,
+              renamed: 0, skipped: 0, failed: [], cancelled: false, last_dest: "" });
+          }
+        }, 120);
+        return ok({ ok: true, total_text: "1.2 GB" });
+      },
       models_list: () => ok({ ok: true, is_lora: false, files: [
         { path: "", rel: "（演示数据）v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
         { path: "", rel: "（演示数据）ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
@@ -260,6 +293,11 @@
         txt2img: "", img2img: "",
         date_subdir: true, exists: { root: false, txt2img: false, img2img: false } }),
       wd14_add_clipboard_image: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      instances_list: () => ok({ ok: true, instances: [{ id: "demo", name: "Forge Neo", branch: "neo2", kind: "forge",
+        kind_label: "Forge Neo", root: "", port: "", active: true, status: { state: "idle", running: false } }],
+        active: "demo", multi: false, multi_manual: false }),
+      library_status: () => ok({ ok: true, enabled: false, path: "", exists: false, journals: [] }),
+      outputs_info: () => ok({ ok: false, error: "预览模式：输出管理需要连接后端" }),
       _noop: () => ok({}),
     },
   };

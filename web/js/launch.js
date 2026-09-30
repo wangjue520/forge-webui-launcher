@@ -12,7 +12,16 @@
     const pill = $("#launch-status");
     pill.dataset.state = state;
     $("#launch-status-text").textContent = text;
-    App.setGlobalStatus(state, state === "idle" ? "WebUI 未启动" : text);
+    // 多实例时全局状态由 instances.js 汇总显示
+    if (!(App.instances && App.instances.multi)) {
+      App.setGlobalStatus(state, state === "idle" ? `${App.kindName ? App.kindName() : "WebUI"} 未启动` : text);
+    }
+  }
+
+  // 事件属于当前实例吗？（多实例时别的实例的日志/状态不进这个页面）
+  function mine(e) {
+    const cur = App.instances && App.instances.active;
+    return !e.iid || !cur || e.iid === cur;
   }
 
   function setRunningUI(running) {
@@ -33,10 +42,31 @@
   }
 
   async function onStart() {
-    const root = ($("#launch-root").value || "").trim();
+    return startInstance(null, ($("#launch-root").value || "").trim());
+  }
 
+  async function syncActiveStatus() {
+    try {
+      const ls = await App.api.launch_status();
+      if (!ls) return;
+      launchUrl = ls.url || null;
+      setStatus(ls.state || "idle", ls.text || "尚未启动");
+      setRunningUI(!!ls.running);
+    } catch (e) { /* 状态同步失败不影响主流程 */ }
+  }
+
+  // iid 为空 = 当前实例；实例卡片上的「启动」会传别的实例
+  async function startInstance(iid, root) {
+    root = (root || "").trim();
+    const isActive = !iid || !App.instances || iid === App.instances.active;
+    if (isActive) {
+      // 立即反馈：预检和确认弹窗可能要好一会儿，点下去没变化会被当成 bug
+      $("#launch-start").disabled = true;
+      setStatus("starting", "启动前检查…");
+    }
+    try {
     let pre;
-    try { pre = await App.api.launch_precheck(root); }
+    try { pre = await App.api.launch_precheck(root, iid); }
     catch (e) { App.toast("启动前检查失败：" + e.message, "error"); return; }
 
     let fixOverrides = false, killPid = 0;
@@ -76,9 +106,13 @@
     }
 
     try {
-      const r = await App.api.launch_start(root, fixOverrides, killPid);
+      const r = await App.api.launch_start(root, fixOverrides, killPid, iid);
       if (r && r.ok === false) App.toast(r.error || "启动失败", "error");
     } catch (e) { App.toast("启动失败：" + e.message, "error"); }
+    } finally {
+      // 无论成功/取消/失败，都用后端真实状态收尾（成功时状态事件也会再来，不冲突）
+      if (isActive) syncActiveStatus();
+    }
   }
 
   async function onStop() {
@@ -119,7 +153,7 @@
       log = App.makeLogger($("#launch-log"));
 
       $("#launch-browse").addEventListener("click", async () => {
-        const r = await App.api.choose_directory("选择 WebUI 根目录", App.cfg.webui_root || "");
+        const r = await App.api.choose_directory(`选择 ${App.kindName ? App.kindName() : "WebUI"} 根目录`, App.cfg.webui_root || "");
         if (r && r.ok && r.path) {
           $("#launch-root").value = r.path;
           $("#launch-root").dispatchEvent(new Event("change"));
@@ -134,7 +168,23 @@
       $("#launch-open-browser").addEventListener("click", () => {
         if (launchUrl) App.api.open_url(launchUrl);
       });
-      $("#launch-root").addEventListener("change", () => { refreshEnvHint(); refreshOutputButtons(); });
+      $("#launch-root").addEventListener("change", async () => {
+        refreshEnvHint(); refreshOutputButtons();
+        // 换了目录：如果从 WebUI 换成了 ComfyUI（或反过来），实例类型跟着变，整页按新类型重载
+        const id = App.instances && App.instances.active;
+        if (!id || !App.api.instance_update) return;
+        try {
+          const r = await App.api.instance_update(id, { webui_root: $("#launch-root").value.trim() });
+          const me = r && r.instances && r.instances.find((i) => i.id === id);
+          if (me && me.branch !== App.cfg.webui_branch) {
+            App.toast(`检测到这是 ${me.kind_label}，已切换实例类型`, "ok");
+            setTimeout(() => {
+              try { sessionStorage.setItem("skip-splash", "1"); sessionStorage.setItem("return-page", "launch"); } catch (e) {}
+              location.reload();
+            }, 900);
+          }
+        } catch (e) { /* 不影响手动设置 */ }
+      });
 
       // 恢复状态（比如重载页面时 WebUI 还在跑）
       const ls = state.launch || {};
@@ -143,14 +193,35 @@
       setRunningUI(!!ls.running);
       if (App.cfg.webui_root) { refreshEnvHint(); refreshOutputButtons(); }
 
-      App.on("launch", "log", (e) => log(e.text));
+      // 运行日志：多实例时所有实例的日志都进日志框（从卡片上启动别的实例，
+      // 日志不再凭空消失），日志流换实例时插一行分隔标题
+      let logSrc = null;
+      const logSourceName = (iid) => {
+        const i = ((App.instances && App.instances.instances) || []).find((x) => x.id === iid);
+        return i ? i.name : "";
+      };
+      App.on("launch", "log", (e) => {
+        const multi = App.instances && App.instances.multi;
+        if (!multi) { if (mine(e)) log(e.text); return; }
+        const iid = e.iid || App.instances.active || "";
+        if (iid !== logSrc) {
+          logSrc = iid;
+          const name = logSourceName(iid);
+          if (name) log(`—— 实例「${name}」的日志 ——`);
+        }
+        log(e.text);
+      });
+      $("#launch-log-clear").addEventListener("click", () => { logSrc = null; });
       App.on("launch", "status", (e) => {
+        if (!mine(e)) return;
         launchUrl = e.url || null;
         setStatus(e.state, e.text);
         $("#launch-open-browser").disabled = !launchUrl;
       });
-      App.on("launch", "state", (e) => setRunningUI(!!e.running));
+      App.on("launch", "state", (e) => { if (mine(e)) setRunningUI(!!e.running); });
     },
+
+    startInstance,
 
     onShow() {
       // 每次切回启动页都同步一次状态，防止错过事件

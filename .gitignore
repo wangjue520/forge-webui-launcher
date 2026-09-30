@@ -5,6 +5,8 @@ __pycache__/
 
 # 运行期自动生成 / 本机私有
 launcher_config.json
+launcher_config.json.v2.bak
+launcher_data/
 model_hash_cache.json
 web/_preview/
 clipboard_inbox/
@@ -24,3 +26,7 @@ Thumbs.db
 # 历史开发文档/一次性迁移脚本，不进仓库
 后端加固补丁.py
 图片信息页重写说明.md
+
+# 自动下载的便携运行环境（体积大，每台机器自己下）
+python/
+git/

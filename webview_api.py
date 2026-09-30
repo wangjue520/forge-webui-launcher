@@ -42,21 +42,15 @@ import meta_engine as me
 import wd14_tagger_core as wt
 import wd14_venv_manager as venv
 import updater
+import model_library as ml
+import output_index as oi
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
-WEBUI_ENTRY_SCRIPT = "webui.bat"
-
-# subprocess.CREATE_NO_WINDOW，避免拉起 cmd/git/netstat 时闪黑框
-_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
-
-_URL_RE = re.compile(r"Running on local URL:\s*(http://\S+)")
-_BIND_ERROR_RE = re.compile(r"error while attempting to bind on address", re.IGNORECASE)
-
-# 第三方整合包（秋叶系等）会在 webui-user.bat 里写死 set PYTHON=/GIT=...
-_OVERRIDE_VAR_PATTERN = re.compile(
-    r"^\s*set\s+(PYTHON|GIT|VENV_DIR|COMMANDLINE_ARGS)\s*=\s*(.*)$",
-    re.IGNORECASE,
+from process_manager import (  # noqa: E402  进程工具与常量（V3 搬到 process_manager）
+    WEBUI_ENTRY_SCRIPT, _NO_WINDOW, _URL_RE, _BIND_ERROR_RE, _OVERRIDE_VAR_PATTERN,
+    kill_process_tree, _probe_executable, find_listening_pid, process_name_of,
+    _find_webui_user_bat_overrides, _clear_webui_user_bat_overrides, InstanceRunner,
 )
 
 MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf")
@@ -101,12 +95,14 @@ PAN_FALLBACK_TEXT = (
 DEPLOY_BRANCH_OPTIONS = [
     ("Neo 版（Haoming02 社区维护分支，推荐）", "neo2"),
     ("常规版 / Classic（lllyasviel 官方仓库）", "classic"),
+    ("ComfyUI（官方仓库）", "comfyui"),
 ]
 
 SETTINGS_BRANCH_OPTIONS = [
     ("Neo 版（新版参数：--normalvram / --force-fpXX，推荐）", "neo2"),
     ("Neo 版（旧版参数：--always-xxx-vram / --all-in-fpXX）", "neo"),
     ("常规版 / Classic", "classic"),
+    ("ComfyUI", "comfyui"),
 ]
 
 # 常用扩展目录：每一项 (显示名, 简介, url_by_branch, folder_by_branch)
@@ -284,137 +280,6 @@ def _fmt_size(num_bytes):
     return f"{num_bytes:.1f} TB"
 
 
-def kill_process_tree(pid):
-    """杀掉整棵进程树（cmd.exe 只是壳，真正占端口的 python.exe 是孙进程）。
-    返回是否杀成功；taskkill 本身也加超时，避免杀进程的动作自己卡死。"""
-    if not pid or pid <= 0:
-        return False
-    if os.name == "nt":
-        try:
-            r = subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True, creationflags=_NO_WINDOW, timeout=10,
-            )
-            return r.returncode == 0
-        except Exception:
-            return False
-    else:
-        try:
-            os.killpg(os.getpgid(pid), 9)
-            return True
-        except Exception:
-            return False
-
-
-def _probe_executable(cmd, timeout=15):
-    """
-    试运行一个可执行文件，返回 (能否运行, 失败原因)。
-    “文件存在”不等于“能运行”——解压不完整、缺 DLL、被杀软拦截
-    都会让 exe 一跑就挂，等到启动中途才暴雷就很难看懂。
-    """
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
-                           creationflags=_NO_WINDOW)
-    except FileNotFoundError:
-        return False, "文件不存在"
-    except subprocess.TimeoutExpired:
-        return False, "执行超时"
-    except OSError as e:
-        return False, str(e)
-    if r.returncode != 0:
-        tail = [l for l in ((r.stderr or "") + "\n" + (r.stdout or "")).splitlines() if l.strip()]
-        detail = f"返回码 {r.returncode}"
-        if tail:
-            detail += f"，输出: {tail[-1].strip()[:200]}"
-        return False, detail
-    return True, ""
-
-
-def find_listening_pid(port):
-    """返回正在 LISTEN 指定端口的进程 PID，找不到返回 None（仅 Windows）"""
-    if os.name != "nt" or not port:
-        return None
-    try:
-        out = subprocess.run(
-            ["netstat", "-ano", "-p", "TCP"],
-            capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW,
-        ).stdout
-    except Exception:
-        return None
-    for line in out.splitlines():
-        parts = line.split()
-        if len(parts) >= 5 and parts[-2].upper() == "LISTENING":
-            if parts[1].endswith(f":{port}"):
-                try:
-                    return int(parts[-1])
-                except ValueError:
-                    continue
-    return None
-
-
-def process_name_of(pid):
-    """查询 PID 对应的进程名（仅 Windows），查不到返回空字符串"""
-    if os.name != "nt":
-        return ""
-    try:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW,
-        ).stdout.strip()
-        if out.startswith('"'):
-            return out.split('","')[0].strip('"')
-    except Exception:
-        pass
-    return ""
-
-
-def _find_webui_user_bat_overrides(root):
-    """返回 [(变量名, 值, 行号), ...]，跳过被注释掉的行"""
-    bat_path = os.path.join(root, "webui-user.bat")
-    if not os.path.exists(bat_path):
-        return []
-    hits = []
-    try:
-        with open(bat_path, "r", encoding="utf-8", errors="replace") as f:
-            for i, line in enumerate(f, 1):
-                stripped = line.strip()
-                if stripped.upper().startswith(("REM", "::")):
-                    continue
-                m = _OVERRIDE_VAR_PATTERN.match(line)
-                if m and m.group(2).strip():
-                    hits.append((m.group(1).upper(), m.group(2).strip(), i))
-    except OSError:
-        return []
-    return hits
-
-
-def _clear_webui_user_bat_overrides(root):
-    """清空 webui-user.bat 里生效的变量赋值（保留行本身），先备份 .bak"""
-    bat_path = os.path.join(root, "webui-user.bat")
-    backup_path = bat_path + ".bak"
-    with open(bat_path, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-
-    if not os.path.exists(backup_path):
-        with open(backup_path, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-
-    new_lines = []
-    for line in lines:
-        stripped = line.strip()
-        if stripped.upper().startswith(("REM", "::")):
-            new_lines.append(line)
-            continue
-        m = _OVERRIDE_VAR_PATTERN.match(line)
-        if m and m.group(2).strip():
-            new_lines.append(f"set {m.group(1).upper()}=\n")
-        else:
-            new_lines.append(line)
-
-    with open(bat_path, "w", encoding="utf-8") as f:
-        f.writelines(new_lines)
-
-
 def _resolve_by_branch(value, branch):
     """扩展目录用的分支解析：neo2 在插件兼容性上归一到 neo"""
     if isinstance(value, dict):
@@ -582,26 +447,10 @@ class LauncherApi:
         self._emit_sender = None
         self._emit_sender_lock = threading.Lock()
 
-        # 一键启动
-        self._launch_proc = None
-        self._launch_url = None
-        self._launch_status_text = "尚未启动"
-        self._launch_state = "idle"   # idle / starting / ready / stopped
-        self._output_tail = ""
-        # 就绪判定的并发保护。踩过的两个坑：
-        #  1) 日志解析线程和端口探测线程会同时判定「就绪」，各开一次浏览器 ——
-        #     两个一模一样的标签页。光靠各自读一遍 self._launch_url 挡不住：
-        #     端口探测是 2 秒轮询，它在轮询开头读完 _launch_url 之后要花时间
-        #     逐个端口探，这段时间里日志线程早就判完并开好浏览器了。
-        #  2) 点「停止」时 launch_stop 会把 _launch_url 清成 None，端口探测线程
-        #     的守卫当场失效；而正在被杀的 python 进程还没来得及释放端口，
-        #     于是被当成「刚刚启动成功」，又开一个根本打不开的网页。
-        # 解法：用代次（generation）标记每一轮启动，启动/停止各递增一次，
-        # 所有监视线程带着自己那轮的代次干活，代次对不上就立刻收工；
-        # 真正的「开浏览器」收敛到 _mark_launch_ready 一个加锁的入口。
-        self._launch_lock = threading.Lock()
-        self._launch_gen = 0
-        self._launch_opened = False
+        # 一键启动：每个实例一个 InstanceRunner（process_manager.py）
+        self._runners = {}
+        self._runners_lock = threading.Lock()
+        self._open_lock = threading.Lock()
         self._last_open_url = None
         self._last_open_url_ts = 0.0
 
@@ -613,6 +462,7 @@ class LauncherApi:
         # 双击「开始部署」会在前端连发两次请求，检查和置位必须原子，
         # 否则两个部署线程并发跑，日志/配置互相踩
         self._deploy_lock = threading.Lock()
+        self._deploy_cfg = dict(self.cfg)
 
         # 启动器自更新
         self._update_running = False
@@ -629,6 +479,8 @@ class LauncherApi:
         self._hash_thread = None
         self._batch_thread = None
         self._batch_cancel = False
+        self._import_thread = None      # 拖拽上传
+        self._import_cancel = False
 
         # 常用插件
         self._ext_thread = None
@@ -812,6 +664,8 @@ class LauncherApi:
             "cmd_args": cm.build_commandline_args(self.cfg),
             "is_windows": os.name == "nt",
             "launch": self.launch_status(),
+            "instances": _instances_payload(self),
+            "hidden_pages": self.cfg.get("hidden_pages") or [],
             "launcher": {"version": local_ver["version"], "commit": local_ver["commit"]},
             "mirror_status": self._mirror_status_text(),
             "settings_schema": self._settings_schema(),
@@ -837,6 +691,7 @@ class LauncherApi:
         return {
             "vram_legacy": opts(cm.VRAM_MODE_OPTIONS_LEGACY),
             "vram_neo2": opts(cm.VRAM_MODE_OPTIONS_NEO2),
+            "vram_comfy": opts(cm.VRAM_MODE_OPTIONS_COMFY),
             "precision_legacy": opts(cm.PRECISION_MODE_OPTIONS_LEGACY),
             "precision_neo2": opts(cm.PRECISION_MODE_OPTIONS_NEO2),
             "unet_neo2": opts(cm.UNET_PRECISION_OPTIONS_NEO2),
@@ -871,7 +726,7 @@ class LauncherApi:
         # WebView2 里偶尔会触发两次（也可能是用户手抖双击），结果就是
         # 一下开两个相同的网页，很莫名其妙。
         now = time.time()
-        with self._launch_lock:
+        with self._open_lock:
             if url == self._last_open_url and now - self._last_open_url_ts < 1.5:
                 return {"ok": True, "deduped": True}
             self._last_open_url = url
@@ -881,33 +736,6 @@ class LauncherApi:
         except Exception:
             pass
         return {"ok": True}
-
-    def _mark_launch_ready(self, gen, url, text, auto_open):
-        """
-        「WebUI 就绪」的唯一入口：日志解析线程和端口探测线程都走这里。
-
-        返回 True 表示本次调用是真正的首次就绪（状态已更新、浏览器已开）；
-        返回 False 表示这一轮启动已经作废（用户点了停止/又点了启动），
-        或者另一条线程抢先判定过了 —— 两种情况都不该再开浏览器。
-        """
-        with self._launch_lock:
-            if gen != self._launch_gen:
-                return False          # 这轮启动已经被 停止/重启 作废
-            if self._launch_opened:
-                return False          # 另一条线程抢先判定过了
-            self._launch_opened = True
-            self._launch_url = url
-        self._set_launch_status("ready", text, url=url)
-        if auto_open:
-            try:
-                webbrowser.open(url)
-            except Exception:
-                pass
-        return True
-
-    def _launch_gen_alive(self, gen):
-        """监视线程的心跳检查：代次对不上就说明该收工了。"""
-        return gen == self._launch_gen
 
     def reveal_in_explorer(self, path):
         try:
@@ -922,18 +750,32 @@ class LauncherApi:
         return {"ok": True}
 
     def webui_running(self):
-        return bool(self._launch_proc and self._launch_proc.poll() is None)
+        """任一实例在运行（关窗确认、重启启动器都看这个）"""
+        return any(r.running() for r in list(self._runners.values()))
+
+    def _kill_all_runners(self):
+        killed = False
+        for r in list(self._runners.values()):
+            if r.running():
+                r.stop()
+                killed = True
+        return killed
 
     def deploy_running(self):
         return bool(self._deploy_running)
 
     def request_exit_confirm(self):
-        """窗口关闭事件里调用：WebUI 还在跑就让前端弹确认框"""
-        self._emit("app", "confirm_exit")
+        """窗口关闭事件里调用：还有实例在跑就让前端弹确认框（带上是哪些实例）"""
+        names = []
+        for iid, r in list(self._runners.items()):
+            if r.running():
+                inst = cm.find_instance(self.cfg, iid) or {}
+                names.append(inst.get("name") or r.label())
+        self._emit("app", "confirm_exit", names=names)
 
     def exit_app(self, kill_webui=True):
         if kill_webui:
-            self._kill_launch_tree()
+            self._kill_all_runners()
             if self._window:
                 self._window.destroy()
             return {"ok": True}
@@ -941,386 +783,72 @@ class LauncherApi:
         # 已经关了，观感就是「退出卡死」），所以这里不再尝试关窗，改为
         # 明确提示用户本次退出已被取消
         self._emit("app", "error",
-                   text="已取消退出：Forge WebUI 仍在运行，直接退出会留下占端口/显存的孤儿进程。"
-                        "请先停止 WebUI，或在关闭确认框里选「结束 WebUI 并退出」。")
+                   text="已取消退出：还有实例在运行，直接退出会留下占端口/显存的孤儿进程。"
+                        "请先停止，或在关闭确认框里选「结束并退出」。")
         return {"ok": True}
 
     # ============================================================
     # 一键启动
     # ============================================================
 
-    def launch_status(self):
-        return {
-            "running": self.webui_running(),
-            "state": self._launch_state,
-            "url": self._launch_url,
-            "text": self._launch_status_text,
-        }
+    def _runner(self, iid=None):
+        iid = iid or self.cfg.get("active_instance")
+        with self._runners_lock:
+            r = self._runners.get(iid)
+            if r is None:
+                r = InstanceRunner(self, iid)
+                self._runners[iid] = r
+            return r
 
-    def _set_launch_status(self, state, text, url=None):
-        self._launch_state = state
-        self._launch_status_text = text
-        if url is not None:
-            self._launch_url = url
-        self._emit("launch", "status", state=state, text=text, url=self._launch_url)
+    def instance_cfg(self, iid):
+        return cm.instance_cfg(self.cfg, iid)
 
-    def launch_env_detect(self, root):
-        """检测便携版/系统 python/git，供前端展示提示"""
-        root = (root or "").strip()
-        out = {"python": "", "git": ""}
-        if not root or not os.path.isdir(root):
-            return {"ok": True, **out}
-        if not (self.cfg.get("custom_python_path") or "").strip():
-            found = cm.detect_bundled_python(root)
-            out["python"] = f"检测到便携版 Python: {found}" if found else "未检测到便携版 Python，将使用系统 python"
-        if not (self.cfg.get("custom_git_path") or "").strip():
-            found = cm.detect_bundled_git(root)
-            out["git"] = f"检测到便携版 Git: {found}" if found else "未检测到便携版 Git，将使用系统 git"
-        return {"ok": True, **out}
-
-    def launch_precheck(self, root):
-        """
-        启动前的全部检查，一次返回。前端根据 issues 决定直接启动还是弹窗确认。
-        issue.level: error（不能启动）/ warn（可修复或跳过）
-        """
-        root = (root or "").strip()
-        issues = []
-        if not root or not os.path.isdir(root):
-            issues.append({"level": "error", "text": "请先设置正确的 WebUI 根目录"})
-            return {"ok": False, "issues": issues}
-
-        entry = os.path.join(root, WEBUI_ENTRY_SCRIPT)
-        if not os.path.exists(entry):
-            issues.append({
-                "level": "error",
-                "text": f"该目录下没有找到 {WEBUI_ENTRY_SCRIPT}。\n"
-                        "如果你还没安装，去「环境部署」页先部署一个；如果目录没错，"
-                        "确认一下这是不是 WebUI 的根目录（应该和 webui.py 在同一层）。",
-            })
-            return {"ok": False, "issues": issues}
-
+    def _instance_set_root(self, iid, root):
+        inst = cm.find_instance(self.cfg, iid)
+        if inst is None:
+            return
+        if iid == self.cfg.get("active_instance"):
+            self.cfg["webui_root"] = root
+        inst["webui_root"] = root
         try:
-            root.encode("ascii")
-        except UnicodeEncodeError:
-            issues.append({
-                "level": "warn", "id": "non_ascii_path",
-                "text": f"WebUI 根目录：\n{root}\n\n包含中文（或其他非英文字符）。"
-                        "启动器本身没问题，但 Forge 依赖的 torch / gradio / 部分扩展在中文路径下"
-                        "有各自的历史 bug，出问题时很难排查。\n\n"
-                        "强烈建议把整个文件夹移到纯英文路径（例如 F:\\forge）再启动。",
-            })
-        if " " in root:
-            issues.append({
-                "level": "warn", "id": "space_in_path",
-                "text": f"WebUI 根目录：\n{root}\n\n包含空格。虽然多数情况下能跑，"
-                        "但部分扩展/依赖对带空格的路径处理得不好。\n"
-                        "建议换成不含空格的路径（例如 F:\\forge）。",
-            })
+            cm.save_config(self.cfg)
+        except OSError:
+            pass
 
-        # 试运行 python / git：路径存在 ≠ 能执行（解压不完整、缺文件、
-        # 被杀软拦截都会让 exe 一跑就挂）。git 挂了 Forge 会在启动中途抛
-        # "ImportError: Bad git executable"，提前在这里用大白话拦下来。
-        py_exe = (self.cfg.get("custom_python_path") or "").strip() \
-            or cm.detect_bundled_python(root)
-        if py_exe:
-            ok, why = _probe_executable([py_exe.strip('"'), "--version"])
-            if not ok:
-                issues.append({
-                    "level": "error",
-                    "text": f"便携版 Python 无法运行：\n{py_exe}\n\n原因: {why}\n\n"
-                            "常见情况是整合包解压不完整或文件被杀毒软件损坏，"
-                            "建议重新解压整合包（解压前关掉杀毒/ Defender 实时保护，"
-                            "或把目录加进排除列表）。",
-                })
-        git_exe = (self.cfg.get("custom_git_path") or "").strip() \
-            or cm.detect_bundled_git(root)
-        if git_exe:
-            ok, why = _probe_executable([git_exe.strip('"'), "version"])
-            if not ok:
-                issues.append({
-                    "level": "error",
-                    "text": f"便携版 Git 无法运行：\n{git_exe}\n\n原因: {why}\n\n"
-                            "Git 损坏会让 Forge 启动到一半报 Bad git executable 然后退出。\n"
-                            "常见原因：整合包解压不完整（git 目录缺文件）、文件被杀毒软件拦截。\n"
-                            "解决办法：重新解压整合包；或者把根目录下的 git 文件夹改名/删除，"
-                            "启动器会改用系统里已安装的 Git（前提是系统装过）。",
-                })
-
-        if self.cfg.get("enable_listen") and self.cfg.get("enable_insecure_extension_access"):
-            issues.append({
-                "level": "warn", "id": "listen_insecure_combo",
-                "text": "当前同时开启了 --listen（允许局域网访问）和\n"
-                        "--enable-insecure-extension-access（允许网页安装扩展）。\n\n"
-                        "这个组合意味着：同一局域网里的任何人都能从网页给你的 WebUI "
-                        "装扩展——而扩展就是任意 Python 代码，等于把整台电脑交出去。\n\n"
-                        "建议到「高级选项」至少关掉其中一个：\n"
-                        "  · 只是自己用 → 关掉 --listen（仅本机访问）\n"
-                        "  · 确需局域网访问 → 关掉 --enable-insecure-extension-access",
-            })
-
-        overrides = _find_webui_user_bat_overrides(root)
-        if overrides:
-            detail = "\n".join(f"  第 {ln} 行: set {name}={val}" for name, val, ln in overrides)
-            issues.append({
-                "level": "warn", "id": "user_bat_overrides",
-                "text": "检测到 webui-user.bat 里写死了以下变量：\n\n" + detail + "\n\n"
-                        "这几行是无条件执行的 set，会把启动器注入的路径/参数强行覆盖回去，"
-                        "很可能导致启动失败（尤其是换过电脑、改过安装路径之后）。\n"
-                        "选择「清空并启动」会自动清空这几行（原文件备份为 webui-user.bat.bak）。",
-            })
-
-        # 残留进程检查：不限于配置的端口，7860-7869 整个范围都扫。
-        # 上次没退干净的 WebUI 会同时占着显存/内存，还会干扰就绪探测
-        # （把旧进程误判成“刚启动成功”，浏览器秒开一个旧实例）。
-        cfg_port = str(self.cfg.get("port", "")).strip()
-        scan_ports = [int(cfg_port)] if cfg_port.isdigit() else list(range(7860, 7870))
-        leftovers, seen = [], set()
-        for p in scan_ports:
-            pid = find_listening_pid(str(p))
-            if pid and pid not in seen:
-                seen.add(pid)
-                leftovers.append((p, pid))
-        if leftovers:
-            detail = "\n".join(
-                f"  端口 {p}: {process_name_of(pid) or '未知进程'} (PID {pid})"
-                for p, pid in leftovers)
-            issues.append({
-                "level": "warn", "id": "port_occupied",
-                "pid": leftovers[0][1],
-                "pids": [pid for _, pid in leftovers],
-                "text": f"检测到 {len(leftovers)} 个残留进程还占着端口：\n\n{detail}\n\n"
-                        "这通常是之前没退干净的 WebUI 实例，还占着显存和内存，"
-                        "而且会干扰启动器的就绪检测（把旧进程误判成刚启动成功的那个）。\n"
-                        "选择「结束并启动」会把它们全部结束；"
-                        "选择「直接启动」Forge 会自动换用空闲端口。",
-            })
-
-        return {"ok": True, "issues": issues}
-
-    def launch_start(self, root, fix_overrides=False, kill_pid=0):
-        if self.webui_running():
-            return {"ok": False, "error": "WebUI 已在运行中"}
-        root = (root or "").strip()
-        if not root or not os.path.isdir(root):
-            return {"ok": False, "error": "WebUI 根目录无效"}
-        if not os.path.exists(os.path.join(root, WEBUI_ENTRY_SCRIPT)):
-            return {"ok": False, "error": f"目录下没有 {WEBUI_ENTRY_SCRIPT}"}
-
-        self.cfg["webui_root"] = root
-        cm.save_config(self.cfg)
-
-        log = lambda t: self._emit("launch", "log", text=t)
-
-        if kill_pid:
-            pids = kill_pid if isinstance(kill_pid, (list, tuple)) else [kill_pid]
-            for pid in pids:
-                try:
-                    pid = int(pid)
-                except (TypeError, ValueError):
-                    continue
-                pname = process_name_of(pid) or "未知进程"
-                kill_process_tree(pid)
-                log(f"[启动器] 已结束占用端口的残留进程 {pname} (PID {pid})\n")
-
-        if fix_overrides:
-            try:
-                _clear_webui_user_bat_overrides(root)
-                log("[启动器] 已清空 webui-user.bat 里写死的 PYTHON/GIT/VENV_DIR/"
-                    "COMMANDLINE_ARGS（原文件备份为 webui-user.bat.bak）\n")
-            except OSError as e:
-                return {"ok": False, "error": f"无法修改 webui-user.bat：{e}"}
-
-        # 先静默修复 venv\pyvenv.cfg 里过期的 home 路径（安装目录被移动/改名后
-        # 最常见的启动失败原因）。必须在删除判断之前做：目录移动后 venv 的
-        # python.exe 启动桩会失效，不先修好它，完好的 venv 会被误判成残缺。
-        resolved_python = (self.cfg.get("custom_python_path") or "").strip()
-        if not resolved_python:
-            resolved_python = cm.detect_bundled_python(root) or ""
-        if resolved_python:
-            try:
-                cm.sync_venv_pyvenv_cfg(root, resolved_python,
-                                        lambda m: log(m + "\n"))
-            except OSError as e:
-                log(f"[启动器] 检查 venv pyvenv.cfg 时出错（不影响继续启动）: {e}\n")
-
-        # 删掉【确认损坏】的 venv（缺 python.exe 或确定没有 pip）：便携 Python
-        #（python-build-standalone）的 ensurepip 不全，由它建出来的 venv
-        # 可能没有 pip，webui.bat 走到装依赖一步必炸 "No module named pip"。
-        # 删掉后 build_launch_env_overrides 会给便携 Python 走 VENV_DIR=-
-        #（不用 venv，依赖直接装进便携 Python），自定义 Python 则由
-        # webui.bat 自动重建。注意：检测超时/失败的不算确认损坏，不删。
-        venv_dir = os.path.join(root, "venv")
-        if cm.venv_is_definitely_broken(venv_dir):
-            shutil.rmtree(venv_dir, ignore_errors=True)
-            if not os.path.isdir(venv_dir):
-                log(f"[启动器] 检测到残缺的 venv（缺 python.exe 或 pip），已删除: {venv_dir}\n")
+    def _runner_ports_in_use(self, except_iid):
+        """其他正在运行的实例占用的端口（多开时分配端口要避开）"""
+        ports = set()
+        for iid, r in list(self._runners.items()):
+            if iid == except_iid or not r.running():
+                continue
+            if r.port:
+                ports.add(int(r.port))
             else:
-                log(f"[启动器] 检测到残缺的 venv 但删除失败（可能被占用），"
-                    f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
+                # 端口还没确定（启动中）：把它可能用到的端口都算上
+                c = self.instance_cfg(iid) or {}
+                p = str(c.get("port", "")).strip()
+                ports.add(int(p) if p.isdigit() else r._base_port())
+        return ports
 
-        args_str = cm.build_commandline_args(self.cfg)
-        env_overrides = cm.build_launch_env_overrides(self.cfg, root)
-        log(f"[启动器] 正在启动 {WEBUI_ENTRY_SCRIPT} ...\n")
-        log(f"[启动器] COMMANDLINE_ARGS = {args_str}\n")
-        for k, v in env_overrides.items():
-            if k != "COMMANDLINE_ARGS":
-                log(f"[启动器] {k} = {v}\n")
-        log("\n")
+    def _instance_launch_extras(self, iid, cfg, log):
+        """启动前把共享模型库挂到实例上（见 _library_launch_extras）"""
+        _library_launch_extras(self, iid, cfg, log)
 
-        # 就绪探测用的端口范围（跟 _launch_port_watcher 保持一致），
-        # 并在启动前给这些端口的现有监听者拍快照——否则上次没退干净的
-        # 残留 WebUI 会被误判成“刚启动成功”，浏览器秒开一个旧实例。
-        cfg_port = str(self.cfg.get("port", "")).strip()
-        watch_ports = [int(cfg_port)] if cfg_port.isdigit() else list(range(7860, 7870))
-        pre_pids = set()
-        for p in watch_ports:
-            pid = find_listening_pid(str(p))
-            if pid:
-                pre_pids.add(pid)
-        self._launch_watch_ports = watch_ports
-        self._launch_pre_pids = pre_pids
+    # 以下几个是 V2 的接口，iid 省略 = 当前实例；前端启动页照旧调用
+    def launch_status(self, iid=None):
+        return self._runner(iid).status()
 
-        env = cm.build_subprocess_env(self.cfg, root)
-        try:
-            self._launch_proc = subprocess.Popen(
-                ["cmd.exe", "/c", WEBUI_ENTRY_SCRIPT] if os.name == "nt" else ["sh", "webui.sh"],
-                cwd=root, env=env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                creationflags=_NO_WINDOW,
-            )
-        except OSError as e:
-            return {"ok": False, "error": f"启动失败: {e}"}
+    def launch_env_detect(self, root, iid=None):
+        return self._runner(iid).env_detect(root)
 
-        # 开启新一轮：代次 +1，把上一轮可能还活着的监视线程全部作废，
-        # 同时重置「本轮是否已经开过浏览器」的标记
-        with self._launch_lock:
-            self._launch_gen += 1
-            gen = self._launch_gen
-            self._launch_opened = False
-            self._launch_url = None
+    def launch_precheck(self, root, iid=None):
+        return self._runner(iid).precheck(root)
 
-        self._output_tail = ""
-        self._set_launch_status("starting", "启动中，等待 Forge 输出监听地址...", url=None)
-        self._emit("launch", "state", running=True)
-        self._spawn(lambda: self._launch_reader(gen), name="launch-reader")
-        # 兜底：有些整合包的 webui.bat 会把输出重定向到自己的 log 文件，
-        # 管道里一个字节都没有，靠解析输出判断就绪就会永远卡在「启动中」——
-        # 所以同时起一个端口监视线程，发现 python 在监听就直接判定就绪
-        self._spawn(lambda: self._launch_port_watcher(gen), name="launch-port-watcher")
-        return {"ok": True}
+    def launch_start(self, root, fix_overrides=False, kill_pid=0, iid=None):
+        return self._runner(iid).start(root, fix_overrides, kill_pid)
 
-    def _launch_port_watcher(self, gen):
-        ports = getattr(self, "_launch_watch_ports", None) or list(range(7860, 7870))
-        pre_pids = getattr(self, "_launch_pre_pids", None) or set()
-        # 用户若已在设置里开了 --autolaunch（Forge 自己开浏览器），启动器就
-        # 不再重复打开——否则同一地址会一下弹出两个网页
-        auto_open = (bool(self.cfg.get("auto_open_browser_on_ready", True))
-                     and not bool(self.cfg.get("autolaunch")))
-        skipped_logged = set()
-        for _ in range(600):  # 每 2 秒一次，最长 20 分钟
-            if not self._launch_gen_alive(gen):
-                return  # 用户已经点了停止 / 又点了启动，这轮作废
-            if not self._launch_proc or self._launch_proc.poll() is not None:
-                return
-            if self._launch_url:
-                return  # 日志解析已经拿到地址了
-            for p in ports:
-                # 每探一个端口都重查一次代次：探端口本身有耗时（netstat/
-                # 系统调用），用户完全可能在这中间点了停止按钮
-                if not self._launch_gen_alive(gen):
-                    return
-                pid = find_listening_pid(str(p))
-                if not pid:
-                    continue
-                if pid in pre_pids:
-                    # 启动前就存在的监听者 = 上次没退干净的残留，不算本次就绪
-                    if p not in skipped_logged:
-                        skipped_logged.add(p)
-                        self._emit("launch", "log",
-                                   text=f"[启动器] 端口 {p} 上有残留的旧 WebUI 进程 (PID {pid})，"
-                                        "就绪判定将忽略它；建议下次启动前在预检弹窗里选「结束并启动」\n")
-                    continue
-                pname = (process_name_of(pid) or "").lower()
-                if pname not in ("python.exe", "pythonw.exe", "python3.exe"):
-                    continue
-                url = f"http://127.0.0.1:{p}"
-                if self._mark_launch_ready(
-                        gen, url, f"已就绪（端口探测），实际访问地址: {url}", auto_open):
-                    self._emit("launch", "log",
-                               text=f"\n[启动器] 通过端口探测到 WebUI 已在监听: {url}\n")
-                return
-            time.sleep(2)
-
-    def _launch_reader(self, gen):
-        proc = self._launch_proc
-        # 用户若已在设置里开了 --autolaunch（Forge 自己开浏览器），启动器就
-        # 不再重复打开——否则同一地址会一下弹出两个网页
-        auto_open = (bool(self.cfg.get("auto_open_browser_on_ready", True))
-                     and not bool(self.cfg.get("autolaunch")))
-        try:
-            while True:
-                # read1() 而非 read()：后者会攒满 4096 字节才返回，
-                # WebUI 输出停顿时段日志会一直卡住不显示
-                data = proc.stdout.read1(4096)
-                if not data:
-                    break
-                text = cm.decode_process_output(data)
-                self._emit("launch", "log", text=text)
-
-                combined = self._output_tail + text
-                self._output_tail = combined[-500:]
-
-                if _BIND_ERROR_RE.search(combined) and not self._launch_url:
-                    self._set_launch_status(
-                        "starting", "检测到端口被占用，Forge 正在自动尝试其他端口，请以后面出现的地址为准")
-
-                m = _URL_RE.search(combined)
-                if m and not self._launch_url:
-                    url = m.group(1).replace("0.0.0.0", "127.0.0.1")
-                    self._mark_launch_ready(gen, url, f"已就绪，实际访问地址: {url}", auto_open)
-        except Exception:
-            self._emit("launch", "log",
-                       text="\n[启动器] 读取进程输出时出错:\n" + traceback.format_exc()[-800:] + "\n")
-        finally:
-            rc = proc.wait()
-            self._emit("launch", "log", text=f"\n[启动器] 进程已结束，返回码: {rc}\n")
-            # 只有当这一轮还是「当前那一轮」时才改全局状态。
-            # 否则会出现这种错位：用户点停止 → 立刻又点启动 → 上一轮的
-            # reader 这时才收尾，把刚起来的新一轮状态改成「已停止」。
-            if self._launch_gen_alive(gen):
-                self._launch_proc = None
-                self._launch_url = None
-                self._set_launch_status("stopped", "已停止")
-                self._emit("launch", "state", running=False)
-
-    def _kill_launch_tree(self):
-        if self._launch_proc and self._launch_proc.poll() is None:
-            kill_process_tree(self._launch_proc.pid)
-            try:
-                self._launch_proc.kill()
-                self._launch_proc.wait(timeout=3)
-            except Exception:
-                pass
-            return True
-        return False
-
-    def launch_stop(self):
-        # 先作废代次，再动手杀进程。顺序很重要：反过来的话，杀进程那几秒里
-        # 端口探测线程还认为自己有效，而正在退出的 python 仍占着端口没释放，
-        # 就会被判成「刚就绪」，弹出一个根本打不开的网页。
-        with self._launch_lock:
-            self._launch_gen += 1
-            self._launch_opened = True   # 本轮彻底封死开浏览器这条路
-            self._launch_url = None
-
-        killed = self._kill_launch_tree()
-        if killed:
-            self._emit("launch", "log", text="\n[启动器] 已终止 WebUI 进程树（含子进程，端口已释放）\n")
-        self._launch_proc = None
-        self._set_launch_status("stopped", "已停止")
-        self._emit("launch", "state", running=False)
-        return {"ok": True, "killed": killed}
+    def launch_stop(self, iid=None):
+        return self._runner(iid).stop()
 
 
 class _DeployCancelled(Exception):
@@ -1365,6 +893,10 @@ def _api_deploy_check_dir(self, target):
     if not target:
         return {"ok": True, "status": "warn", "message": "请先选择目录"}
     webui_bat = os.path.join(target, "webui.bat")
+    if cm.comfy_layout(target)[0]:
+        return {"ok": True, "status": "ok",
+                "message": "检测到该目录已经是一个 ComfyUI 安装，无需重新克隆，"
+                           "可直接点击部署来补齐依赖（请把上面的分支选成 ComfyUI）"}
     if os.path.isdir(target) and os.path.exists(webui_bat):
         return {"ok": True, "status": "ok",
                 "message": "检测到该目录已经是一个 WebUI 安装（存在 webui.bat），无需重新克隆，"
@@ -1387,7 +919,10 @@ def _api_deploy_precheck(self, target, branch, use_portable):
         return {"ok": False, "issues": [{"level": "error", "text": "请先选择安装目录"}]}
 
     webui_bat = os.path.join(target, "webui.bat")
-    already_installed = os.path.isdir(target) and os.path.exists(webui_bat)
+    if branch == "comfyui":
+        already_installed = bool(cm.comfy_layout(target)[0])
+    else:
+        already_installed = os.path.isdir(target) and os.path.exists(webui_bat)
 
     if not already_installed and os.path.isdir(target):
         entries = set(os.listdir(target))
@@ -1460,8 +995,9 @@ def _api_deploy_start(self, target, branch, use_portable):
             return {"ok": False, "error": f"无法创建目录：\n{target}\n\n{e}\n\n"
                                           "常见原因：盘符不存在、路径不合法、或没有写入权限。"}
 
-        self.cfg["webui_branch"] = branch
-        cm.save_config(self.cfg)
+        # 部署用一份独立配置：装到别的目录（= 新实例）时不能沿用当前实例的
+        # Python/Git 路径和启动参数，也不能提前改掉当前实例的分支
+        self._deploy_cfg = _deploy_cfg_for(self, target, branch)
 
         self._deploy_cancel.clear()
         self._deploy_running = True
@@ -1489,6 +1025,8 @@ def _api_deploy_cancel(self):
 
 
 def _deploy_flow(self, target, branch, use_portable):
+    if branch == "comfyui":
+        return _deploy_flow_comfy(self, target, use_portable)
     log = lambda t: self._emit("deploy", "log", text=t)
     progress = lambda d, t: self._emit("deploy", "progress", downloaded=d, total=t)
     try:
@@ -1510,13 +1048,14 @@ def _deploy_flow(self, target, branch, use_portable):
         # 覆盖变量 + git 交互隔离。部署专用：TEMP/缓存重定向到目标盘，
         # 防 C 盘 TEMP 爆满（pip 装 torch 的临时文件好几个 GB）
         def make_env():
-            e = cm.build_subprocess_env(self.cfg, target)
+            e = cm.build_subprocess_env(self._deploy_cfg, target)
             try:
                 tmp_dir = os.path.join(target, ".launcher_tmp")
                 os.makedirs(tmp_dir, exist_ok=True)
                 e["TEMP"] = tmp_dir
                 e["TMP"] = tmp_dir
-                e["PIP_CACHE_DIR"] = os.path.join(target, ".launcher_cache", "pip")
+                # pip 缓存放在启动器自己的目录里，所有实例共用：部署第二个实例几乎不用重新下载
+                e["PIP_CACHE_DIR"] = SHARED_CACHE_PIP
             except OSError:
                 pass
             return e
@@ -1526,7 +1065,7 @@ def _deploy_flow(self, target, branch, use_portable):
         bundled_git = os.path.join(target, "git", "cmd", "git.exe")
         # 便携版下载的触发条件：用户勾选了便携环境，或者系统里根本检测不到。
         # 后者是自动兜底——没装 Python/Git 的电脑不该被一句"请先安装"拦在门外
-        custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
+        custom_git = (self._deploy_cfg.get("custom_git_path") or "").strip().strip('"')
         has_sys_git = bool(shutil.which("git")) or bool(custom_git and os.path.exists(custom_git))
         has_sys_python = bool(shutil.which("python") or shutil.which("python3"))
         need_python = not os.path.exists(bundled_python) and (use_portable or not has_sys_python)
@@ -1551,7 +1090,7 @@ def _deploy_flow(self, target, branch, use_portable):
         # git 选取顺序与启动/预检/插件安装保持一致：自定义路径 > 便携版 > 系统 PATH。
         # 整合包自带的便携 git 可能是坏的（杀软误删等），用户在设置里手动指了
         # git 的话必须处处优先，否则部署这步又会去用坏的那个。
-        custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
+        custom_git = (self._deploy_cfg.get("custom_git_path") or "").strip().strip('"')
         if custom_git and os.path.exists(custom_git):
             git_exe = custom_git
         else:
@@ -1569,7 +1108,7 @@ def _deploy_flow(self, target, branch, use_portable):
             repo_candidates = [repo]
             try:
                 import mirror_manager as mm
-                if mm.resolve_github_mode(self.cfg, log):
+                if mm.resolve_github_mode(self._deploy_cfg, log):
                     mirrored = [mm.github_url(repo, True, i) for i in range(len(mm.GITHUB_PROXIES))]
                     repo_candidates = [u for u in mirrored if u != repo] + [repo]
                     log(f"[网络] 使用 GitHub 加速（{len(repo_candidates)} 个候选地址，失败自动切换）\n")
@@ -1635,7 +1174,7 @@ def _deploy_flow(self, target, branch, use_portable):
         venv_dir = os.path.join(target, "venv")
         # 先修 pyvenv.cfg 的过期 home 路径（目录被移动/改名后 venv 启动桩会
         # 失效），再判断 venv 是否残缺——顺序反了会把完好的 venv 误删
-        resolved_python = (self.cfg.get("custom_python_path") or "").strip()
+        resolved_python = (self._deploy_cfg.get("custom_python_path") or "").strip()
         if not resolved_python:
             resolved_python = cm.detect_bundled_python(target) or ""
         if resolved_python:
@@ -1682,7 +1221,7 @@ def _deploy_flow(self, target, branch, use_portable):
         # 任何失败都不阻断——Forge 的自装路径（已注入 TORCH_INDEX_URL）兜底。
         try:
             import torch_bootstrap
-            torch_bootstrap.ensure_torch(target, self.cfg, log, progress,
+            torch_bootstrap.ensure_torch(target, self._deploy_cfg, log, progress,
                                          self._deploy_cancel)
         except _DeployCancelled:
             raise
@@ -1693,7 +1232,7 @@ def _deploy_flow(self, target, branch, use_portable):
             raise _DeployCancelled()
 
         # ---- 4. 运行一次 webui.bat，让 Forge 自己建 venv 装依赖 ----
-        env_overrides = cm.build_launch_env_overrides(self.cfg, target)
+        env_overrides = cm.build_launch_env_overrides(self._deploy_cfg, target)
         log("\n[部署] 首次运行 webui.bat（自动安装依赖，可能需要较长时间）\n")
         log(f"[部署] COMMANDLINE_ARGS = {env_overrides.get('COMMANDLINE_ARGS', '')}\n")
         for k, v in env_overrides.items():
@@ -1754,9 +1293,7 @@ def _deploy_flow(self, target, branch, use_portable):
             log(f"[部署] hashlib 补丁验证异常（不影响结果）: {e}\n")
 
         # ---- 6. 收尾：路径/分支写回配置，通知前端刷新 ----
-        self.cfg["webui_root"] = target
-        self.cfg["webui_branch"] = branch
-        cm.save_config(self.cfg)
+        _deploy_register_instance(self, target, branch, log)
         log("\n[部署] 全部完成！\n")
         self._emit("deploy", "done", target=target, branch=branch)
     except _DeployCancelled:
@@ -1778,18 +1315,21 @@ def _deploy_flow(self, target, branch, use_portable):
 
 
 def _deploy_portable_env(self, target, branch, need_python, need_git, log, progress):
-    import tempfile
-    with tempfile.TemporaryDirectory() as tmp:
+    # 下载的便携 Python / Git 安装包缓存在启动器目录，所有实例共用；
+    # 已有且校验通过就直接用，部署第二个实例不用再下载一遍
+    tmp = SHARED_CACHE_PORTABLE
+    os.makedirs(tmp, exist_ok=True)
+    if True:
         if need_python:
             version_prefix = pe.PYTHON_VERSION_BY_BRANCH.get(branch, "3.10")
             log(f"[便携环境] 查询 python-build-standalone 最新版本 (目标 Python {version_prefix}.x) ...\n")
             net_log = lambda m: log(m + "\n")
-            tag = pe.get_latest_pbs_tag(cfg=self.cfg, log_cb=net_log)
+            tag = pe.get_latest_pbs_tag(cfg=self._deploy_cfg, log_cb=net_log)
             # 防篡改：先取 release 官方清单 SHA256SUMS 作为哈希基准，
             # 下载完必须校验通过才会解压/执行（加速代理是第三方中间人）。
             log("[便携环境] 获取官方校验清单 SHA256SUMS ...\n")
-            sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self.cfg, log_cb=net_log)
-            assets = pe.list_release_assets(pe.PBS_REPO, tag, cfg=self.cfg, log_cb=net_log)
+            sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self._deploy_cfg, log_cb=net_log)
+            assets = pe.list_release_assets(pe.PBS_REPO, tag, cfg=self._deploy_cfg, log_cb=net_log)
             asset = pe.pick_python_asset(assets, version_prefix)
             if not asset:
                 raise pe.PortableEnvError(
@@ -1808,10 +1348,11 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
                         "GitHub API 摘要与官方 SHA256SUMS 不一致，元数据可能被篡改，已中止")
             log(f"[便携环境] 下载 {asset['name']} ...\n")
             archive_path = os.path.join(tmp, asset["name"])
-            pe.download_file(asset["url"], archive_path,
-                             progress_cb=progress,
-                             cancel_flag=self._deploy_cancel.is_set,
-                             cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+            if not _cached_archive_ok(archive_path, expected, log):
+                pe.download_file(asset["url"], archive_path,
+                                 progress_cb=progress,
+                                 cancel_flag=self._deploy_cancel.is_set,
+                                 cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
             pe.verify_downloaded_file(archive_path, expected,
                                       what=f"Python 归档 {asset['name']}")
             log("[便携环境] 校验通过，开始解压\n")
@@ -1823,7 +1364,7 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
         if need_git:
             log("[便携环境] 查询 git-for-windows 最新版本 ...\n")
             assets, body = pe.list_release_assets_with_meta(
-                pe.GIT_REPO, tag=None, cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+                pe.GIT_REPO, tag=None, cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
             asset = pe.pick_git_asset(assets)
             if not asset:
                 raise pe.PortableEnvError("没有找到 PortableGit 64位安装包")
@@ -1833,10 +1374,11 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
                     f"git-for-windows 发布信息中没有 {asset['name']} 的校验和，无法验证下载内容，已中止")
             log(f"[便携环境] 下载 {asset['name']} ...\n")
             archive_path = os.path.join(tmp, asset["name"])
-            pe.download_file(asset["url"], archive_path,
-                             progress_cb=progress,
-                             cancel_flag=self._deploy_cancel.is_set,
-                             cfg=self.cfg, log_cb=lambda m: log(m + "\n"))
+            if not _cached_archive_ok(archive_path, expected, log):
+                pe.download_file(asset["url"], archive_path,
+                                 progress_cb=progress,
+                                 cancel_flag=self._deploy_cancel.is_set,
+                                 cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
             pe.verify_downloaded_file(archive_path, expected,
                                       what=f"Git 安装包 {asset['name']}")
             # 自解压包执行前再验 Authenticode 签名（双保险）
@@ -1979,7 +1521,7 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     # 端口兜底（跟 _launch_port_watcher 同一思路）：输出被重定向时靠
     # TCP 探测判定就绪。必须至少先见过一行输出再探，否则可能连上的
     # 是上一次没退干净的残留服务。探的配置端口，没配就探 7860-7869。
-    cfg_port = str(self.cfg.get("port", "")).strip()
+    cfg_port = str(self._deploy_cfg.get("port", "")).strip()
     probe_ports = [int(cfg_port)] if cfg_port.isdigit() else list(range(7860, 7870))
     tail = ""
     ready = False
@@ -2059,6 +1601,605 @@ _NETWORK_FAIL_RE = re.compile(
     r"Failed to establish|Connection reset|timed out|"
     r"Couldn't install PyTorch|No matching distribution|"
     r"Temporary failure|10054|10060|10061", re.IGNORECASE)
+
+
+# ============================================================
+# 输出管理器（V3 阶段 5）
+# ============================================================
+
+def _outidx(self):
+    """索引和文件服务都是用到时才建，不拖慢启动"""
+    if getattr(self, "_out_index", None) is None:
+        self._out_index = oi.OutputIndex(char_dirs=[os.path.join(APP_DIR, "wd_tagger_models")])
+        self._out_server, self._out_base, self._out_token = oi.start_file_server(self._out_index)
+        self._out_scan_thread = None
+    return self._out_index
+
+
+def _output_sources(self):
+    out = []
+    for iid, _name, c in _all_instance_cfgs(self):
+        info = instance_output_info(c)
+        if info:
+            out.append((iid, info["scan"]))
+    return out
+
+
+def _api_outputs_info(self):
+    idx = _outidx(self)
+    insts = [{"id": iid, "name": n} for iid, n, _c in _all_instance_cfgs(self)]
+    return {"ok": True, "base": self._out_base, "token": self._out_token, "count": idx.count(),
+            "scanning": idx.scanning, "instances": insts, "multi": cm.multi_enabled(self.cfg),
+            "collections": idx.collections(), "fts": idx.fts,
+            "char_dict": len(idx.chars.names),
+            "running": _any_instance_running(self),
+            "dirs": [d for _iid, ds in _output_sources(self) for d in ds]}
+
+
+def _api_outputs_scan(self):
+    idx = _outidx(self)
+    if self._out_scan_thread and self._out_scan_thread.is_alive():
+        return {"ok": True, "busy": True}
+
+    def work():
+        res = idx.scan(_output_sources(self),
+                       progress=lambda p: self._emit("outputs", "scan_progress", **p))
+        self._emit("outputs", "scan_done", count=idx.count(), **res)
+    self._out_scan_thread = self._spawn(work, name="outputs-scan")
+    return {"ok": True}
+
+
+def _api_outputs_query(self, filters):
+    return {"ok": True, **_outidx(self).query(filters or {})}
+
+
+def _api_outputs_facets(self, filters):
+    return {"ok": True, **_outidx(self).facets(filters or {})}
+
+
+def _api_outputs_detail(self, oid):
+    d = _outidx(self).detail(int(oid))
+    if not d:
+        return {"ok": False, "error": "记录不存在"}
+    names = {iid: n for iid, n, _c in _all_instance_cfgs(self)}
+    d["instance_name"] = names.get(d["iid"], "")
+    d["size_text"] = _fmt_size(d["size"] or 0)
+    d["time_text"] = datetime.fromtimestamp(d["mtime"] or 0).strftime("%Y-%m-%d %H:%M:%S")
+    d["exists"] = bool(d["path"] and os.path.isfile(d["path"]))
+    return {"ok": True, **d}
+
+
+def _api_outputs_reveal(self, oid):
+    path, _m = _outidx(self).path_of(int(oid))
+    if not path or not os.path.exists(path):
+        return {"ok": False, "error": "文件已不存在"}
+    return self.reveal_in_explorer(path)
+
+
+def _api_outputs_open(self, oid):
+    path, _m = _outidx(self).path_of(int(oid))
+    if not path or not os.path.exists(path):
+        return {"ok": False, "error": "文件已不存在"}
+    try:
+        if os.name == "nt":
+            os.startfile(path)  # noqa: S606 - 用系统默认程序打开用户自己的出图
+        else:
+            subprocess.Popen(["xdg-open", path])
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def _api_outputs_delete(self, oids):
+    idx = _outidx(self)
+    done, failed = 0, []
+    for oid in oids or []:
+        path, _m = idx.path_of(int(oid))
+        if path and os.path.exists(path):
+            if not ml.send_to_trash(path):
+                failed.append(os.path.basename(path))
+                continue
+        idx.remove(int(oid))
+        done += 1
+    return {"ok": True, "deleted": done, "failed": failed}
+
+
+def _api_outputs_collections(self):
+    return {"ok": True, "collections": _outidx(self).collections()}
+
+
+def _api_outputs_collection_op(self, op, cid=None, name="", oids=None, on=True):
+    idx = _outidx(self)
+    try:
+        if op == "create":
+            cid = idx.collection_create(name)
+        elif op == "rename":
+            idx.collection_rename(cid, name)
+        elif op == "delete":
+            idx.collection_delete(cid)
+        elif op == "set":
+            idx.collection_set(cid, [int(o) for o in (oids or [])], bool(on))
+        else:
+            return {"ok": False, "error": "未知操作"}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid, "collections": idx.collections()}
+
+
+def _api_outputs_collection_export(self, cid, dest):
+    dest = (dest or "").strip()
+    if not dest:
+        return {"ok": False, "error": "请选择导出位置"}
+    paths = _outidx(self).collection_paths(cid)
+    if not paths:
+        return {"ok": False, "error": "收藏夹是空的"}
+
+    def work():
+        n, failed = 0, 0
+        os.makedirs(dest, exist_ok=True)
+        for i, p in enumerate(paths, 1):
+            target = os.path.join(dest, os.path.basename(p))
+            if os.path.exists(target):
+                root, ext = os.path.splitext(target)
+                k = 1
+                while os.path.exists(f"{root}_{k}{ext}"):
+                    k += 1
+                target = f"{root}_{k}{ext}"
+            try:
+                shutil.copy2(p, target)
+                n += 1
+            except OSError:
+                failed += 1
+            self._emit("outputs", "export_progress", i=i, n=len(paths))
+        self._emit("outputs", "export_done", copied=n, failed=failed, dest=dest)
+    self._spawn(work, name="outputs-export")
+    return {"ok": True, "count": len(paths)}
+
+
+# ============================================================
+# 实例管理（V3）
+# ============================================================
+
+def _guess_forge_branch(root):
+    """从 .git/config 的远程地址猜 Forge 分支：Haoming02 的仓库 = Neo，否则 Classic"""
+    try:
+        with open(os.path.join(root, ".git", "config"), "r", encoding="utf-8", errors="replace") as f:
+            txt = f.read().lower()
+        if "sd-webui-forge-classic" in txt:
+            return "neo2"
+        if "stable-diffusion-webui-forge" in txt:
+            return "classic"
+    except OSError:
+        pass
+    return "neo2"
+
+
+def _instances_payload(self):
+    cm.absorb_active(self.cfg)
+    out = []
+    for inst in self.cfg.get("instances") or []:
+        iid = inst["id"]
+        r = self._runners.get(iid)
+        st = r.status() if r else {"iid": iid, "running": False, "state": "idle",
+                                   "url": None, "text": "尚未启动", "port": None}
+        out.append({
+            "id": iid, "name": inst.get("name", ""),
+            "branch": inst.get("webui_branch", ""),
+            "kind": "comfyui" if inst.get("webui_branch") == "comfyui" else "forge",
+            "kind_label": cm.KIND_LABELS.get(inst.get("webui_branch"), "WebUI"),
+            "root": inst.get("webui_root", ""),
+            "port": inst.get("port", ""),
+            "active": iid == self.cfg.get("active_instance"),
+            "status": st,
+        })
+    return {"instances": out, "active": self.cfg.get("active_instance"),
+            "multi": cm.multi_enabled(self.cfg),
+            "multi_manual": bool(self.cfg.get("multi_instance_ui"))}
+
+
+def _api_instances_list(self):
+    return {"ok": True, **_instances_payload(self)}
+
+
+def _api_instance_add(self, root, name=""):
+    root = (root or "").strip().strip('"')
+    if not root or not os.path.isdir(root):
+        return {"ok": False, "error": "目录不存在"}
+    kind = cm.detect_kind(root)
+    if not kind:
+        return {"ok": False, "error": "这个目录看起来既不是 ComfyUI（没有 main.py）也不是 WebUI"
+                                      "（没有 webui.bat）。还没安装的话，去「环境部署」页部署一个。"}
+    for inst in self.cfg.get("instances") or []:
+        if inst.get("webui_root") and _same_path(inst["webui_root"], root):
+            return {"ok": False, "error": f"这个目录已经是实例「{inst.get('name')}」了"}
+    branch = "comfyui" if kind == "comfyui" else _guess_forge_branch(root)
+    # 当前实例还是空的（新用户第一次添加）→ 直接填进当前实例
+    if not (self.cfg.get("webui_root") or "").strip() and len(self.cfg.get("instances") or []) == 1:
+        self.cfg["webui_root"] = root
+        self.cfg["webui_branch"] = branch
+        cm.active_instance(self.cfg)["name"] = (name or "").strip() or cm.KIND_LABELS.get(branch, "WebUI")
+        cm.save_config(self.cfg)
+        self._emit("instances", "changed")
+        return {"ok": True, "id": self.cfg["active_instance"], **_instances_payload(self)}
+    inst = cm.make_instance(None, webui_root=root, webui_branch=branch,
+                            name=(name or "").strip() or _unique_instance_name(
+                                self, cm.KIND_LABELS.get(branch, "WebUI")))
+    self.cfg["instances"].append(inst)
+    cm.save_config(self.cfg)
+    self._emit("instances", "changed")
+    return {"ok": True, "id": inst["id"], **_instances_payload(self)}
+
+
+def _api_instance_remove(self, iid):
+    insts = self.cfg.get("instances") or []
+    if len(insts) <= 1:
+        return {"ok": False, "error": "至少要保留一个实例"}
+    r = self._runners.get(iid)
+    if r and r.running():
+        return {"ok": False, "error": "这个实例正在运行，请先停止"}
+    inst = cm.find_instance(self.cfg, iid)
+    if not inst:
+        return {"ok": False, "error": "实例不存在"}
+    cm.absorb_active(self.cfg)
+    insts.remove(inst)
+    self._runners.pop(iid, None)
+    if self.cfg.get("active_instance") == iid:
+        self.cfg["active_instance"] = insts[0]["id"]
+        cm.project_active(self.cfg)
+    cm.save_config(self.cfg)
+    self._emit("instances", "changed")
+    return {"ok": True, "switched": self.cfg["active_instance"] != iid, **_instances_payload(self)}
+
+
+def _api_instance_update(self, iid, changes):
+    """实例管理页可以直接改的几项：名字 / 端口 / 根目录"""
+    inst = cm.find_instance(self.cfg, iid)
+    if not inst or not isinstance(changes, dict):
+        return {"ok": False, "error": "实例不存在"}
+    cm.absorb_active(self.cfg)
+    for k in ("name", "port", "webui_root"):
+        if k in changes:
+            v = str(changes[k] or "").strip()
+            if k == "port" and v and not v.isdigit():
+                return {"ok": False, "error": "端口必须是数字"}
+            if k == "name" and not v:
+                continue
+            inst[k] = v
+            if k == "webui_root" and v:
+                kind = cm.detect_kind(v)
+                if kind == "comfyui":
+                    inst["webui_branch"] = "comfyui"
+                elif kind == "forge" and inst.get("webui_branch") == "comfyui":
+                    inst["webui_branch"] = _guess_forge_branch(v)
+    if iid == self.cfg.get("active_instance"):
+        cm.project_active(self.cfg)
+    cm.save_config(self.cfg)
+    self._emit("instances", "changed")
+    return {"ok": True, **_instances_payload(self)}
+
+
+def _api_instance_switch(self, iid):
+    if not cm.find_instance(self.cfg, iid):
+        return {"ok": False, "error": "实例不存在"}
+    cm.absorb_active(self.cfg)
+    self.cfg["active_instance"] = iid
+    cm.project_active(self.cfg)
+    cm.save_config(self.cfg)
+    return {"ok": True}
+
+
+def _api_instance_config_get(self, iid):
+    """高级选项页按实例读取：全局键 + 该实例的实例键的合并视图"""
+    cfg = cm.instance_cfg(self.cfg, iid)
+    if cfg is None:
+        return {"ok": False, "error": "实例不存在"}
+    return {"ok": True, "iid": iid, "config": cfg,
+            "cmd_args": cm.build_commandline_args(cfg)}
+
+
+def _api_instance_config_update(self, iid, changes):
+    """高级选项页按实例保存：只接受实例级键，写进指定实例（可以不是当前实例）"""
+    inst = cm.find_instance(self.cfg, iid)
+    if not inst or not isinstance(changes, dict):
+        return {"ok": False, "error": "实例不存在"}
+    # 先把当前实例的顶层投影收回去，避免 save_config 时把旧值盖回来
+    cm.absorb_active(self.cfg)
+    for k, v in changes.items():
+        if k in cm.INSTANCE_KEYS:
+            inst[k] = v
+    if iid == self.cfg.get("active_instance"):
+        cm.project_active(self.cfg)
+    cm.save_config(self.cfg)
+    eff = cm.instance_cfg(self.cfg, iid)
+    return {"ok": True, "cmd_args": cm.build_commandline_args(eff)}
+
+
+def _api_set_multi_ui(self, on):
+    self.cfg["multi_instance_ui"] = bool(on)
+    cm.save_config(self.cfg)
+    return {"ok": True, **_instances_payload(self)}
+
+
+def _api_set_hidden_pages(self, pages):
+    allowed = {"settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta", "outputs"}
+    self.cfg["hidden_pages"] = [p for p in (pages or []) if p in allowed]
+    cm.save_config(self.cfg)
+    return {"ok": True, "hidden_pages": self.cfg["hidden_pages"]}
+
+
+# ============================================================
+# 部署：共享缓存 / 实例登记 / ComfyUI
+# ============================================================
+SHARED_CACHE_DIR = os.path.join(APP_DIR, "launcher_data", "cache")
+SHARED_CACHE_PIP = os.path.join(SHARED_CACHE_DIR, "pip")
+SHARED_CACHE_PORTABLE = os.path.join(SHARED_CACHE_DIR, "portable")
+
+COMFY_REPO = "https://github.com/comfyanonymous/ComfyUI.git"
+COMFY_REF = "master"
+# ComfyUI 官方 README 推荐的 CUDA 版本 torch；RTX 50 系需要 cu128 及以上
+COMFY_TORCH_TAG = "cu128"
+
+
+def _cached_archive_ok(path, expected_sha, log):
+    """共享缓存里已有同名安装包且哈希对得上 → 直接复用，不用再下载"""
+    if not os.path.isfile(path):
+        return False
+    try:
+        if pe.sha256_file(path).lower() == (expected_sha or "").lower():
+            log(f"[便携环境] 复用已缓存的安装包：{os.path.basename(path)}\n")
+            return True
+    except OSError:
+        pass
+    try:
+        os.remove(path)     # 半截或损坏的旧文件，删掉重下
+    except OSError:
+        pass
+    return False
+
+
+def _same_path(a, b):
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except Exception:
+        return False
+
+
+def _deploy_cfg_for(self, target, branch):
+    """部署用配置：目标就是当前实例的目录 → 沿用当前实例设置；否则用默认实例设置"""
+    cfg = dict(self.cfg)
+    active_root = (self.cfg.get("webui_root") or "").strip()
+    if not (active_root and _same_path(active_root, target)):
+        for k in cm.INSTANCE_KEYS:
+            cfg[k] = cm.DEFAULT_CONFIG.get(k)
+    cfg["webui_branch"] = branch
+    cfg["webui_root"] = target
+    return cfg
+
+
+def _deploy_register_instance(self, target, branch, log):
+    """
+    部署成功后登记实例：
+      - 已有实例就是这个目录 → 更新它的分支
+      - 当前实例还没设置目录（新用户）→ 直接用当前实例
+      - 否则新建一个实例（实例数变成 2，多实例功能自动出现）
+    """
+    for inst in self.cfg.get("instances") or []:
+        if inst.get("webui_root") and _same_path(inst["webui_root"], target):
+            inst["webui_branch"] = branch
+            if inst["id"] == self.cfg.get("active_instance"):
+                self.cfg["webui_branch"] = branch
+            cm.save_config(self.cfg)
+            self._emit("instances", "changed")
+            return inst["id"]
+    if not (self.cfg.get("webui_root") or "").strip():
+        self.cfg["webui_root"] = target
+        self.cfg["webui_branch"] = branch
+        inst = cm.active_instance(self.cfg)
+        if inst is not None:
+            inst["name"] = cm.KIND_LABELS.get(branch, inst.get("name", ""))
+        cm.save_config(self.cfg)
+        self._emit("instances", "changed")
+        return self.cfg.get("active_instance")
+    inst = cm.make_instance(None, webui_root=target, webui_branch=branch,
+                            name=_unique_instance_name(self, cm.KIND_LABELS.get(branch, "WebUI")))
+    self.cfg["instances"].append(inst)
+    cm.save_config(self.cfg)
+    log(f"[部署] 已添加为新实例「{inst['name']}」，可以在侧栏切换实例\n")
+    self._emit("instances", "changed")
+    return inst["id"]
+
+
+def _unique_instance_name(self, base):
+    names = {i.get("name") for i in self.cfg.get("instances") or []}
+    if base not in names:
+        return base
+    n = 2
+    while f"{base} {n}" in names:
+        n += 1
+    return f"{base} {n}"
+
+
+def _deploy_flow_comfy(self, target, use_portable):
+    """部署 ComfyUI：便携 Python/Git → 拉源码 → 装 torch → 装依赖 → 冒烟测试 → 登记实例"""
+    log = lambda t: self._emit("deploy", "log", text=t)
+    progress = lambda d, t: self._emit("deploy", "progress", downloaded=d, total=t)
+    dcfg = self._deploy_cfg
+    try:
+        def make_env():
+            e = cm.build_comfy_env(dcfg, target)
+            try:
+                tmp_dir = os.path.join(target, ".launcher_tmp")
+                os.makedirs(tmp_dir, exist_ok=True)
+                e["TEMP"] = tmp_dir
+                e["TMP"] = tmp_dir
+                e["PIP_CACHE_DIR"] = SHARED_CACHE_PIP
+            except OSError:
+                pass
+            return e
+        env = make_env()
+
+        bundled_python = os.path.join(target, "python", "python.exe")
+        bundled_git = os.path.join(target, "git", "cmd", "git.exe")
+        custom_git = (dcfg.get("custom_git_path") or "").strip().strip('"')
+        has_sys_git = bool(shutil.which("git")) or bool(custom_git and os.path.exists(custom_git))
+        has_sys_python = bool(shutil.which("python") or shutil.which("python3"))
+        need_python = not os.path.exists(bundled_python) and (use_portable or not has_sys_python)
+        need_git = not os.path.exists(bundled_git) and (use_portable or not has_sys_git)
+
+        # ---- 1. 便携 Python / Git ----
+        if need_python or need_git:
+            log(f"[部署] 准备便携环境 (Python: {'需要' if need_python else '跳过'}, "
+                f"Git: {'需要' if need_git else '跳过'})\n")
+            self._deploy_portable_env(target, "comfyui", need_python, need_git, log, progress)
+            progress(0, 0)
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+
+        git_exe = custom_git if (custom_git and os.path.exists(custom_git)) else (
+            bundled_git if os.path.exists(bundled_git) else "git")
+        if os.path.exists(bundled_git):
+            pe.tune_bundled_git(os.path.join(target, "git"), log_cb=log)
+
+        # ---- 2. 拉源码（幂等：已有 main.py 就跳过）----
+        if not os.path.isfile(os.path.join(target, "main.py")):
+            candidates = [COMFY_REPO]
+            try:
+                import mirror_manager as mm
+                if mm.resolve_github_mode(dcfg, log):
+                    mirrored = [mm.github_url(COMFY_REPO, True, i) for i in range(len(mm.GITHUB_PROXIES))]
+                    candidates = [u for u in mirrored if u != COMFY_REPO] + [COMFY_REPO]
+            except Exception:
+                pass
+            parent = os.path.dirname(os.path.abspath(target)) or "."
+            for program, args in ((git_exe, ["init", target]),
+                                  (git_exe, ["-C", target, "config", "remote.origin.fetch",
+                                             "+refs/heads/*:refs/remotes/origin/*"])):
+                if self._deploy_run_cmd(program, args, parent, log, env=env) != 0:
+                    log("\n[部署] git 初始化失败，请检查日志\n")
+                    self._emit("deploy", "error", title="部署失败", text="git 初始化失败，请查看部署日志。")
+                    return
+            fetched = False
+            for u in candidates:
+                if self._deploy_cancel.is_set():
+                    raise _DeployCancelled()
+                self._deploy_run_cmd(git_exe, ["-C", target, "config", "remote.origin.url", u],
+                                     parent, log, env=env)
+                rc = self._deploy_run_cmd(
+                    git_exe, ["-C", target, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=120",
+                              "fetch", "--depth", "1", "origin", COMFY_REF],
+                    parent, log, env=env, timeout=1800)
+                if rc == 0:
+                    fetched = True
+                    break
+                log(f"\n[部署] 从该地址拉取失败（退出码 {rc}），换下一个地址 ...\n")
+            if not fetched:
+                self._emit("deploy", "error", title="源码下载失败",
+                           text="从 GitHub 及所有加速代理拉取 ComfyUI 源码都失败了，请检查网络后重试。")
+                return
+            if self._deploy_run_cmd(git_exe, ["-C", target, "checkout", "-f", "-B", COMFY_REF,
+                                              f"origin/{COMFY_REF}"], parent, log, env=env) != 0:
+                self._emit("deploy", "error", title="部署失败", text="检出 ComfyUI 代码失败，请查看部署日志。")
+                return
+        else:
+            log("[部署] 检测到已有 ComfyUI 源码，跳过拉取\n")
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+
+        # ---- 3. 选 Python：便携版直接装进去；系统 Python 必须套 venv ----
+        if os.path.exists(bundled_python):
+            py = bundled_python
+        else:
+            venv_py = os.path.join(target, "venv", "Scripts" if os.name == "nt" else "bin",
+                                   "python.exe" if os.name == "nt" else "python")
+            if not os.path.exists(venv_py):
+                sys_py = shutil.which("python") or shutil.which("python3") or "python"
+                log("[部署] 使用系统 Python 创建独立 venv（不污染系统环境）\n")
+                if self._deploy_run_cmd(sys_py, ["-m", "venv", os.path.join(target, "venv")],
+                                        target, log, env=env) != 0:
+                    self._emit("deploy", "error", title="部署失败", text="创建 venv 失败，请查看部署日志。")
+                    return
+            py = venv_py
+
+        pip_mirror = []
+        torch_indexes = [f"{mm_official()}/{COMFY_TORCH_TAG}"]
+        try:
+            import mirror_manager as mm
+            if mm.resolve_mode(dcfg, log):
+                pip_mirror = mm.pip_index_args(True)
+                torch_indexes = [f"{b}/{COMFY_TORCH_TAG}" for b in mm.PYTORCH_MIRROR_BASES] + torch_indexes
+        except Exception:
+            pass
+
+        # ---- 4. torch（已装就跳过；镜像失败自动换官方源）----
+        has_torch = subprocess.run([py, "-c", "import torch"], capture_output=True,
+                                   creationflags=_NO_WINDOW).returncode == 0
+        if has_torch:
+            log("[部署] torch 已安装，跳过\n")
+        else:
+            ok = False
+            for idx in torch_indexes:
+                if self._deploy_cancel.is_set():
+                    raise _DeployCancelled()
+                log(f"[部署] 安装 torch（{idx}）...\n")
+                rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "torch", "torchvision", "torchaudio",
+                                               "--index-url", idx], target, log, env=env, timeout=5400)
+                if rc == 0:
+                    ok = True
+                    break
+            if not ok:
+                self._emit("deploy", "error", title="torch 安装失败",
+                           text="所有源都没能装上 torch，请查看部署日志（常见原因：网络中断、磁盘空间不足）。")
+                return
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+
+        # ---- 5. ComfyUI 依赖 ----
+        req = os.path.join(target, "requirements.txt")
+        rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "-r", req] + pip_mirror,
+                                  target, log, env=env, timeout=3600)
+        if rc != 0 and pip_mirror:
+            log("\n[部署] 镜像安装失败，改用官方源重试 ...\n")
+            rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "-r", req], target, log, env=env, timeout=3600)
+        if rc != 0:
+            self._emit("deploy", "error", title="依赖安装失败",
+                       text="ComfyUI 依赖安装失败，请查看部署日志。修复后重新点「开始部署」会跳过已完成的步骤。")
+            return
+
+        # ---- 6. 冒烟测试（失败只提醒，不算部署失败）----
+        log("\n[部署] 冒烟测试：以 CPU 模式初始化一次 ComfyUI ...\n")
+        rc = self._deploy_run_cmd(py, ["-s", "main.py", "--quick-test-for-ci", "--cpu"],
+                                  target, log, env=env, timeout=900)
+        if rc == 0:
+            log("[部署] ComfyUI 初始化正常\n")
+        else:
+            log("[部署] 冒烟测试没通过（上面有具体报错）。大多数情况下直接启动仍可使用，"
+                "如果启动失败请把日志发给作者\n")
+
+        _deploy_register_instance(self, target, "comfyui", log)
+        log("\n[部署] 全部完成！\n")
+        self._emit("deploy", "done", target=target, branch="comfyui")
+    except _DeployCancelled:
+        log("\n[部署] 已取消\n")
+        self._emit("deploy", "cancelled")
+    except pe.PortableEnvError as e:
+        log(f"\n[部署] 便携环境下载失败: {e}\n")
+        self._emit("deploy", "error", title="便携环境下载失败", text=str(e))
+    except Exception:
+        detail = traceback.format_exc()
+        log(f"\n[部署] 发生未预期的错误:\n{detail}\n")
+        self._emit("deploy", "error", title="部署失败", text=detail[-1500:])
+    finally:
+        self._deploy_running = False
+        self._deploy_proc = None
+        self._emit("deploy", "state", running=False)
+
+
+def mm_official():
+    try:
+        import mirror_manager as mm
+        return mm.PYTORCH_OFFICIAL_WHL
+    except Exception:
+        return "https://download.pytorch.org/whl"
 
 
 def _looks_like_network_failure(tail_text):
@@ -2206,6 +2347,7 @@ def _api_civitai_download(self, file_index, dest_dir):
             log(f"下载完成: {final_path}")
             self._emit("civitai", "done", ok=True, path=final_path,
                        hash_ok=hash_ok if hash_ok is not None else None)
+            _auto_organize_if_lora(self, [final_path])
         except cd.CivitaiError as e:
             log(f"错误: {e}")
             self._emit("civitai", "done", ok=False, error=str(e))
@@ -2268,6 +2410,7 @@ def _liblib_download_start(self, file_index, dest_dir):
             log(f"下载完成: {final_path}")
             self._emit("civitai", "done", ok=True, path=final_path,
                        hash_ok=hash_ok if hash_ok is not None else None)
+            _auto_organize_if_lora(self, [final_path])
         except cd.CivitaiError as e:
             msg = str(e)
             # liblib 端的典型报错翻译成可操作的指引
@@ -2505,6 +2648,35 @@ def merge_sidecar_from_liblib(model_path, lb, digest=None):
 def _api_models_categories(self):
     root = (self.cfg.get("webui_root") or "").strip()
     cats = []
+    lib = _library_path(self)
+    if lib:
+        # 开启共享模型库后，模型管理页管的是模型库（所有实例共用）
+        cats = [{"label": c["label"], "path": c["path"], "is_lora": c["is_lora"]}
+                for c in ml.library_categories(lib)]
+        self._models_categories = cats
+        return {"ok": True, "root": lib, "library": True, "categories":
+                [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
+    if cm.is_comfy(self.cfg):
+        dirs = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
+        for k, label, is_lora, *_ in ml.LIBRARY_CATEGORIES:
+            if k in dirs:
+                cats.append({"label": label, "path": dirs[k], "is_lora": is_lora})
+        base = cm.comfy_layout(root)[0]
+        models_dir = os.path.join(base, "models") if base else ""
+        if models_dir and os.path.isdir(models_dir):
+            for name in sorted(os.listdir(models_dir)):
+                sub = os.path.join(models_dir, name)
+                if not os.path.isdir(sub) or any(_same_path(sub, c["path"]) for c in cats):
+                    continue
+                try:
+                    has_model = any(f.lower().endswith(MODEL_EXTS) for f in os.listdir(sub))
+                except OSError:
+                    has_model = False
+                if has_model:
+                    cats.append({"label": f"其他: {name}", "path": sub, "is_lora": "lora" in name.lower()})
+        self._models_categories = cats
+        return {"ok": True, "root": root, "categories":
+                [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
     if root and os.path.isdir(root):
         for label, rel, is_lora in BASE_CATEGORIES:
             path = os.path.join(root, rel.replace("/", os.sep))
@@ -2528,7 +2700,7 @@ def _api_models_categories(self):
                                  "is_lora": "lora" in name.lower()})
     self._models_categories = cats
     return {"ok": True, "root": root, "categories":
-            [{"label": c["label"], "is_lora": c["is_lora"]} for c in cats]}
+            [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
 
 
 def _api_models_list(self, cat_index):
@@ -2788,6 +2960,387 @@ def _api_models_delete(self, path):
     return {"ok": True, "deleted": deleted}
 
 
+def _import_suggest(self, cat, counts):
+    """拖进来的文件和当前分类明显不符时，给出应该去的分类下标（没有则 None）"""
+    lora, full = counts.get("lora", 0), counts.get("full", 0)
+    want_lora = None
+    if cat["is_lora"] and full and not lora:
+        want_lora = False
+    elif not cat["is_lora"] and lora and not full:
+        want_lora = True
+    if want_lora is None:
+        return None
+    for i, c in enumerate(self._models_categories):
+        # 大模型只建议去第一个非 LoRA 分类（即 Checkpoint），不往 VAE 之类里塞
+        if c["is_lora"] == want_lora:
+            return i
+    return None
+
+
+def _api_models_import_plan(self, cat_index, paths):
+    """拖拽上传第一步：只读，算出会复制什么、有没有放错分类、空间够不够"""
+    try:
+        cat = self._models_categories[int(cat_index)]
+    except (IndexError, ValueError, TypeError):
+        return {"ok": False, "error": "请先在左侧选一个模型分类"}
+    if not isinstance(paths, list) or not paths:
+        return {"ok": False, "error": "没有收到文件"}
+    plan = ml.plan_import(cat["path"], paths)
+    items = plan["items"]
+    sug = _import_suggest(self, cat, plan["counts"])
+    free = plan["free_bytes"]
+    return {
+        "ok": True,
+        "target_label": cat["label"], "target_dir": cat["path"],
+        "count": len(items),
+        "to_copy": sum(1 for it in items if it["action"] != "skip"),
+        "skip": sum(1 for it in items if it["action"] == "skip"),
+        "rename": [{"from": os.path.basename(it["src"]), "to": os.path.basename(it["dest"])}
+                   for it in items if it["action"] == "rename"],
+        "ignored": plan["ignored"][:50], "ignored_count": len(plan["ignored"]),
+        "counts": plan["counts"],
+        "total_text": _fmt_size(plan["total_bytes"]),
+        "no_space": free is not None and plan["total_bytes"] > free,
+        "free_text": _fmt_size(free) if free is not None else "",
+        "suggest_index": sug,
+        "suggest_label": self._models_categories[sug]["label"] if sug is not None else "",
+    }
+
+
+def _api_models_import_start(self, cat_index, paths):
+    """拖拽上传第二步：后台复制。进度走 models/import_progress，结束走 models/import_done"""
+    if self._import_thread and self._import_thread.is_alive():
+        return {"ok": False, "error": "上一批还在复制，请等它完成或先取消"}
+    try:
+        cat = self._models_categories[int(cat_index)]
+    except (IndexError, ValueError, TypeError):
+        return {"ok": False, "error": "分类无效"}
+    plan = ml.plan_import(cat["path"], paths or [])
+    if not plan["items"]:
+        return {"ok": False, "error": "没有可上传的模型文件"}
+    if plan["free_bytes"] is not None and plan["total_bytes"] > plan["free_bytes"]:
+        return {"ok": False, "error": f"目标磁盘空间不足：需要 {_fmt_size(plan['total_bytes'])}，"
+                                      f"剩余 {_fmt_size(plan['free_bytes'])}"}
+    self._import_cancel = False
+
+    def work():
+        res = ml.run_import(
+            plan,
+            progress=lambda p: self._emit("models", "import_progress", **p),
+            cancelled=lambda: self._import_cancel)
+        self._emit("models", "import_done", cat_index=int(cat_index),
+                   copied=res["copied"], renamed=res["renamed"], skipped=res["skipped"],
+                   failed=[{"name": n, "error": e} for n, e in res["failed"]],
+                   cancelled=res["cancelled"], last_dest=res["last_dest"])
+        if cat["is_lora"] and res.get("dests"):
+            _auto_organize_if_lora(self, res["dests"])
+
+    self._import_thread = self._spawn(work, "model-import")
+    return {"ok": True, "total_text": _fmt_size(plan["total_bytes"])}
+
+
+def _api_models_import_cancel(self):
+    self._import_cancel = True
+    return {"ok": True}
+
+
+# ============================================================
+# 共享模型库 / LoRA 自动整理（V3 阶段 4）
+# ============================================================
+LIBRARY_YAML = os.path.join(APP_DIR, "launcher_data", "comfy_library_paths.yaml")
+
+
+def _library_path(self):
+    if not self.cfg.get("model_library_enabled"):
+        return ""
+    p = (self.cfg.get("model_library_path") or "").strip()
+    return p if p and os.path.isdir(p) else ""
+
+
+def _library_launch_extras(self, iid, cfg, log):
+    """启动某个实例前，把共享模型库挂上去：ComfyUI 用 extra_model_paths 配置，WebUI 用 --xxx-dir 参数"""
+    lib = _library_path(self)
+    if not lib:
+        return
+    if cm.is_comfy(cfg):
+        os.makedirs(os.path.dirname(LIBRARY_YAML), exist_ok=True)
+        with open(LIBRARY_YAML, "w", encoding="utf-8") as f:
+            f.write(ml.comfy_yaml_text(lib))
+        cfg["_extra_model_paths"] = LIBRARY_YAML
+        log(f"[启动器] 已挂载共享模型库: {lib}\n")
+    else:
+        cfg["extra_args"] = ((cfg.get("extra_args") or "") + " " + ml.forge_library_args(lib)).strip()
+        log(f"[启动器] 已挂载共享模型库: {lib}\n")
+
+
+def _any_instance_running(self):
+    return any(r.running() for r in list(self._runners.values()))
+
+
+def _all_instance_cfgs(self):
+    cm.absorb_active(self.cfg)
+    return [(i["id"], i.get("name", ""), cm.instance_cfg(self.cfg, i["id"]))
+            for i in self.cfg.get("instances") or []]
+
+
+def _api_library_status(self):
+    lib = (self.cfg.get("model_library_path") or "").strip()
+    jr = ml.list_journals()
+    return {"ok": True, "enabled": bool(self.cfg.get("model_library_enabled")), "path": lib,
+            "exists": bool(lib and os.path.isdir(lib)),
+            "journals": [{"id": d["id"], "kind": d["kind"], "title": d["title"],
+                          "time": d["time"], "undone": d.get("undone", False),
+                          "count": len(d.get("moves") or []) + len(d.get("trashed") or [])}
+                         for d in jr[:20]]}
+
+
+def _api_library_set(self, path, enabled):
+    path = (path or "").strip().strip('"')
+    if enabled:
+        if not path:
+            return {"ok": False, "error": "请先选择模型库文件夹"}
+        try:
+            os.makedirs(path, exist_ok=True)
+            for c in ml.library_categories(path):
+                os.makedirs(c["path"], exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"无法创建模型库目录: {e}"}
+        for _iid, name, c in _all_instance_cfgs(self):
+            root = (c.get("webui_root") or "").strip()
+            if root and (_same_path(path, root) or os.path.abspath(path).startswith(os.path.abspath(root) + os.sep)):
+                return {"ok": False, "error": f"模型库不能放在实例「{name}」的目录里面，请选一个独立的文件夹"}
+    self.cfg["model_library_path"] = path
+    self.cfg["model_library_enabled"] = bool(enabled)
+    cm.save_config(self.cfg)
+    note = "正在运行的实例需要重启后才会用上模型库" if _any_instance_running(self) else ""
+    return {"ok": True, "note": note, **_api_library_status(self)}
+
+
+def _api_library_merge_plan(self):
+    lib = _library_path(self)
+    if not lib:
+        return {"ok": False, "error": "请先开启共享模型库"}
+    plan = ml.plan_merge(_all_instance_cfgs(self), lib, cm.comfy_layout)
+    self._merge_plan = plan
+    by_inst = {}
+    names = {iid: n for iid, n, _c in _all_instance_cfgs(self)}
+    for mv in plan["moves"]:
+        d = by_inst.setdefault(mv["iid"], {"name": names.get(mv["iid"], ""), "move": 0, "dup": 0})
+        d["dup" if mv["dup"] else "move"] += 1
+    return {"ok": True, "count": plan["count"], "total_text": _fmt_size(plan["total_bytes"]),
+            "dup_text": _fmt_size(plan["dup_bytes"]), "cross_text": _fmt_size(plan["cross_bytes"]),
+            "cross": plan["cross_bytes"] > 0, "by_instance": list(by_inst.values()),
+            "sample": [{"from": mv["src"], "to": mv["dst"], "dup": mv["dup"]} for mv in plan["moves"][:40]]}
+
+
+def _api_library_merge_start(self):
+    plan = getattr(self, "_merge_plan", None)
+    lib = _library_path(self)
+    if not plan or not lib:
+        return {"ok": False, "error": "请先生成合并预览"}
+    if _any_instance_running(self):
+        return {"ok": False, "error": "有实例正在运行，模型文件可能被占用。请先停止所有实例再合并。"}
+    self._merge_plan = None
+
+    def work():
+        res = ml.run_merge(plan, lib, progress=lambda p: self._emit("library", "progress", **p))
+        self._emit("library", "merge_done", moved=res["moved"], trashed=res["trashed"],
+                   failed=[{"name": n, "error": e} for n, e in res["failed"]], journal=res["journal"])
+    self._spawn(work, name="library-merge")
+    return {"ok": True}
+
+
+def _api_journal_undo(self, jid):
+    if _any_instance_running(self):
+        return {"ok": False, "error": "有实例正在运行，请先停止再撤销"}
+    try:
+        res = ml.undo_journal(jid)
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"读取移动记录失败: {e}"}
+    return {"ok": True, **res, "failed": [{"name": n, "error": e} for n, e in res["failed"]]}
+
+
+def _lookup_quiet(self, path, api_key, cancelled=lambda: False):
+    """按哈希查 Civitai（查不到再查 liblib）并写 sidecar；返回 info 或 None。整理时用，不推界面事件。"""
+    st = os.stat(path)
+    entry = _hash_cache_get(self, path)
+    digest = None
+    if entry and cache_entry_valid(entry, st):
+        if entry.get("found") is False:
+            return None
+        digest = entry.get("sha256")
+    if not digest:
+        digest = compute_sha256(path, cancel_flag=cancelled)
+    data, status_code = query_by_hash(digest, api_key)
+    if status_code == 404:
+        lb = None
+        try:
+            lb = lc.query_by_hash(digest)
+        except Exception:
+            lb = None
+        _hash_cache_set(self, path, {"size": st.st_size, "mtime": int(st.st_mtime),
+                                     "sha256": digest, "found": bool(lb)})
+        return merge_sidecar_from_liblib(path, lb, digest) if lb else None
+    _hash_cache_set(self, path, {"size": st.st_size, "mtime": int(st.st_mtime),
+                                 "sha256": digest, "found": True})
+    return write_sidecar_from_version(path, data, digest, api_key)
+
+
+def _civitai_model_tags(model_id, api_key):
+    """Civitai 模型页的标签（character / style / concept …），整理时用来分类"""
+    import requests
+    r = requests.get(f"https://civitai.com/api/v1/models/{int(model_id)}",
+                     headers=_api_headers(api_key), timeout=20)
+    if r.status_code != 200:
+        return None
+    tags = r.json().get("tags") or []
+    return [t if isinstance(t, str) else (t or {}).get("name", "") for t in tags]
+
+
+def _lora_root(self):
+    """当前要整理的 LoRA 根目录：开了模型库就是库里的 loras，否则是当前实例的 LoRA 目录"""
+    lib = _library_path(self)
+    if lib:
+        return os.path.join(lib, "loras")
+    dirs = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
+    return dirs.get("loras", "")
+
+
+def _workflow_dirs_for(self, lora_root):
+    """哪些 ComfyUI 实例引用这个 LoRA 目录 → 它们保存的工作流需要同步改路径"""
+    out = []
+    lib = _library_path(self)
+    for _iid, _n, c in _all_instance_cfgs(self):
+        if not cm.is_comfy(c):
+            continue
+        comfy_dir = cm.comfy_layout(c.get("webui_root") or "")[0]
+        if not comfy_dir:
+            continue
+        uses = (lib and _same_path(lora_root, os.path.join(lib, "loras"))) or \
+            _same_path(ml.instance_model_dirs(c, cm.comfy_layout).get("loras", ""), lora_root)
+        if uses:
+            out += ml.comfy_workflow_dirs(comfy_dir)
+    return out
+
+
+def _organize_prepare(self, lora_root, only, cancelled, progress):
+    """整理前补信息：没查过的先按哈希查 Civitai，有 Civitai 编号但没有标签的补标签"""
+    import requests
+    api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
+    template = self.cfg.get("lora_organize_template") or "base/type"
+    include_sub = bool(self.cfg.get("lora_organize_include_sub"))
+    files = ml.organize_candidates(lora_root, include_sub, only)
+    n = len(files)
+    for i, path in enumerate(files, 1):
+        if cancelled():
+            break
+        progress({"i": i, "n": n, "name": os.path.basename(path), "stage": "查询模型信息"})
+        info = read_sidecar(path)
+        try:
+            if not info.get("baseModel") and path.lower().endswith(".safetensors"):
+                info = _lookup_quiet(self, path, api_key, cancelled) or {}
+                time.sleep(0.5)     # 别把 Civitai 打限流
+            if info.get("modelId") and "tags" not in info:
+                tags = _civitai_model_tags(info["modelId"], api_key)
+                if tags is not None:
+                    info["tags"] = tags
+                    write_sidecar(path, info)
+                time.sleep(0.3)
+        except (requests.exceptions.RequestException, InterruptedError):
+            continue
+        except Exception:
+            continue
+
+    def arch_of(p):
+        try:
+            head = sm.read_safetensors_header(p)
+            if head:
+                return sm.guess_architecture(*head)[1]
+        except Exception:
+            pass
+        return ""
+    inst = cm.active_instance(self.cfg) or {}
+    return ml.plan_organize(lora_root, template, include_sub, read_sidecar, arch_of,
+                            instance_name=inst.get("name", ""), only=only)
+
+
+def _organize_summary(plans):
+    groups = {}
+    for pl in plans:
+        groups[pl["sub"]] = groups.get(pl["sub"], 0) + 1
+    return {"count": len(plans),
+            "groups": sorted([{"sub": k, "count": v} for k, v in groups.items()], key=lambda g: -g["count"]),
+            "sample": [{"from": pl["rel_from"], "to": pl["rel_to"]} for pl in plans[:60]]}
+
+
+def _api_lora_organize_scan(self):
+    """手动整理第一步：后台补信息并算出计划，结果走 models/organize_plan 事件"""
+    if getattr(self, "_organize_thread", None) and self._organize_thread.is_alive():
+        return {"ok": False, "error": "整理正在进行中"}
+    root = _lora_root(self)
+    if not root or not os.path.isdir(root):
+        return {"ok": False, "error": "没找到 LoRA 文件夹，请先设置根目录"}
+    self._organize_cancel = False
+
+    def work():
+        plans = _organize_prepare(self, root, None, lambda: self._organize_cancel,
+                                  lambda p: self._emit("models", "organize_progress", **p))
+        self._organize_plan = (root, plans)
+        self._emit("models", "organize_plan", root=root, cancelled=self._organize_cancel,
+                   template=self.cfg.get("lora_organize_template") or "base/type",
+                   running=_any_instance_running(self), **_organize_summary(plans))
+    self._organize_thread = self._spawn(work, name="lora-organize-scan")
+    return {"ok": True}
+
+
+def _api_lora_organize_cancel(self):
+    self._organize_cancel = True
+    return {"ok": True}
+
+
+def _api_lora_organize_apply(self):
+    pending = getattr(self, "_organize_plan", None)
+    if not pending or not pending[1]:
+        return {"ok": False, "error": "没有需要整理的文件"}
+    if _any_instance_running(self):
+        return {"ok": False, "error": "有实例正在运行，LoRA 可能正被加载。请先停止所有实例再整理。"}
+    root, plans = pending
+    self._organize_plan = None
+
+    def work():
+        res = ml.run_organize(plans, root, _workflow_dirs_for(self, root),
+                              progress=lambda p: self._emit("models", "organize_progress",
+                                                            stage="移动文件", **p))
+        self._emit("models", "organize_done", auto=False, moved=res["moved"], workflows=res["workflows"],
+                   failed=[{"name": n, "error": e} for n, e in res["failed"]], journal=res["journal"])
+    self._organize_thread = self._spawn(work, name="lora-organize-apply")
+    return {"ok": True}
+
+
+def _auto_organize_if_lora(self, paths):
+    """新上传 / 新下载的 LoRA 自动归类（默认开）。只动这几个新文件，运行中的实例不受影响。"""
+    if not self.cfg.get("lora_organize_enabled", True):
+        return
+    root = _lora_root(self)
+    if not root:
+        return
+    root_n = os.path.normcase(os.path.abspath(root))
+    mine = [p for p in paths if p and os.path.normcase(os.path.abspath(p)).startswith(root_n + os.sep)
+            and ml._is_model(p)]
+    if not mine:
+        return
+
+    def work():
+        plans = _organize_prepare(self, root, mine, lambda: False, lambda p: None)
+        if not plans:
+            return
+        res = ml.run_organize(plans, root, _workflow_dirs_for(self, root), title="新 LoRA 自动归类")
+        self._emit("models", "organize_done", auto=True, moved=res["moved"], workflows=res["workflows"],
+                   failed=[{"name": n, "error": e} for n, e in res["failed"]], journal=res["journal"],
+                   dests=[pl["dst"] for pl in plans], subs=[pl["sub"] for pl in plans])
+    self._spawn(work, name="lora-auto-organize")
+
+
 def _api_models_set_trained_words(self, path, words):
     """手动设置触发词（多组，每组一个字符串）。手动输入的优先级最高，
     之后站点查询不会覆盖（见 _merge_trained_words）。"""
@@ -2913,12 +3466,58 @@ def _resolve_output_dirs(root, branch=""):
     return {"root": common, "txt2img": t2i, "img2img": i2i, "date_subdir": date_subdir}
 
 
+def _comfy_output_dir(cfg):
+    """ComfyUI 的输出目录：--output-directory 参数优先，否则 <ComfyUI>/output"""
+    root = (cfg.get("webui_root") or "").strip()
+    comfy_dir, _ = cm.comfy_layout(root)
+    extra = cfg.get("extra_args") or ""
+    m = re.search(r'--output-directory\s+("([^"]+)"|(\S+))', extra)
+    if m:
+        d = m.group(2) or m.group(3)
+        if not os.path.isabs(d) and comfy_dir:
+            d = os.path.join(comfy_dir, d)
+        return os.path.normpath(d)
+    return os.path.join(comfy_dir or root, "output")
+
+
+def instance_output_info(cfg):
+    """
+    一个实例的出图目录信息（启动页按钮、输出管理器扫描共用）：
+    {"root","txt2img","img2img","date_subdir","scan":[要扫描的目录…]}
+    """
+    root = (cfg.get("webui_root") or "").strip()
+    if not root or not os.path.isdir(root):
+        return None
+    if cm.is_comfy(cfg):
+        od = _comfy_output_dir(cfg)
+        return {"root": od, "txt2img": od, "img2img": od, "date_subdir": False, "scan": [od]}
+    d = _resolve_output_dirs(root, cfg.get("webui_branch", ""))
+    scan = [d["root"]]
+    for k in ("txt2img", "img2img"):
+        p = d[k]
+        try:
+            inside = os.path.commonpath([p, d["root"]]) == os.path.normpath(d["root"])
+        except ValueError:
+            inside = False
+        if not inside:
+            scan.append(p)
+    wc = _read_webui_config(root)
+    # outdir_grids（阵列图目录）有意不加：阵列图不收录进输出管理
+    for key in ("outdir_extras_samples", "outdir_save"):
+        v = str(wc.get(key) or "").strip()
+        if v:
+            v = v if os.path.isabs(v) else os.path.normpath(os.path.join(root, v))
+            if not any(_same_path(v, x) or v.startswith(x + os.sep) for x in scan):
+                scan.append(v)
+    d["scan"] = scan
+    return d
+
+
 def _api_output_dirs_info(self):
     """给前端用：告诉它实际路径是什么、要不要显示「当天」那两个按钮。"""
-    root = (self.cfg.get("webui_root") or "").strip()
-    if not root or not os.path.isdir(root):
-        return {"ok": False, "error": "请先设置正确的 WebUI 根目录"}
-    d = _resolve_output_dirs(root, self.cfg.get("webui_branch", ""))
+    d = instance_output_info(self.cfg)
+    if not d:
+        return {"ok": False, "error": "请先设置正确的根目录"}
     return {"ok": True, "root": d["root"], "txt2img": d["txt2img"],
             "img2img": d["img2img"], "date_subdir": d["date_subdir"],
             "exists": {k: os.path.isdir(d[k]) for k in ("root", "txt2img", "img2img")}}
@@ -2926,11 +3525,9 @@ def _api_output_dirs_info(self):
 
 def _api_open_output_folder(self, which):
     """打开出图目录：root / txt2img / txt2img_today / img2img / img2img_today"""
-    root = (self.cfg.get("webui_root") or "").strip()
-    if not root or not os.path.isdir(root):
-        return {"ok": False, "error": "请先设置正确的 WebUI 根目录"}
-
-    dirs = _resolve_output_dirs(root, self.cfg.get("webui_branch", ""))
+    dirs = instance_output_info(self.cfg)
+    if not dirs:
+        return {"ok": False, "error": "请先设置正确的根目录"}
     which = str(which)
     base_key = which.replace("_today", "")
     target = dirs.get(base_key if base_key in dirs else "root")
@@ -2967,27 +3564,52 @@ def _api_open_output_folder(self, which):
 # 常用插件
 # ============================================================
 
+# ComfyUI 常用节点（装进 custom_nodes）。其余节点建议用 ComfyUI-Manager 在网页里装。
+COMFY_NODE_CATALOG = [
+    ("ComfyUI-Manager", "节点管理器：在 ComfyUI 网页里一键搜索/安装/更新其他节点、补装缺失节点。强烈建议第一个装。",
+     "https://github.com/Comfy-Org/ComfyUI-Manager.git", "ComfyUI-Manager"),
+    ("ComfyUI-Custom-Scripts", "pysssss 脚本合集：提示词自动补全、图片预览增强、工作流小工具。",
+     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git", "ComfyUI-Custom-Scripts"),
+    ("ComfyUI-Impact-Pack", "FaceDetailer 等检测修复节点（相当于 WebUI 的 ADetailer）。首次启动会自动装依赖，时间较长。",
+     "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "ComfyUI-Impact-Pack"),
+    ("ComfyUI-VideoHelperSuite", "视频加载 / 合成 / 保存 mp4 的常用节点，做视频工作流基本必装。",
+     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git", "ComfyUI-VideoHelperSuite"),
+    ("rgthree-comfy", "工作流整理节点：分组开关、上下文传递、种子控制等，大工作流更好管理。",
+     "https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+]
+
+
+def _ext_catalog(self):
+    """(目录列表, 安装目录)。ComfyUI 装进 custom_nodes，WebUI 装进 extensions"""
+    root = (self.cfg.get("webui_root") or "").strip()
+    if cm.is_comfy(self.cfg):
+        comfy_dir = cm.comfy_layout(root)[0]
+        return COMFY_NODE_CATALOG, (os.path.join(comfy_dir, "custom_nodes") if comfy_dir else None)
+    return EXTENSION_CATALOG, (os.path.join(root, "extensions") if root else None)
+
+
 def _api_ext_list(self):
     root = (self.cfg.get("webui_root") or "").strip()
-    ext_dir = os.path.join(root, "extensions") if root else None
+    catalog, ext_dir = _ext_catalog(self)
     branch = self.cfg.get("webui_branch", "neo2")
     items = []
-    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
+    for name, desc, url_raw, folder_raw in catalog:
         folder = _resolve_by_branch(folder_raw, branch)
         if not folder or not _resolve_by_branch(url_raw, branch):
             continue  # 该分支不可用的扩展直接不显示
         installed = bool(ext_dir) and os.path.isdir(os.path.join(ext_dir, folder))
         items.append({"name": name, "desc": desc, "installed": installed})
-    return {"ok": True, "items": items, "has_root": bool(root and os.path.isdir(root))}
+    return {"ok": True, "items": items, "has_root": bool(root and os.path.isdir(root)),
+            "comfy": cm.is_comfy(self.cfg)}
 
 
 def _api_ext_install(self, names):
     if self._ext_thread and self._ext_thread.is_alive():
         return {"ok": False, "error": "已有安装任务在进行中"}
     root = (self.cfg.get("webui_root") or "").strip()
-    if not root:
-        return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录"}
-    ext_dir = os.path.join(root, "extensions")
+    catalog, ext_dir = _ext_catalog(self)
+    if not root or not ext_dir:
+        return {"ok": False, "error": "请先在「一键启动」页设置好根目录"}
     branch = self.cfg.get("webui_branch", "neo2")
 
     # git 选取顺序与部署/启动保持一致：自定义路径 > 便携版 > 系统 PATH
@@ -3005,7 +3627,7 @@ def _api_ext_install(self, names):
                                       "或手动安装：https://git-scm.com/download/win"}
 
     selected = []
-    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
+    for name, desc, url_raw, folder_raw in catalog:
         if name not in (names or []):
             continue
         folder = _resolve_by_branch(folder_raw, branch)
@@ -4081,6 +4703,17 @@ for _name, _fn in {
     "models_delete": _api_models_delete,
     "models_set_trained_words": _api_models_set_trained_words,
     "models_bind_liblib": _api_models_bind_liblib,
+    "models_import_plan": _api_models_import_plan,
+    "models_import_start": _api_models_import_start,
+    "models_import_cancel": _api_models_import_cancel,
+    "library_status": _api_library_status,
+    "library_set": _api_library_set,
+    "library_merge_plan": _api_library_merge_plan,
+    "library_merge_start": _api_library_merge_start,
+    "journal_undo": _api_journal_undo,
+    "lora_organize_scan": _api_lora_organize_scan,
+    "lora_organize_cancel": _api_lora_organize_cancel,
+    "lora_organize_apply": _api_lora_organize_apply,
     "open_output_folder": _api_open_output_folder,
     "output_dirs_info": _api_output_dirs_info,
     "wd14_add_clipboard_image": _api_wd14_add_clipboard_image,
@@ -4113,5 +4746,25 @@ for _name, _fn in {
     "launcher_check_update": _api_launcher_check_update,
     "launcher_update": _api_launcher_update,
     "launcher_restart": _api_launcher_restart,
+    "outputs_info": _api_outputs_info,
+    "outputs_scan": _api_outputs_scan,
+    "outputs_query": _api_outputs_query,
+    "outputs_facets": _api_outputs_facets,
+    "outputs_detail": _api_outputs_detail,
+    "outputs_reveal": _api_outputs_reveal,
+    "outputs_open": _api_outputs_open,
+    "outputs_delete": _api_outputs_delete,
+    "outputs_collections": _api_outputs_collections,
+    "outputs_collection_op": _api_outputs_collection_op,
+    "outputs_collection_export": _api_outputs_collection_export,
+    "instances_list": _api_instances_list,
+    "instance_add": _api_instance_add,
+    "instance_remove": _api_instance_remove,
+    "instance_update": _api_instance_update,
+    "instance_switch": _api_instance_switch,
+    "instance_config_get": _api_instance_config_get,
+    "instance_config_update": _api_instance_config_update,
+    "set_multi_ui": _api_set_multi_ui,
+    "set_hidden_pages": _api_set_hidden_pages,
 }.items():
     setattr(LauncherApi, _name, _fn)

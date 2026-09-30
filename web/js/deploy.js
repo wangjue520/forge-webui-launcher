@@ -75,7 +75,7 @@
         if (v !== "go") return;
       } else if (!pre.already_installed) {
         const v = await App.modal("确认开始部署",
-          App.esc(`即将把 Forge WebUI 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。`),
+          App.esc(`即将把 ${branch === "comfyui" ? "ComfyUI" : "Forge WebUI"} 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。`),
           [
             { id: "go", label: "开始部署", kind: "primary" },
             { id: "cancel", label: "取消" },
@@ -146,7 +146,7 @@
         o.value = b.key; o.textContent = b.label;
         sel.appendChild(o);
       });
-      sel.value = (App.cfg.webui_branch === "classic") ? "classic" : "neo2";
+      sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch : "neo2";
 
       if (App.cfg.webui_root) {
         $("#deploy-target").value = App.cfg.webui_root;
@@ -186,16 +186,31 @@
         setRunning(false);
         prog.hide();
         App.toast(`部署完成：${e.target}`, "ok", 5000);
-        // 后端已写回配置：刷新本地状态并跳转到启动页
+        // 后端已把部署结果登记成实例（当前实例 或 新实例）
+        let st = null;
         try {
-          const st = await App.api.get_state();
+          st = await App.api.get_state();
           App.state = st; App.cfg = st.config || {};
           App.refreshConfigControls();
           App.refreshCmdPreview(st.cmd_args);
+          if (App.applyChrome) App.applyChrome(st);
         } catch (err) { console.error(err); }
         $("#deploy-target").value = e.target;
+        const name = e.branch === "comfyui" ? "ComfyUI" : "Forge WebUI";
+        const other = st && st.instances && st.instances.instances.find((i) =>
+          i.root && i.root.toLowerCase() === String(e.target).toLowerCase() && !i.active);
+        if (other) {
+          const v = await App.modal("部署完成",
+            App.esc(`${name} 已部署到：\n${e.target}\n\n它被添加为新实例「${other.name}」。要切换过去并启动吗？`),
+            [{ id: "go", label: "切换到新实例", kind: "primary" }, { id: "stay", label: "留在这里" }]);
+          if (v === "go" && App.switchInstance) {
+            try { sessionStorage.setItem("return-page", "launch"); } catch (err) {}
+            App.switchInstance(other.id);
+          }
+          return;
+        }
         await App.modal("部署完成",
-          App.esc(`Forge WebUI 已部署到：\n${e.target}\n\n分支：${e.branch}\n\n现在可以直接去「一键启动」页启动了。`),
+          App.esc(`${name} 已部署到：\n${e.target}\n\n现在可以直接去「一键启动」页启动了。`),
           [{ id: "go", label: "去一键启动", kind: "primary" }, { id: "stay", label: "留在这里" }]
         ).then((v) => { if (v === "go") App.showPage("launch"); });
       });

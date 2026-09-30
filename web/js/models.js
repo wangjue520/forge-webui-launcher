@@ -5,7 +5,7 @@
   const $ = (s) => document.querySelector(s);
   const $$ = (s) => Array.from(document.querySelectorAll(s));
 
-  let categories = [];     // [{label, is_lora}]
+  let categories = [];     // [{label, is_lora, path}]
   let curCat = -1;
   let curIsLora = false;
   let files = [];          // 当前类别全部文件
@@ -13,6 +13,11 @@
   let sortKey = "rel";
   let sortAsc = true;
   let batchRunning = false;
+  let importing = false;   // 拖拽上传进行中
+  let organizing = false;  // LoRA 整理进行中
+  let lastJournal = "";    // 最近一次整理的记录（撤销用）
+  let isLibrary = false;   // 当前管理的是共享模型库
+  let pendingSelect = "";  // 上传完成后要选中的文件路径
 
   function tbody() { return $("#md-files tbody"); }
 
@@ -210,9 +215,17 @@
     });
   }
 
+  function renderDropTarget() {
+    const c = categories[curCat];
+    $("#md-drop-target").innerHTML = c
+      ? `<em>${App.esc(c.label)}</em>${isLibrary ? "<em>共享模型库</em>" : ""}${App.esc(c.path || "")}`
+      : "请先在左侧选择一个分类";
+  }
+
   async function loadCat(idx) {
     curCat = idx;
     $$("#md-cats .cat-item").forEach((el, i) => el.classList.toggle("active", i === idx));
+    renderDropTarget();
     $("#md-files tbody").innerHTML = "";
     $("#md-count").textContent = "读取中…";
     $("#md-detail").innerHTML = "";
@@ -224,10 +237,18 @@
       if (r && r.ok === false) { $("#md-count").textContent = r.error || "读取失败"; return; }
       files = r.files || [];
       curIsLora = !!r.is_lora;
+      $("#md-organize").hidden = !curIsLora;
+      $("#md-organize-undo").hidden = !curIsLora || !lastJournal;
       renderBaseOptions();
       renderTable();
       $("#md-root").textContent = r.no_info > 0
         ? `其中 ${r.no_info} 个没有 Civitai 信息` : "";
+      if (pendingSelect) {
+        const want = pendingSelect;
+        pendingSelect = "";
+        const tr = Array.from(tbody().querySelectorAll("tr")).find((t) => t.dataset.path === want);
+        if (tr) { tr.scrollIntoView({ block: "center" }); selectRow(want, tr); }
+      }
     } catch (e) {
       $("#md-count").textContent = "读取失败：" + e.message;
     }
@@ -239,12 +260,145 @@
     $("#md-batch-cancel").disabled = !v;
   }
 
+  /* ---------- 拖拽上传 ---------- */
+  function setImporting(v) {
+    importing = v;
+    $("#page-models").classList.toggle("importing", v || organizing);
+    $("#md-import-busy").hidden = !(v || organizing);
+    if (v) { $("#md-import-bar").style.width = "0%"; $("#md-import-text").textContent = "准备中…"; }
+  }
+
+  /* ---------- LoRA 整理 ---------- */
+  function setOrganizing(v) {
+    organizing = v;
+    $("#md-organize").disabled = v;
+    $("#page-models").classList.toggle("importing", v || importing);
+    $("#md-import-busy").hidden = !(v || importing);
+    if (v) { $("#md-import-bar").style.width = "0%"; $("#md-import-text").textContent = "查询模型信息…"; }
+  }
+
+  async function startOrganize() {
+    if (organizing || importing) return;
+    try {
+      const r = await App.api.lora_organize_scan();
+      if (r && r.ok === false) { App.toast(r.error || "无法开始整理", "error"); return; }
+      setOrganizing(true);
+      App.toast("正在补全 LoRA 信息（没查过的会按哈希查 Civitai / liblib，数量多时需要一会儿）", "", 4000);
+    } catch (e) { App.toast("无法开始整理：" + e.message, "error"); }
+  }
+
+  async function showOrganizePlan(e) {
+    setOrganizing(false);
+    if (e.cancelled) { App.toast("已取消整理", ""); return; }
+    if (!e.count) { App.toast("LoRA 都已经在该在的文件夹里了，没有需要整理的", "ok"); return; }
+    const groups = (e.groups || []).map((g) =>
+      `<tr><td>${App.esc(g.sub)}</td><td>${g.count}</td></tr>`).join("");
+    const sample = (e.sample || []).map((x) =>
+      `<div class="pv-line">${App.esc(x.from)} <b>→</b> ${App.esc(x.to)}</div>`).join("");
+    const v = await App.modal("整理 LoRA",
+      `<div>将把 <b>${e.count}</b> 个 LoRA 按「${App.esc(e.template)}」分进子文件夹：</div>` +
+      `<table class="pv-table"><tr><th>目标文件夹</th><th>数量</th></tr>${groups}</table>` +
+      `<div class="pv-list">${sample}${e.count > (e.sample || []).length ? `<div class="pv-line">…… 共 ${e.count} 个</div>` : ""}</div>` +
+      (e.running ? '<div class="pv-warn">有实例正在运行：请先停止所有实例再整理（LoRA 可能正被加载）。</div>' : "") +
+      '<div class="hint">ComfyUI 已保存的工作流会同步改路径；图片里内嵌的工作流改不了，拖旧图进 ComfyUI 时需要重新选一下 LoRA。整理后可以一键撤销。</div>',
+      [{ id: "go", label: "开始整理", kind: "primary" }, { id: "cancel", label: "取消" }]);
+    if (v !== "go") return;
+    try {
+      const r = await App.api.lora_organize_apply();
+      if (r && r.ok === false) { App.toast(r.error || "整理失败", "error", 6000); return; }
+      setOrganizing(true);
+    } catch (err) { App.toast("整理失败：" + err.message, "error"); }
+  }
+
+  async function undoOrganize() {
+    if (!lastJournal) return;
+    const yes = await App.confirm("撤销上次整理", "把上次整理移动过的 LoRA 全部搬回原来的位置，并恢复被改写的 ComfyUI 工作流？");
+    if (!yes) return;
+    try {
+      const r = await App.api.journal_undo(lastJournal);
+      if (r && r.ok === false) { App.toast(r.error || "撤销失败", "error", 6000); return; }
+      App.toast(`已还原 ${r.restored} 个文件` + (r.failed && r.failed.length ? `，${r.failed.length} 个失败` : ""),
+        r.failed && r.failed.length ? "error" : "ok", 5000);
+      lastJournal = "";
+      loadCat(curCat);
+      if (App.reloadLibrary) App.reloadLibrary();
+    } catch (e) { App.toast("撤销失败：" + e.message, "error"); }
+  }
+
+  async function handleDrop(paths) {
+    if (!paths || !paths.length) return;
+    if (importing) { App.toast("上一批模型还在复制，请等它完成或先取消", "error"); return; }
+    if (curCat < 0 || !categories[curCat]) { App.toast("请先在左侧选一个模型分类，再把文件拖进来", "error"); return; }
+    let plan;
+    try { plan = await App.api.models_import_plan(curCat, paths); }
+    catch (e) { App.toast("读取拖入的文件失败：" + e.message, "error"); return; }
+    if (!plan || plan.ok === false) { App.toast((plan && plan.error) || "读取拖入的文件失败", "error"); return; }
+
+    if (!plan.count) {
+      const ig = plan.ignored_count ? `（忽略了 ${plan.ignored_count} 个非模型文件：${plan.ignored.slice(0, 3).join("、")}${plan.ignored_count > 3 ? " 等" : ""}）` : "";
+      App.toast("没有找到可上传的模型文件" + ig, "error", 5000);
+      return;
+    }
+    if (!plan.to_copy) {
+      App.toast(`这 ${plan.skip} 个模型「${plan.target_label}」里已经有了，跳过`, "ok", 4000);
+      return;
+    }
+    if (plan.no_space) {
+      App.modal("磁盘空间不足",
+        `需要 ${App.esc(plan.total_text)}，目标磁盘只剩 ${App.esc(plan.free_text)}。\n\n目标文件夹：${App.esc(plan.target_dir)}`);
+      return;
+    }
+
+    let target = curCat;
+    if (plan.suggest_index != null) {
+      const isLora = !!(plan.counts && plan.counts.lora);
+      const v = await App.modal("放到哪个分类？",
+        `拖进来的 ${plan.count} 个文件看起来是<b>${isLora ? " LoRA " : "大模型（Checkpoint）"}</b>，` +
+        `但当前分类是「${App.esc(plan.target_label)}」。`,
+        [
+          { id: "suggest", label: `放到「${plan.suggest_label}」`, kind: "primary" },
+          { id: "here", label: "仍然放这里" },
+          { id: "cancel", label: "取消" },
+        ]);
+      if (v === "cancel" || !v) return;
+      if (v === "suggest") target = plan.suggest_index;
+    }
+
+    try {
+      const r = await App.api.models_import_start(target, paths);
+      if (!r || r.ok === false) { App.toast((r && r.error) || "无法开始上传", "error", 5000); return; }
+      setImporting(true);
+      const where = categories[target] ? categories[target].label : "";
+      App.toast(`开始上传到「${where}」，共 ${r.total_text}` +
+        (plan.skip ? `（${plan.skip} 个已存在，跳过）` : ""), "", 3000);
+    } catch (e) { App.toast("无法开始上传：" + e.message, "error"); }
+  }
+
+  // 拖着文件经过窗口时高亮提示条（真正的 drop 由 Python 侧接收，见 webview_main._bind_dom_events）
+  function bindDragHighlight() {
+    const page = $("#page-models");
+    let depth = 0;
+    const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+    const off = () => { depth = 0; page.classList.remove("drag-active"); };
+    document.addEventListener("dragenter", (e) => {
+      if (App.currentPage !== "models" || !hasFiles(e)) return;
+      depth++;
+      page.classList.add("drag-active");
+    });
+    document.addEventListener("dragleave", () => {
+      if (depth > 0 && --depth === 0) page.classList.remove("drag-active");
+    });
+    document.addEventListener("drop", off);
+    window.addEventListener("blur", off);
+  }
+
   App.pages.models = {
     init() {
       const reloadAll = () => {
         // 刷新分类列表（根目录可能刚设置/更换过），再刷新当前类别
         App.api.models_categories().then((r) => {
           categories = (r && r.categories) || [];
+          isLibrary = !!(r && r.library);
           const box = $("#md-cats");
           box.innerHTML = "";
           categories.forEach((c, i) => {
@@ -259,6 +413,49 @@
       };
       App.pages.models.reloadAll = reloadAll;
       $("#md-refresh").addEventListener("click", reloadAll);
+
+      bindDragHighlight();
+      $("#md-import-cancel").addEventListener("click", () =>
+        organizing ? App.api.lora_organize_cancel() : App.api.models_import_cancel());
+      $("#md-organize").addEventListener("click", startOrganize);
+      $("#md-organize-undo").addEventListener("click", undoOrganize);
+      App.on("models", "organize_progress", (e) => {
+        if (!organizing) return;
+        $("#md-import-bar").style.width = (e.n ? e.i * 100 / e.n : 0) + "%";
+        $("#md-import-text").textContent = `${e.stage || ""} ${e.i}/${e.n} · ${e.name || ""}`;
+      });
+      App.on("models", "organize_plan", showOrganizePlan);
+      App.on("models", "organize_done", (e) => {
+        if (!e.auto) setOrganizing(false);
+        if (e.journal && e.moved) lastJournal = e.journal;
+        const fail = e.failed && e.failed.length ? `，${e.failed.length} 个失败（${e.failed[0].name}：${e.failed[0].error}）` : "";
+        const wf = e.workflows ? `，同步修改了 ${e.workflows} 个 ComfyUI 工作流` : "";
+        if (e.auto) {
+          const where = [...new Set(e.subs || [])].join("、");
+          if (e.moved) App.toast(`新 LoRA 已自动归类到「${where}」${wf}`, "ok", 5000);
+        } else {
+          App.toast(`整理完成：移动了 ${e.moved} 个 LoRA${wf}${fail}`, fail ? "error" : "ok", 6000);
+        }
+        if (curCat >= 0) loadCat(curCat);
+        if (App.reloadLibrary) App.reloadLibrary();
+      });
+      App.on("models", "import_progress", (e) => {
+        $("#md-import-bar").style.width = (e.pct || 0) + "%";
+        $("#md-import-text").textContent = e.name
+          ? `${e.i}/${e.n} · ${e.name} · ${Math.floor(e.pct || 0)}%` : `${Math.floor(e.pct || 0)}%`;
+      });
+      App.on("models", "import_done", (e) => {
+        setImporting(false);
+        const parts = [];
+        if (e.copied) parts.push(`已上传 ${e.copied} 个`);
+        if (e.renamed) parts.push(`其中 ${e.renamed} 个因重名自动改名`);
+        if (e.skipped) parts.push(`跳过已存在的 ${e.skipped} 个`);
+        if (e.failed && e.failed.length) parts.push(`失败 ${e.failed.length} 个（${e.failed[0].name}：${e.failed[0].error}）`);
+        const text = (e.cancelled ? "已取消上传。" : "") + (parts.join("，") || "没有复制任何文件");
+        App.toast(text, e.failed && e.failed.length ? "error" : "ok", 6000);
+        if (e.last_dest) pendingSelect = e.last_dest;
+        loadCat(e.cat_index);
+      });
       $("#md-filter").addEventListener("input", renderTable);
       $("#md-base").addEventListener("change", renderTable);
 
@@ -356,6 +553,8 @@
       // 首次加载分类列表
       reloadAll();
     },
+
+    onDropped(paths) { handleDrop(paths); },
 
     onShow() {
       // 切回本页时刷新分类（根目录可能刚在别的页面改过）

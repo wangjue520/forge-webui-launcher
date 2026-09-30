@@ -35,8 +35,15 @@
       const r = await App.api.ext_list();
       items = (r && r.items) || [];
       if (r && r.has_root === false) {
-        $("#ext-list").innerHTML = '<div class="hint" style="padding:10px">先在「一键启动」页设置 WebUI 根目录，才能检测/安装扩展</div>';
+        $("#ext-list").innerHTML = '<div class="hint" style="padding:10px">先在「一键启动」页设置根目录，才能检测/安装插件</div>';
         return;
+      }
+      const hb = document.querySelector("#page-extensions .hint-block");
+      if (hb) {
+        if (!hb.dataset.forgeText) hb.dataset.forgeText = hb.textContent;
+        hb.textContent = r && r.comfy
+          ? "当前实例是 ComfyUI：勾选想装的节点，点「安装选中项」会依次 git clone 到 custom_nodes/ 目录下，已装过的自动跳过。节点的 Python 依赖会在 ComfyUI 下次启动时由节点自己安装；更多节点建议装好 ComfyUI-Manager 后在网页里搜索安装。"
+          : hb.dataset.forgeText;
       }
       render();
     } catch (e) { App.toast("读取插件状态失败：" + e.message, "error"); }

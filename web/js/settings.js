@@ -1,4 +1,4 @@
-/* settings.js — 高级选项页 */
+/* settings.js — 「高级选项」页（按实例分别设置）+「启动器设置」页（全局） */
 (function () {
   "use strict";
   const App = window.App;
@@ -8,8 +8,17 @@
   let schema = null;
   let building = false; // 重建下拉期间不触发 change 保存
 
-  function isNeo2() { return App.cfg.webui_branch === "neo2"; }
-  function isNeo() { return App.cfg.webui_branch === "neo" || App.cfg.webui_branch === "neo2"; }
+  /* 高级选项页正在编辑哪个实例（可以不是「当前实例」） */
+  let editIid = "";
+  let editCfg = {};       // 正在编辑的实例的配置（全局键 + 该实例的实例键）
+
+  // ComfyUI 的显存/精度参数跟新版 Neo 同名，共用一套下拉
+  function isNeo2() { return editCfg.webui_branch === "neo2" || editCfg.webui_branch === "comfyui"; }
+  function isNeo() { return editCfg.webui_branch === "neo" || editCfg.webui_branch === "neo2"; }
+
+  function controlValue(el) {
+    return el.type === "checkbox" ? el.checked : el.value;
+  }
 
   function fillSelect(el, items, cfgKey) {
     el.innerHTML = "";
@@ -19,7 +28,7 @@
       o.textContent = it.label;
       el.appendChild(o);
     });
-    const v = App.cfg[cfgKey];
+    const v = editCfg[cfgKey];
     el.value = v != null ? String(v) : (items[0] ? items[0].key : "");
     if (el.selectedIndex < 0 && items.length) el.selectedIndex = 0;
   }
@@ -28,7 +37,8 @@
     building = true;
     try {
       const neo2 = isNeo2();
-      fillSelect($("#s-vram"), neo2 ? schema.vram_neo2 : schema.vram_legacy, "vram_mode");
+      const comfy = editCfg.webui_branch === "comfyui";
+      fillSelect($("#s-vram"), comfy ? schema.vram_comfy : (neo2 ? schema.vram_neo2 : schema.vram_legacy), "vram_mode");
       fillSelect($("#s-precision"), neo2 ? schema.precision_neo2 : schema.precision_legacy, "precision_mode");
       if (neo2) {
         fillSelect($("#s-unet"), schema.unet_neo2, "unet_precision");
@@ -38,10 +48,10 @@
       }
       // 分支显隐
       $$("[data-branch-show]").forEach((el) => {
-        el.style.display = el.dataset.branchShow.split(",").includes(App.cfg.webui_branch) ? "" : "none";
+        el.style.display = el.dataset.branchShow.split(",").includes(editCfg.webui_branch) ? "" : "none";
       });
       $$("[data-branch-hide]").forEach((el) => {
-        el.style.display = el.dataset.branchHide.split(",").includes(App.cfg.webui_branch) ? "none" : "";
+        el.style.display = el.dataset.branchHide.split(",").includes(editCfg.webui_branch) ? "none" : "";
       });
       $$("[data-branch-neo]").forEach((el) => {
         el.style.display = isNeo() ? "" : "none";
@@ -51,6 +61,72 @@
     }
   }
 
+  /* ---------- 高级选项页：按实例加载 / 保存 ---------- */
+  function fillControls() {
+    $$("#page-settings [data-cfg]").forEach((el) => {
+      const v = editCfg[el.dataset.cfg];
+      if (el.type === "checkbox") el.checked = !!v;
+      else el.value = v == null ? "" : String(v);
+    });
+  }
+
+  function editingIsActive() { return editIid && editIid === App.instances.active; }
+
+  function syncSelector() {
+    const card = $("#s-instance-card");
+    const sel = $("#s-instance");
+    const ins = App.instances || {};
+    const list = ins.instances || [];
+    card.hidden = !ins.multi;
+    sel.innerHTML = list.map((i) =>
+      `<option value="${App.esc(i.id)}">${App.esc(i.name)} · ${App.esc(i.kind_label)}</option>`).join("");
+    if (!list.find((i) => i.id === editIid)) editIid = ins.active || (list[0] && list[0].id) || "";
+    sel.value = editIid;
+    const cur = list.find((i) => i.id === editIid);
+    $("#s-instance-hint").textContent = cur
+      ? (editingIsActive()
+        ? `正在设置「${cur.name}」——这就是当前实例，改动保存后立即生效`
+        : `正在设置「${cur.name}」——不是当前实例，改动只存到它名下，下次启动它时生效`)
+      : "";
+  }
+
+  async function loadInstance() {
+    if (!editIid) return;
+    try {
+      const r = await App.api.instance_config_get(editIid);
+      if (!r || r.ok === false) return;
+      editCfg = r.config || {};
+    } catch (e) {
+      // 后端太老没有这个接口时退化为当前实例配置（单实例场景无感知）
+      editCfg = App.cfg || {};
+    }
+    building = true;
+    try {
+      fillControls();
+      $("#s-branch").value = editCfg.webui_branch || "neo2";
+    } finally {
+      building = false;
+    }
+    rebuildBranchDependent();
+  }
+
+  async function saveKey(el) {
+    const key = el.dataset.cfg;
+    const val = controlValue(el);
+    editCfg[key] = val;
+    if (editingIsActive()) App.cfg[key] = val;
+    try {
+      const r = await App.api.instance_config_update(editIid, { [key]: val });
+      if (r && r.ok === false) { App.toast(r.error || "配置保存失败", "error"); return; }
+      // 改的是当前实例才刷新启动页的参数预览；改别的实例不动预览
+      if (r && r.cmd_args != null && editingIsActive()) App.refreshCmdPreview(r.cmd_args);
+    } catch (e) {
+      console.error(e);
+      App.toast("配置保存失败：" + e.message, "error");
+    }
+  }
+
+  /* ---------- 启动器设置页：镜像检测 ---------- */
   async function redetectMirror() {
     const el = $("#s-mirror-status");
     el.dataset.status = "";
@@ -59,7 +135,7 @@
     catch (e) { el.textContent = "检测失败：" + e.message; el.dataset.status = "bad"; }
   }
 
-  /* ---------- 启动器自更新 ---------- */
+  /* ---------- 启动器设置页：启动器自更新 ---------- */
   const Updater = {
     lastInfo: null,   // 最近一次检查结果（update_info 事件）
     busy: false,
@@ -128,8 +204,10 @@
     },
 
     async restart() {
-      if (App.state && App.state.launch && App.state.launch.running) {
-        App.toast("WebUI 还在运行，请先停止再重启启动器", "error");
+      const anyRunning = ((App.instances && App.instances.instances) || [])
+        .some((i) => i.status && i.status.running);
+      if (anyRunning || (App.state && App.state.launch && App.state.launch.running)) {
+        App.toast("还有实例在运行，请先停止再重启启动器", "error");
         return;
       }
       const yes = await App.confirm("重启启动器", "更新已下载完成，现在重启启动器让新版本生效？");
@@ -152,7 +230,7 @@
         this.renderInfo(e);
         // 启动时的静默检查：有更新就提示一次，把用户引到这个卡片
         if (e.ok && e.has_update && !this.busy) {
-          App.toast("发现启动器新版本 V" + e.remote.version + "，可在 高级选项 → 启动器更新 一键升级", "ok", 6000);
+          App.toast("发现启动器新版本 V" + e.remote.version + "，可在 启动器设置 → 启动器更新 一键升级", "ok", 6000);
         }
       });
       App.on("launcher", "log", (e) => this.setStatus(e.text || ""));
@@ -180,8 +258,9 @@
     },
   };
 
+  /* =============== 高级选项（按实例） =============== */
   App.pages.settings = {
-    init(state) {
+    async init(state) {
       schema = state.settings_schema || {};
 
       // 分支下拉
@@ -192,22 +271,39 @@
         o.textContent = b.label;
         branchSel.appendChild(o);
       });
-      branchSel.value = App.cfg.webui_branch || "neo2";
 
-      rebuildBranchDependent();
+      // 实例选择器：选谁就在改谁（不动侧栏的「当前实例」）
+      $("#s-instance").addEventListener("change", async (e) => {
+        editIid = e.target.value;
+        syncSelector();
+        await loadInstance();
+      });
 
-      // 分支切换后重建相关下拉并显隐
-      branchSel.addEventListener("change", () => rebuildBranchDependent());
-
-      // 重建期间不保存配置：屏蔽 data-cfg 的 change 里因程序性赋值引发的误触发
+      // 每个控件单独保存到「正在编辑的实例」
       $$("#page-settings [data-cfg]").forEach((el) => {
-        el.addEventListener("change", () => {
+        el.addEventListener("change", async () => {
           if (building) return;
-          // 分支变化会影响参数生成，顺手刷新预览（core 里已处理保存）
+          await saveKey(el);
+          // 分支变化会影响参数生成和显隐，顺手重建（core 的全局绑定不覆盖本页）
           if (el.id === "s-branch") rebuildBranchDependent();
         });
       });
 
+      editIid = (App.state.instances && App.state.instances.active) || "";
+      syncSelector();
+      await loadInstance();
+    },
+
+    async onShow() {
+      // 实例可能被增删/改名过，选择器和编辑目标都重新对齐一次
+      syncSelector();
+      await loadInstance();
+    },
+  };
+
+  /* =============== 启动器设置（全局） =============== */
+  App.pages.launcher = {
+    init(state) {
       const ms = state.mirror_status;
       if (ms) $("#s-mirror-status").textContent = (typeof ms === "string") ? ms : (ms.text || "");
       $("#s-mirror-redetect").addEventListener("click", redetectMirror);
@@ -218,7 +314,66 @@
         el.dataset.status = e.ok ? "ok" : "";
       });
 
+      // 界面风格：选项来自 themes.js 注册表；切换立即生效（保存由 core 的
+      // data-cfg 全局绑定负责，这里只负责即时预览 + 写 localStorage）
+      const themeSel = $("#s-ui-theme");
+      if (window.WWYThemes && themeSel) {
+        themeSel.innerHTML = "";
+        window.WWYThemes.list().forEach((t) => {
+          const o = document.createElement("option");
+          o.value = t.id;
+          o.textContent = t.label;
+          themeSel.appendChild(o);
+        });
+        themeSel.value = App.cfg.ui_theme || "terminal";
+        themeSel.addEventListener("change", () => window.WWYThemes.apply(themeSel.value, true));
+      }
+
       Updater.init(state);
+
+      // 多实例开关
+      const multi = $("#s-multi");
+      const syncMulti = () => {
+        const ins = App.instances || {};
+        multi.checked = !!ins.multi;
+        multi.disabled = (ins.instances || []).length >= 2;
+        $("#s-multi-hint").textContent = multi.disabled
+          ? `已有 ${(ins.instances || []).length} 个实例，多实例功能自动开启。移除到只剩一个实例后才能关掉。`
+          : "";
+      };
+      syncMulti();
+      multi.addEventListener("change", async () => {
+        try {
+          const r = await App.api.set_multi_ui(multi.checked);
+          if (r && r.ok !== false && App.applyChrome) {
+            App.applyChrome({ instances: r, hidden_pages: App.hiddenPages });
+            if (multi.checked) App.toast("已显示多实例功能：侧栏出现了「实例管理」", "ok");
+          }
+        } catch (e) { App.toast("设置失败：" + e.message, "error"); }
+        syncMulti();
+      });
+      App.pages.launcher.syncMulti = syncMulti;
+
+      // 功能开关：把用不上的页面从侧栏藏起来
+      const PAGES = [["settings", "高级选项"], ["deploy", "环境部署"], ["civitai", "模型下载"],
+        ["models", "模型管理"], ["outputs", "输出管理"], ["extensions", "常用插件"],
+        ["wd14", "WD14 反推"], ["meta", "图片信息"]];
+      const box = $("#s-pages");
+      const hidden = new Set(state.hidden_pages || []);
+      box.innerHTML = PAGES.map(([k, label]) =>
+        `<label class="chk-row"><input type="checkbox" data-page-toggle="${k}"${hidden.has(k) ? "" : " checked"}><i></i><span>${label}</span></label>`).join("");
+      box.querySelectorAll("[data-page-toggle]").forEach((cb) => cb.addEventListener("change", async () => {
+        const pages = Array.from(box.querySelectorAll("[data-page-toggle]"))
+          .filter((x) => !x.checked).map((x) => x.dataset.pageToggle);
+        try {
+          const r = await App.api.set_hidden_pages(pages);
+          if (r && r.ok !== false && App.applyChrome) {
+            App.applyChrome({ instances: App.instances, hidden_pages: r.hidden_pages });
+          }
+        } catch (e) { App.toast("设置失败：" + e.message, "error"); }
+      }));
     },
+
+    onShow() { if (App.pages.launcher.syncMulti) App.pages.launcher.syncMulti(); },
   };
 })();

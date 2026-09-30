@@ -3,54 +3,90 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forge WebUI 启动器</title>
+<title>WWY 启动器</title>
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="splash.css">
 </head>
 <body>
 
-<!-- 开屏动画（终末地风格：点 → 线 → WWY NEO → V2.0） -->
+<!-- 开屏动画 v3（明日方舟：终末地风格 —— 浅灰工业终端 / 等高线地形 / 轨道环 / 柠檬黄擦除）
+     时间轴见 js/splash.js；样式独立在 splash.css -->
 <div id="splash">
-  <div class="sp-bg"></div>
-  <div class="sp-band"></div>
-  <span class="sp-corner tl"></span><span class="sp-corner tr"></span>
-  <span class="sp-corner bl"></span><span class="sp-corner br"></span>
-  <div class="sp-head">
-    <span><i>//</i>WWY LAUNCHER</span><span>SYS.STARTUP</span>
-  </div>
-  <div class="sp-stage">
-    <div class="sp-morph"></div>
-    <div class="sp-brand">
-      <div class="sp-panel"><div class="sp-title">WWY<em>NEO</em></div></div>
-      <div class="sp-sub"><i>//</i>FORGE WEBUI LAUNCHER</div>
+  <div class="sp-power"><i class="sp-dot"></i><i class="sp-hair"></i></div>
+  <div class="sp-scene">
+    <canvas class="sp-topo"></canvas>
+    <div class="sp-grid"></div>
+    <div class="sp-ruler sp-ruler-top"></div>
+    <div class="sp-ruler sp-ruler-left"></div>
+
+    <svg class="sp-orbit" viewBox="0 0 600 600" aria-hidden="true">
+      <g class="sp-orb-ticks"><circle cx="300" cy="300" r="262"/></g>
+      <circle class="sp-orb-main" cx="300" cy="300" r="236"/>
+      <circle class="sp-orb-dash" cx="300" cy="300" r="176"/>
+      <circle class="sp-orb-inner" cx="300" cy="300" r="96"/>
+      <g class="sp-orb-arc"><circle cx="300" cy="300" r="236"/><rect x="530" y="294" width="12" height="12"/></g>
+      <g class="sp-orb-cross"><path d="M300 30v80M300 490v80M30 300h80M490 300h80"/></g>
+      <text class="sp-orb-label" x="318" y="58">ORBIT · 04</text>
+      <text class="sp-orb-label" x="318" y="556">R 236.00</text>
+    </svg>
+
+    <div class="sp-pin"><i></i><span>NODE-01<br><em>本地终端</em></span></div>
+
+    <div class="sp-hud sp-hud-tl">
+      <div><b>//</b>WWY INDUSTRIES</div><span>启动终端 · BOOT TERMINAL</span>
     </div>
-    <div class="sp-version">
-      <div class="sp-ver-wrap">
-        <div class="sp-ver-num">V2.0</div>
-        <div class="sp-ver-side">
-          <span class="sp-ver-tag">NEO EDITION</span>
-          <span class="sp-ver-line">STABLE DIFFUSION WEBUI FORGE</span>
-        </div>
+    <div class="sp-hud sp-hud-tr">
+      <span class="sp-clock">00:00:00</span><span>SECTOR 00 · NODE 01</span>
+    </div>
+
+    <div class="sp-core">
+      <div class="sp-kicker"><b>▼</b>PROTOCOL 01<span>启动协议</span></div>
+      <div class="sp-title-wrap">
+        <div class="sp-title"><span class="sp-t1" data-final="WWY">WWY</span><span class="sp-t2" data-final="启动器">启动器</span></div>
+        <div class="sp-sweep"></div>
       </div>
-      <div class="sp-stripe"></div>
-      <div class="sp-load"><span class="sp-load-bar"></span><span class="sp-load-txt">INITIALIZING</span></div>
+      <div class="sp-meta">
+        <span class="sp-meta-line"></span>
+        <span class="sp-meta-txt">COMFYUI · WEBUI LAUNCHER</span>
+        <span class="sp-ver">V<b class="sp-ver-num">-.-.--</b></span>
+      </div>
+    </div>
+
+    <div class="sp-log">
+      <div class="sp-log-row"><span>LOAD</span>UI.MODULES<i></i><em>OK</em></div>
+      <div class="sp-log-row"><span>LINK</span>WEBVIEW2 RUNTIME<i></i><em>OK</em></div>
+      <div class="sp-log-row sp-log-bridge"><span>SYNC</span>PYTHON BRIDGE<i></i><em>WAIT</em></div>
+    </div>
+
+    <div class="sp-progress">
+      <div class="sp-prog-head"><span>INITIALIZING<b class="sp-prog-cn">初始化中</b></span><span class="sp-pct">000</span></div>
+      <div class="sp-segs"></div>
+    </div>
+
+    <div class="sp-foot">
+      <span class="sp-barcode"></span>
+      <span>ENGINE <b>//</b> WEBVIEW2</span>
+      <span class="sp-tri">▽▽▽</span>
+      <span class="sp-skip">CLICK TO SKIP</span>
     </div>
   </div>
-  <div class="sp-foot">
-    <span>ENGINE <i>//</i> WEBVIEW2</span>
-    <span class="sp-foot-tri">▽ ▽ ▽</span>
-    <span>FORGE NEO COMPATIBLE</span>
-  </div>
+  <div class="sp-wipe sp-wipe-k"></div>
+  <div class="sp-wipe sp-wipe-y"></div>
 </div>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
     <symbol id="i-launch" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l5.5-3.5z" fill="currentColor" stroke="none"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 12h4M12 12h8M4 17h12M20 17h0"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="17" r="2"/></symbol>
+    <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L4 17l3 3 5.3-5.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.1-2.1 2.7-2.5z"/></symbol>
     <symbol id="i-deploy" viewBox="0 0 24 24"><path d="M12 3c3 2 4.5 5.5 4.5 9l2.5 3-3.5-.5c-1 1.5-2.2 2.7-3.5 3.5-1.3-.8-2.5-2-3.5-3.5L5 15l2.5-3C7.5 8.5 9 5 12 3z"/><circle cx="12" cy="10" r="1.6"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></symbol>
     <symbol id="i-models" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></symbol>
     <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M9 4h4v3a2 2 0 104 0h3v4h-3a2 2 0 100 4h3v4h-4v-3a2 2 0 10-4 0v3H9v-3a2 2 0 10-4 0v3H4v-4h3a2 2 0 100-4H4V7h3a2 2 0 104 0z" transform="scale(0.9) translate(1.3 1.3)"/></symbol>
     <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8-9-9z"/><circle cx="8" cy="9" r="1.6"/></symbol>
+    <symbol id="i-stack" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="11" width="16" height="5" rx="1"/><path d="M7 20h10"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></symbol>
+    <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 18l5-5 3 3 4-4 4 4"/></symbol>
   </defs>
 </svg>
@@ -59,19 +95,27 @@
   <!-- ============ 侧边栏 ============ -->
   <aside id="sidebar">
     <div class="brand">
-      <div class="brand-logo">F</div>
+      <div class="brand-logo">W</div>
       <div class="brand-text">
-        <div class="brand-name">Forge WebUI</div>
-        <div class="brand-sub">启动器</div>
+        <div class="brand-name">WWY 启动器</div>
+        <div class="brand-sub">AI 绘图启动器</div>
         <div class="brand-sub brand-ver" id="app-version"></div>
       </div>
     </div>
+    <!-- 实例切换（只有多实例模式才显示） -->
+    <div class="inst-switch" id="inst-switch" hidden>
+      <span class="is-label">INSTANCE // 当前实例</span>
+      <div class="is-row"><i class="is-dot" id="inst-switch-dot"></i><select id="inst-switch-select"></select></div>
+    </div>
     <nav id="nav">
       <button class="nav-item" data-page="launch"><svg><use href="#i-launch"/></svg><span>一键启动</span></button>
+      <button class="nav-item nav-multi" data-page="instances" hidden><svg><use href="#i-stack"/></svg><span>实例管理</span></button>
       <button class="nav-item" data-page="settings"><svg><use href="#i-settings"/></svg><span>高级选项</span></button>
+      <button class="nav-item" data-page="launcher"><svg><use href="#i-wrench"/></svg><span>启动器设置</span></button>
       <button class="nav-item" data-page="deploy"><svg><use href="#i-deploy"/></svg><span>环境部署</span></button>
       <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站·liblib</em></button>
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
+      <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
       <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
       <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>WD14 反推</span></button>
       <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
@@ -85,19 +129,26 @@
 
   <!-- ============ 主区域 ============ -->
   <main id="main">
+    <canvas id="bg-topo" aria-hidden="true"></canvas>
     <header id="topbar">
-      <h1 id="page-title">一键启动</h1>
-      <div id="topbar-extra"></div>
+      <span class="page-mark">▼</span>
+      <div class="page-head">
+        <span id="page-code">01 // LAUNCH</span>
+        <h1 id="page-title">一键启动</h1>
+      </div>
+      <div id="topbar-extra"><div class="topbar-clock"><b id="topbar-clock">00:00:00</b>WWY INDUSTRIES · 启动终端</div></div>
     </header>
 
     <div id="content">
 
       <!-- ======== 一键启动 ======== -->
       <section class="page" id="page-launch">
+        <!-- 多实例：所有实例的状态卡片 -->
+        <div class="inst-cards" id="launch-instances" hidden></div>
         <div class="card">
-          <div class="card-title">WebUI 根目录<span class="card-title-hint">包含 webui.bat 的那个文件夹</span></div>
+          <div class="card-title"><span id="launch-root-title">WebUI 根目录</span><span class="card-title-hint" id="launch-root-hint">包含 webui.bat 的那个文件夹</span></div>
           <div class="row">
-            <input type="text" id="launch-root" data-cfg="webui_root" placeholder="留空，点击右侧「浏览…」选择 WebUI 所在文件夹">
+            <input type="text" id="launch-root" data-cfg="webui_root" placeholder="留空，点击右侧「浏览…」选择所在文件夹">
             <button class="btn" id="launch-browse">浏览…</button>
           </div>
         </div>
@@ -114,7 +165,7 @@
         </div>
 
         <div class="card">
-          <div class="card-title">启动参数<span class="card-title-hint">将注入 COMMANDLINE_ARGS 环境变量，由「高级选项」页生成</span></div>
+          <div class="card-title">启动参数<span class="card-title-hint" id="launch-args-hint">将注入 COMMANDLINE_ARGS 环境变量，由「高级选项」页生成</span></div>
           <div class="code-box" id="launch-cmd-preview">（无）</div>
           <label class="chk-row">
             <input type="checkbox" id="launch-auto-open" data-cfg="auto_open_browser_on_ready"><i></i>
@@ -132,14 +183,14 @@
         </div>
 
         <div class="card">
-          <div class="card-title">输出图片<span class="card-title-hint">快速打开 WebUI 的出图目录（当天目录不存在时会自动创建）</span>
+          <div class="card-title">输出图片<span class="card-title-hint">快速打开出图目录（当天目录不存在时会自动创建）</span>
             <div class="hint" id="launch-output-hint" style="margin:2px 0 8px"></div><span style="display:none"></span></div>
           <div class="action-row" style="margin-top:0">
             <button class="btn" data-open-output="root">输出目录</button>
-            <button class="btn" data-open-output="txt2img">文生图</button>
-            <button class="btn" data-open-output="txt2img_today">当天文生图</button>
-            <button class="btn" data-open-output="img2img">图生图</button>
-            <button class="btn" data-open-output="img2img_today">当天图生图</button>
+            <button class="btn" data-open-output="txt2img" data-forge-only>文生图</button>
+            <button class="btn" data-open-output="txt2img_today" data-forge-only>当天文生图</button>
+            <button class="btn" data-open-output="img2img" data-forge-only>图生图</button>
+            <button class="btn" data-open-output="img2img_today" data-forge-only>当天图生图</button>
           </div>
         </div>
 
@@ -149,8 +200,109 @@
         </div>
       </section>
 
-      <!-- ======== 高级选项 ======== -->
+      <!-- ======== 高级选项（按实例分别设置） ======== -->
       <section class="page" id="page-settings">
+        <div class="card" id="s-instance-card" hidden>
+          <div class="card-title">要设置的实例<span class="card-title-hint">每个实例的参数各存各的：这里选谁就是在改谁，不会改变侧栏的「当前实例」</span></div>
+          <select id="s-instance"></select>
+          <div class="hint" id="s-instance-hint"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">所属分支<span class="card-title-hint">部署时按安装类型自动设置，也可以在这里手动切换</span></div>
+          <select id="s-branch" data-cfg="webui_branch"></select>
+        </div>
+
+        <div class="card">
+          <div class="card-title">性能设置<span class="card-title-hint">以下选项会真实生成命令行参数，Forge / ComfyUI 会真正识别</span></div>
+          <div class="form-grid">
+            <label>GPU 编号</label>
+            <input type="text" id="s-gpu" data-cfg="gpu_device_id" placeholder="对应 --device-id，多卡时填 CUDA 设备编号，例如 0">
+            <label>显存策略</label>
+            <select id="s-vram" data-cfg="vram_mode"></select>
+          </div>
+          <label class="chk-row" data-branch-hide="neo2,comfyui">
+            <input type="checkbox" id="s-offload" data-cfg="always_offload_from_vram"><i></i>
+            <span>用完模型后总是从显存卸载（--always-offload-from-vram），更省显存但更慢</span>
+          </label>
+          <div class="form-grid" data-branch-show="neo2,comfyui">
+            <label>预留显存</label>
+            <input type="text" id="s-reserve-vram" data-cfg="reserve_vram_gb" placeholder="对应 --reserve-vram，留空不设置，例如填 2 表示给系统留 2GB">
+          </div>
+          <label class="chk-row">
+            <input type="checkbox" id="s-cuda-malloc" data-cfg="cuda_malloc"><i></i>
+            <span>启用 cudaMallocAsync（--cuda-malloc），官方提示部分场景可能不稳定/崩溃</span>
+          </label>
+          <div class="form-grid">
+            <label>计算精度</label>
+            <select id="s-precision" data-cfg="precision_mode"></select>
+          </div>
+          <div data-branch-show="neo2,comfyui">
+            <div class="form-grid">
+              <label>UNet 精度</label><select id="s-unet" data-cfg="unet_precision"></select>
+              <label>VAE 精度</label><select id="s-vae" data-cfg="vae_precision"></select>
+              <label>文本编码器精度</label><select id="s-textenc" data-cfg="text_enc_precision"></select>
+              <label>注意力实现</label><select id="s-attention" data-cfg="attention_impl"></select>
+            </div>
+            <div data-branch-hide="comfyui">
+            <label class="chk-row"><input type="checkbox" id="s-fast-fp16" data-cfg="fast_fp16"><i></i><span>启用快速 FP16（--fast-fp16）</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-pin-mem" data-cfg="pin_shared_memory"><i></i><span>固定共享内存（--pin-shared-memory）</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-expandable" data-cfg="expandable_segments"><i></i><span>可扩展显存段（--expandable-segments），缓解显存碎片</span></label>
+            </div>
+          </div>
+          <div data-branch-show="comfyui">
+            <div class="sub-title">ComfyUI 加速</div>
+            <label class="chk-row"><input type="checkbox" id="s-c-sage" data-cfg="comfy_sage"><i></i><span>使用 Sage-Attention（--use-sage-attention），需要先在 ComfyUI 的环境里装好 sageattention</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-c-flash" data-cfg="comfy_flash"><i></i><span>使用 Flash-Attention（--use-flash-attention），需要先装好 flash-attn</span></label>
+            <label class="chk-row"><input type="checkbox" id="s-c-fast" data-cfg="comfy_fast"><i></i><span>启用实验性加速（--fast），新显卡上可能更快，个别模型可能画质下降</span></label>
+          </div>
+
+          <div data-branch-hide="comfyui">
+          <div class="sub-title">注意力加速库</div>
+          <label class="chk-row"><input type="checkbox" id="s-xformers" data-cfg="install_xformers"><i></i><span>安装并尝试使用 xFormers（--xformers）</span></label>
+          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-flash" data-cfg="install_flash"><i></i><span>安装并尝试使用 Flash-Attention（--flash）<em class="tag">仅 Neo</em></span></label>
+          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-sage" data-cfg="install_sage"><i></i><span>安装并尝试使用 Sage-Attention（--sage）<em class="tag">仅 Neo</em></span></label>
+          <div class="hint">--xformers / --flash / --sage 只负责在首次启动时安装对应的包，实际用哪种注意力实现由 Forge 自动挑选，不是强制切换；装好之后如果不想每次启动都重新检查，可以把对应勾选去掉。</div>
+          </div>
+
+          <div class="sub-title">网络与其他</div>
+          <label class="chk-row"><input type="checkbox" id="s-listen" data-cfg="enable_listen"><i></i><span>局域网访问（--listen）</span></label>
+          <label class="chk-row" data-branch-hide="comfyui"><input type="checkbox" id="s-api" data-cfg="enable_api"><i></i><span>启用 API（--api）</span></label>
+          <label class="chk-row" data-branch-hide="comfyui"><input type="checkbox" id="s-share" data-cfg="enable_share"><i></i><span>生成公网分享链接（--share）</span></label>
+          <label class="chk-row" data-branch-hide="comfyui"><input type="checkbox" id="s-insecure" data-cfg="enable_insecure_extension_access"><i></i><span>允许不安全的扩展访问（--enable-insecure-extension-access）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-autolaunch" data-cfg="autolaunch"><i></i><span>启动后自动打开浏览器（--autolaunch，由 Forge 自己打开；勾选后启动页那个「检测到地址后自动打开」会自动停用，不会重复开两个）</span></label>
+          <label class="chk-row" data-branch-hide="comfyui"><input type="checkbox" id="s-skip-pyver" data-cfg="skip_python_version_check"><i></i><span>跳过 Python 版本检查（--skip-python-version-check），venv 版本与 webui.bat 期望不一致时可以先试试</span></label>
+          <label class="chk-row" data-branch-hide="comfyui"><input type="checkbox" id="s-no-hashing" data-cfg="no_hashing"><i></i><span>禁用模型 SHA-256 哈希计算（--no-hashing），老版本 Python (3.10) 加载新模型时可能因缺 hashlib.file_digest 而崩溃，勾这个可以跳过</span></label>
+
+          <div class="form-grid">
+            <label data-branch-hide="comfyui">网页主题</label>
+            <select id="s-theme" data-cfg="theme" data-branch-hide="comfyui">
+              <option value="auto">跟随 Forge 默认</option>
+              <option value="dark">深色（--theme dark）</option>
+              <option value="light">浅色（--theme light）</option>
+            </select>
+            <label>端口</label>
+            <input type="text" id="s-port" data-cfg="port" placeholder="对应 --port，留空使用默认端口（WebUI 7860 / ComfyUI 8188）">
+            <label>自定义追加参数</label>
+            <input type="text" id="s-extra" data-cfg="extra_args" placeholder="其他想手动追加的命令行参数，用空格分隔">
+          </div>
+        </div>
+
+        <div class="card" data-branch-hide="comfyui">
+          <div class="card-title">仅供参考<span class="card-title-hint">这些在网页内 Settings 或显卡驱动层面控制，命令行无法设置——仅帮你记录偏好</span></div>
+          <div class="form-grid">
+            <label>GPU Weight / 预留显存</label>
+            <input type="number" id="s-info-vram" data-cfg="info_reserved_vram_gb" min="0" max="24" step="1">
+          </div>
+          <div class="hint">需在 WebUI 内 Settings → Optimizations 手动设置</div>
+          <label class="chk-row"><input type="checkbox" id="s-info-shared" data-cfg="info_shared_vram_fallback"><i></i><span>使用共享显存回退（需在 NVIDIA 控制面板：管理3D设置 → 程序设置 → 找到该 exe →「CUDA - Sysmem Fallback Policy」中设置）</span></label>
+          <label class="chk-row"><input type="checkbox" id="s-info-hash" data-cfg="info_model_hash_calc"><i></i><span>模型哈希计算（需在 WebUI 内 Settings → 搜索 “hash” 关闭/开启）</span></label>
+          <div class="hint">上面「性能设置」勾选/修改后，点击「一键启动」时会真实写入 COMMANDLINE_ARGS；这一块只是记录偏好，实际生效需要去对应的地方手动配置一次，之后通常会持续生效。</div>
+        </div>
+      </section>
+
+      <!-- ======== 启动器设置（全局，不属于任何实例） ======== -->
+      <section class="page" id="page-launcher">
         <div class="card">
           <div class="card-title">启动器更新<span class="card-title-hint">从 GitHub 增量更新启动器本体，不用重新下载整个压缩包</span></div>
           <div class="form-grid">
@@ -168,73 +320,35 @@
         </div>
 
         <div class="card">
-          <div class="card-title">当前所属分支<span class="card-title-hint">由「环境部署」页自动设置，也可以在这里手动切换</span></div>
-          <select id="s-branch" data-cfg="webui_branch"></select>
+          <div class="card-title">多实例<span class="card-title-hint">同时管理多个 ComfyUI / WebUI；只用一个的话不用管</span></div>
+          <label class="chk-row"><input type="checkbox" id="s-multi"><i></i><span>显示多实例功能（实例切换、实例管理页、共享模型库）。添加第二个实例后会自动打开</span></label>
+          <div class="hint" id="s-multi-hint"></div>
         </div>
 
         <div class="card">
-          <div class="card-title">性能设置<span class="card-title-hint">以下选项会真实生成命令行参数，Forge 会真正识别</span></div>
-          <div class="form-grid">
-            <label>GPU 编号</label>
-            <input type="text" id="s-gpu" data-cfg="gpu_device_id" placeholder="对应 --device-id，多卡时填 CUDA 设备编号，例如 0">
-            <label>显存策略</label>
-            <select id="s-vram" data-cfg="vram_mode"></select>
-          </div>
-          <label class="chk-row" data-branch-hide="neo2">
-            <input type="checkbox" id="s-offload" data-cfg="always_offload_from_vram"><i></i>
-            <span>用完模型后总是从显存卸载（--always-offload-from-vram），更省显存但更慢</span>
-          </label>
-          <div class="form-grid" data-branch-show="neo2">
-            <label>预留显存</label>
-            <input type="text" id="s-reserve-vram" data-cfg="reserve_vram_gb" placeholder="对应 --reserve-vram，留空不设置，例如填 2 表示给系统留 2GB">
-          </div>
-          <label class="chk-row">
-            <input type="checkbox" id="s-cuda-malloc" data-cfg="cuda_malloc"><i></i>
-            <span>启用 cudaMallocAsync（--cuda-malloc），官方提示部分场景可能不稳定/崩溃</span>
-          </label>
-          <div class="form-grid">
-            <label>计算精度</label>
-            <select id="s-precision" data-cfg="precision_mode"></select>
-          </div>
-          <div data-branch-show="neo2">
-            <div class="form-grid">
-              <label>UNet 精度</label><select id="s-unet" data-cfg="unet_precision"></select>
-              <label>VAE 精度</label><select id="s-vae" data-cfg="vae_precision"></select>
-              <label>文本编码器精度</label><select id="s-textenc" data-cfg="text_enc_precision"></select>
-              <label>注意力实现</label><select id="s-attention" data-cfg="attention_impl"></select>
-            </div>
-            <label class="chk-row"><input type="checkbox" id="s-fast-fp16" data-cfg="fast_fp16"><i></i><span>启用快速 FP16（--fast-fp16）</span></label>
-            <label class="chk-row"><input type="checkbox" id="s-pin-mem" data-cfg="pin_shared_memory"><i></i><span>固定共享内存（--pin-shared-memory）</span></label>
-            <label class="chk-row"><input type="checkbox" id="s-expandable" data-cfg="expandable_segments"><i></i><span>可扩展显存段（--expandable-segments），缓解显存碎片</span></label>
-          </div>
+          <div class="card-title">界面风格<span class="card-title-hint">整套皮肤，含开屏动画；界面立即生效，开屏动画下次启动生效</span></div>
+          <select id="s-ui-theme" data-cfg="ui_theme"></select>
+        </div>
 
-          <div class="sub-title">注意力加速库</div>
-          <label class="chk-row"><input type="checkbox" id="s-xformers" data-cfg="install_xformers"><i></i><span>安装并尝试使用 xFormers（--xformers）</span></label>
-          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-flash" data-cfg="install_flash"><i></i><span>安装并尝试使用 Flash-Attention（--flash）<em class="tag">仅 Neo</em></span></label>
-          <label class="chk-row" data-branch-neo><input type="checkbox" id="s-sage" data-cfg="install_sage"><i></i><span>安装并尝试使用 Sage-Attention（--sage）<em class="tag">仅 Neo</em></span></label>
-          <div class="hint">--xformers / --flash / --sage 只负责在首次启动时安装对应的包，实际用哪种注意力实现由 Forge 自动挑选，不是强制切换；装好之后如果不想每次启动都重新检查，可以把对应勾选去掉。</div>
-
-          <div class="sub-title">网络与其他</div>
-          <label class="chk-row"><input type="checkbox" id="s-listen" data-cfg="enable_listen"><i></i><span>局域网访问（--listen）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-api" data-cfg="enable_api"><i></i><span>启用 API（--api）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-share" data-cfg="enable_share"><i></i><span>生成公网分享链接（--share）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-insecure" data-cfg="enable_insecure_extension_access"><i></i><span>允许不安全的扩展访问（--enable-insecure-extension-access）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-autolaunch" data-cfg="autolaunch"><i></i><span>启动后自动打开浏览器（--autolaunch，由 Forge 自己打开；勾选后启动页那个「检测到地址后自动打开」会自动停用，不会重复开两个）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-skip-pyver" data-cfg="skip_python_version_check"><i></i><span>跳过 Python 版本检查（--skip-python-version-check），venv 版本与 webui.bat 期望不一致时可以先试试</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-no-hashing" data-cfg="no_hashing"><i></i><span>禁用模型 SHA-256 哈希计算（--no-hashing），老版本 Python (3.10) 加载新模型时可能因缺 hashlib.file_digest 而崩溃，勾这个可以跳过</span></label>
-
+        <div class="card">
+          <div class="card-title">LoRA 自动整理<span class="card-title-hint">按底模、类型自动分进子文件夹，WebUI 的 LoRA 页和 ComfyUI 的下拉框都能按文件夹筛选</span></div>
+          <label class="chk-row"><input type="checkbox" id="s-organize" data-cfg="lora_organize_enabled"><i></i><span>新上传、新下载的 LoRA 自动归类（查到 Civitai / liblib 信息后移进对应文件夹）</span></label>
           <div class="form-grid">
-            <label>网页主题</label>
-            <select id="s-theme" data-cfg="theme">
-              <option value="auto">跟随 Forge 默认</option>
-              <option value="dark">深色（--theme dark）</option>
-              <option value="light">浅色（--theme light）</option>
+            <label>文件夹结构</label>
+            <select id="s-organize-tpl" data-cfg="lora_organize_template">
+              <option value="base/type">底模 / 类型（例：Illustrious / 角色）</option>
+              <option value="type/base">类型 / 底模（例：角色 / Illustrious）</option>
+              <option value="base">只按底模</option>
+              <option value="type">只按类型</option>
             </select>
-            <label>端口</label>
-            <input type="text" id="s-port" data-cfg="port" placeholder="对应 --port，留空使用默认端口 7860">
-            <label>自定义追加参数</label>
-            <input type="text" id="s-extra" data-cfg="extra_args" placeholder="其他想手动追加的命令行参数，用空格分隔">
           </div>
+          <label class="chk-row"><input type="checkbox" id="s-organize-sub" data-cfg="lora_organize_include_sub"><i></i><span>手动整理时连已经在子文件夹里的 LoRA 也重新归类（默认只整理根目录和「未分类」里的，不打乱你自己建的文件夹）</span></label>
+          <div class="hint">手动整理在「模型管理 → LoRA」里点「整理 LoRA」，会先出预览再执行，随时可以撤销。ComfyUI 已保存的工作流里的 LoRA 路径会同步改好。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">功能开关<span class="card-title-hint">用不上的页面可以从侧栏藏起来，随时再打开</span></div>
+          <div class="page-toggles" id="s-pages"></div>
         </div>
 
         <div class="card">
@@ -253,18 +367,6 @@
           </div>
           <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。</div>
         </div>
-
-        <div class="card">
-          <div class="card-title">仅供参考<span class="card-title-hint">这些在网页内 Settings 或显卡驱动层面控制，命令行无法设置——仅帮你记录偏好</span></div>
-          <div class="form-grid">
-            <label>GPU Weight / 预留显存</label>
-            <input type="number" id="s-info-vram" data-cfg="info_reserved_vram_gb" min="0" max="24" step="1">
-          </div>
-          <div class="hint">需在 WebUI 内 Settings → Optimizations 手动设置</div>
-          <label class="chk-row"><input type="checkbox" id="s-info-shared" data-cfg="info_shared_vram_fallback"><i></i><span>使用共享显存回退（需在 NVIDIA 控制面板：管理3D设置 → 程序设置 → 找到该 exe →「CUDA - Sysmem Fallback Policy」中设置）</span></label>
-          <label class="chk-row"><input type="checkbox" id="s-info-hash" data-cfg="info_model_hash_calc"><i></i><span>模型哈希计算（需在 WebUI 内 Settings → 搜索 “hash” 关闭/开启）</span></label>
-          <div class="hint">上面「性能设置」勾选/修改后，点击「一键启动」时会真实写入 COMMANDLINE_ARGS；这一块只是记录偏好，实际生效需要去对应的地方手动配置一次，之后通常会持续生效。</div>
-        </div>
       </section>
 
       <!-- ======== 环境部署 ======== -->
@@ -279,7 +381,7 @@
         </div>
 
         <div class="card">
-          <div class="card-title">选择要部署的 WebUI Forge 分支</div>
+          <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge 的两个分支或 ComfyUI；装到新目录会自动添加为新实例</span></div>
           <select id="deploy-branch"></select>
         </div>
 
@@ -386,10 +488,24 @@
 
       <!-- ======== 模型管理 ======== -->
       <section class="page" id="page-models">
+        <!-- 拖拽上传：Python 侧拿到拖入文件的完整路径 → app/dropped → models.onDropped -->
+        <div class="drop-banner" id="md-drop-banner">
+          <span class="db-mark">▼</span>
+          <div class="db-text">
+            <b>把模型文件拖到这里，即可上传到当前分类</b>
+            <span class="db-target" id="md-drop-target">请先在左侧选择一个分类</span>
+          </div>
+          <div class="db-busy" id="md-import-busy" hidden>
+            <div class="progress db-progress"><div class="progress-bar" id="md-import-bar"></div><span class="progress-text" id="md-import-text"></span></div>
+            <button class="btn btn-xs" id="md-import-cancel">取消</button>
+          </div>
+        </div>
         <div class="toolbar">
           <button class="btn" id="md-refresh">刷新</button>
           <button class="btn btn-success" id="md-batch">一键查询本类别缺失信息的模型</button>
           <button class="btn" id="md-batch-cancel" disabled>取消批量</button>
+          <button class="btn btn-primary" id="md-organize" hidden>整理 LoRA</button>
+          <button class="btn" id="md-organize-undo" hidden>撤销上次整理</button>
           <span class="hint" id="md-root"></span>
         </div>
         <div class="models-layout">
@@ -566,6 +682,129 @@
         </div>
       </section>
 
+
+      <!-- ======== 实例管理（多实例） ======== -->
+      <section class="page" id="page-instances">
+        <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、常用插件、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
+        <div id="inst-list"></div>
+        <div class="action-row">
+          <button class="btn btn-primary" id="inst-add">添加已有安装</button>
+          <button class="btn" id="inst-deploy">部署新的实例…</button>
+        </div>
+
+        <div class="card" id="lib-card">
+          <div class="card-title">共享模型库<span class="card-title-hint">所有实例共用一份模型，省硬盘；ComfyUI 通过 extra_model_paths、WebUI 通过 --ckpt-dir 等参数挂载，不改动实例本身</span></div>
+          <label class="chk-row"><input type="checkbox" id="lib-enabled"><i></i><span>开启共享模型库</span></label>
+          <div class="row">
+            <input type="text" id="lib-path" placeholder="选择一个独立的文件夹作为模型库（不要放在任何实例目录里面）">
+            <button class="btn" id="lib-browse">浏览…</button>
+          </div>
+          <div class="hint" id="lib-status"></div>
+          <div class="action-row">
+            <button class="btn btn-accent" id="lib-merge">合并各实例已有模型…</button>
+          </div>
+          <div class="hint">合并会把各实例 models 目录里的模型移进模型库，重复的文件（同一个模型在两个实例里各有一份）只留一份，多出来的放进回收站。执行前会先列出预览，执行后可以撤销。</div>
+          <div class="progress" id="lib-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">文件移动记录<span class="card-title-hint">模型合并、LoRA 整理的每一批操作都能撤销</span></div>
+          <div id="journal-list" class="journal-list"></div>
+        </div>
+      </section>
+
+      <!-- ======== 输出管理 ======== -->
+      <section class="page page-wide" id="page-outputs">
+        <div class="out-layout">
+          <aside class="out-filters">
+            <input type="text" id="of-q" placeholder="搜索提示词 / 文件名">
+            <div class="of-group">
+              <div class="of-title">时间</div>
+              <select id="of-time">
+                <option value="">全部时间</option>
+                <option value="1">今天</option>
+                <option value="7">最近 7 天</option>
+                <option value="30">最近 30 天</option>
+                <option value="365">最近一年</option>
+              </select>
+            </div>
+            <div class="of-group">
+              <div class="of-title">类型</div>
+              <div class="chips" id="of-kind">
+                <button class="chip on" data-kind="">全部</button>
+                <button class="chip" data-kind="image">图片</button>
+                <button class="chip" data-kind="video">视频</button>
+                <button class="chip" data-kind="other">其他</button>
+              </div>
+            </div>
+            <div class="of-group" id="of-inst-group" hidden>
+              <div class="of-title">来源实例</div>
+              <select id="of-inst"><option value="">全部实例</option></select>
+            </div>
+            <div class="of-group">
+              <div class="of-title">收藏夹<button class="btn btn-xs" id="of-col-new">新建</button></div>
+              <div class="col-list" id="of-cols"></div>
+            </div>
+            <div class="of-group">
+              <div class="of-title">角色</div>
+              <input type="text" class="of-mini" id="of-char-q" placeholder="筛选角色名">
+              <div class="facet-list" id="of-chars"></div>
+            </div>
+            <div class="of-group">
+              <div class="of-title">LoRA</div>
+              <select id="of-lora"><option value="">全部 LoRA</option></select>
+            </div>
+            <div class="of-group">
+              <div class="of-title">模型</div>
+              <select id="of-model"><option value="">全部模型</option></select>
+            </div>
+            <div class="of-group">
+              <div class="of-title">tag<span class="of-note">回车添加，可多个</span></div>
+              <input type="text" class="of-mini" id="of-tag-in" list="of-tag-dl" placeholder="例：red_hair">
+              <datalist id="of-tag-dl"></datalist>
+              <div class="chips" id="of-tags"></div>
+            </div>
+            <button class="btn btn-sm" id="of-reset">清空筛选</button>
+          </aside>
+          <div class="out-main">
+            <div class="out-bar">
+              <span class="out-count" id="out-count">—</span>
+              <span class="hint" id="out-scan-hint"></span>
+              <span class="out-bar-right">
+                <select id="out-sort"><option value="new">最新在前</option><option value="old">最早在前</option></select>
+                <button class="btn btn-sm" id="out-select-mode">多选</button>
+                <button class="btn btn-sm" id="out-rescan">重新扫描</button>
+              </span>
+            </div>
+            <div class="out-selbar" id="out-selbar" hidden>
+              <span id="out-sel-count">已选 0 张</span>
+              <select id="out-sel-col"></select>
+              <button class="btn btn-xs" id="out-sel-add">加入收藏夹</button>
+              <button class="btn btn-xs btn-danger-text" id="out-sel-del">删除（进回收站）</button>
+              <button class="btn btn-xs" id="out-sel-clear">取消选择</button>
+            </div>
+            <div class="out-grid-wrap" id="out-scroll">
+              <div class="out-grid" id="out-grid"></div>
+              <div class="out-empty" id="out-empty" hidden></div>
+            </div>
+          </div>
+        </div>
+        <!-- 详情抽屉 -->
+        <div class="out-detail" id="out-detail" hidden>
+          <div class="od-head"><span class="od-title" id="od-title"></span><button class="btn btn-xs" id="od-close">关闭 ✕</button></div>
+          <div class="od-media" id="od-media"></div>
+          <div class="od-actions">
+            <button class="btn btn-xs" id="od-prev">‹ 上一张</button>
+            <button class="btn btn-xs" id="od-next">下一张 ›</button>
+            <button class="btn btn-xs" id="od-open">打开</button>
+            <button class="btn btn-xs" id="od-reveal">定位</button>
+            <button class="btn btn-xs" id="od-meta">发送到图片信息</button>
+            <button class="btn btn-xs btn-danger-text" id="od-del">删除</button>
+          </div>
+          <div class="od-cols" id="od-cols"></div>
+          <div class="od-body" id="od-body"></div>
+        </div>
+      </section>
     </div>
   </main>
 </div>
@@ -579,10 +818,12 @@
   </div>
 </div>
 <!-- 顶部加载条 -->
-<div id="topbar"><div class="topbar-fill"><span class="topbar-glow"></span></div></div>
+<div id="loadbar"><div class="topbar-fill"><span class="topbar-glow"></span></div></div>
 
 <div id="toasts"></div>
 
+<script src="js/themes.js"></script>
+<script src="js/topo.js"></script>
 <script src="js/splash.js"></script>
 <script src="js/mock.js"></script>
 <script src="js/core.js"></script>
@@ -595,5 +836,8 @@
 <script src="js/wd14.js"></script>
 <script src="js/imgcontainer.js"></script>
 <script src="js/meta.js"></script>
+<script src="js/instances.js"></script>
+<script src="js/outputs.js"></script>
+<script src="js/deco.js"></script>
 </body>
 </html>

@@ -49,6 +49,7 @@ PYTHON_VERSION_BY_BRANCH = {
     "classic": "3.10",
     "neo": "3.13",
     "neo2": "3.13",
+    "comfyui": "3.12",
 }
 
 

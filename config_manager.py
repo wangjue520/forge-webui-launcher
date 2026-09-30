@@ -79,7 +79,143 @@ DEFAULT_CONFIG = {
     "fast_fp16": False,
     "pin_shared_memory": False,
     "expandable_segments": False,
+    # ComfyUI 专属（运行时开关，不是安装器）
+    "comfy_sage": False,          # --use-sage-attention
+    "comfy_flash": False,         # --use-flash-attention
+    "comfy_fast": False,          # --fast
+    # ---------------- V3：多实例 ----------------
+    # 实例表：每个实例保存下面 INSTANCE_KEYS 里的全部键。顶层同名键始终是
+    # 「当前实例」的投影——老代码照旧读写 cfg["webui_root"] 等，保存时由
+    # save_config 自动同步回当前实例，所以单实例用户感觉不到任何变化。
+    "config_version": 0,
+    "instances": [],
+    "active_instance": "",
+    "multi_instance_ui": False,   # 手动打开多实例模式（实例数 ≥ 2 时自动打开）
+    "hidden_pages": [],           # 从侧栏藏掉的页面
+    "ui_theme": "terminal",       # 界面风格（web/js/themes.js 的注册表，含开屏变体）
+    # 共享模型库
+    "model_library_enabled": False,
+    "model_library_path": "",
+    # LoRA 自动整理（默认开）
+    "lora_organize_enabled": True,
+    "lora_organize_template": "base/type",   # base / type / base/type / type/base / instance/base/type
+    "lora_organize_include_sub": False,      # 是否连已在子文件夹里的也整理
 }
+
+CONFIG_VERSION = 3
+
+# 属于「实例」的键：每个实例各有一份。其余键（镜像、API Key、多实例开关等）是全局的。
+INSTANCE_KEYS = (
+    "webui_root", "bat_file_name", "custom_python_path", "custom_git_path",
+    "webui_branch", "use_portable_env", "gpu_device_id", "vram_mode", "precision_mode",
+    "always_offload_from_vram", "cuda_malloc", "install_xformers", "install_flash",
+    "install_sage", "enable_listen", "enable_api", "enable_share",
+    "enable_insecure_extension_access", "autolaunch", "auto_open_browser_on_ready",
+    "skip_python_version_check", "no_hashing", "theme", "port", "extra_args",
+    "info_reserved_vram_gb", "info_shared_vram_fallback", "info_model_hash_calc",
+    "reserve_vram_gb", "unet_precision", "vae_precision", "text_enc_precision",
+    "attention_impl", "fast_fp16", "pin_shared_memory", "expandable_segments",
+    "comfy_sage", "comfy_flash", "comfy_fast",
+)
+
+KIND_LABELS = {"comfyui": "ComfyUI", "neo2": "Forge Neo", "neo": "Forge Neo",
+               "classic": "Forge Classic"}
+
+
+def is_comfy(cfg):
+    return (cfg or {}).get("webui_branch") == "comfyui"
+
+
+def new_instance_id():
+    import uuid
+    return uuid.uuid4().hex[:8]
+
+
+def make_instance(cfg=None, **over):
+    """新实例：实例键取默认值（或从 cfg 拷），再叠加 over"""
+    src = cfg or DEFAULT_CONFIG
+    inst = {k: src.get(k, DEFAULT_CONFIG.get(k)) for k in INSTANCE_KEYS}
+    inst.update({k: v for k, v in over.items() if k in INSTANCE_KEYS})
+    inst["id"] = over.get("id") or new_instance_id()
+    inst["name"] = over.get("name") or KIND_LABELS.get(inst.get("webui_branch"), "WebUI")
+    return inst
+
+
+def find_instance(cfg, iid):
+    for inst in cfg.get("instances") or []:
+        if inst.get("id") == iid:
+            return inst
+    return None
+
+
+def active_instance(cfg):
+    return find_instance(cfg, cfg.get("active_instance")) or \
+        ((cfg.get("instances") or [None])[0])
+
+
+def migrate_config(cfg):
+    """V2 → V3：把顶层的启动相关键搬进「实例 1」。返回是否做了迁移。"""
+    changed = False
+    insts = cfg.get("instances")
+    if not isinstance(insts, list):
+        insts = []
+        cfg["instances"] = insts
+    if not insts:
+        insts.append(make_instance(cfg))
+        changed = True
+    for inst in insts:                      # 旧版本实例缺新键时补默认值
+        for k in INSTANCE_KEYS:
+            if k not in inst:
+                inst[k] = DEFAULT_CONFIG.get(k)
+                changed = True
+        if not inst.get("id"):
+            inst["id"] = new_instance_id()
+            changed = True
+        if not inst.get("name"):
+            inst["name"] = KIND_LABELS.get(inst.get("webui_branch"), "WebUI")
+    if not find_instance(cfg, cfg.get("active_instance")):
+        cfg["active_instance"] = insts[0]["id"]
+        changed = True
+    if cfg.get("config_version", 0) < CONFIG_VERSION:
+        cfg["config_version"] = CONFIG_VERSION
+        changed = True
+    return changed
+
+
+def project_active(cfg):
+    """当前实例的键 → 顶层（老代码读的位置）"""
+    inst = active_instance(cfg)
+    if inst:
+        for k in INSTANCE_KEYS:
+            cfg[k] = inst.get(k, DEFAULT_CONFIG.get(k))
+
+
+def absorb_active(cfg):
+    """顶层 → 当前实例（保存前调用，老代码对顶层的修改不会丢）"""
+    inst = active_instance(cfg)
+    if inst:
+        for k in INSTANCE_KEYS:
+            if k in cfg:
+                inst[k] = cfg[k]
+
+
+def instance_cfg(cfg, iid):
+    """某个实例的「有效配置」：全局键 + 该实例的实例键。给非当前实例的启动/扫描用。"""
+    inst = find_instance(cfg, iid)
+    if inst is None:
+        return None
+    if iid == cfg.get("active_instance"):
+        absorb_active(cfg)
+    out = {k: v for k, v in cfg.items() if k not in INSTANCE_KEYS}
+    for k in INSTANCE_KEYS:
+        out[k] = inst.get(k, DEFAULT_CONFIG.get(k))
+    out["_iid"] = iid
+    out["_name"] = inst.get("name", "")
+    return out
+
+
+def multi_enabled(cfg):
+    return len(cfg.get("instances") or []) >= 2 or bool(cfg.get("multi_instance_ui"))
 
 # ============================================================
 # 命令行参数表（按分支区分）
@@ -129,6 +265,11 @@ VRAM_MODE_OPTIONS_NEO2 = [
     ("仅用 CPU，极慢 (--cpu)", "cpu", "--cpu"),
 ]
 
+# ComfyUI 的显存参数跟新版 Neo 同名同义，只有文案不同（不说 Forge）
+VRAM_MODE_OPTIONS_COMFY = [
+    ("由 ComfyUI 自动管理（推荐，不加任何参数）", "auto", None),
+] + [item for item in VRAM_MODE_OPTIONS_NEO2 if item[1] != "auto"]
+
 PRECISION_MODE_OPTIONS_NEO2 = [
     ("自动（推荐）", "auto", None),
     ("全部使用 FP16 (--force-fp16)", "fp16", "--force-fp16"),
@@ -174,8 +315,9 @@ PRECISION_MODE_OPTIONS = PRECISION_MODE_OPTIONS_LEGACY
 
 
 def uses_new_neo_args(cfg):
-    """当前分支是否使用新版 Neo 参数体系"""
-    return cfg.get("webui_branch") == "neo2"
+    """当前分支是否使用新版 Neo 参数体系。
+    ComfyUI 也算：新版 Neo 的显存/精度参数本来就是照搬 ComfyUI 的，名字完全一样。"""
+    return cfg.get("webui_branch") in ("neo2", "comfyui")
 
 
 def vram_options_for(cfg):
@@ -236,22 +378,39 @@ def _lookup(options, value):
 
 def load_config():
     cfg = dict(DEFAULT_CONFIG)
+    loaded = False
     if os.path.exists(CONFIG_PATH):
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             cfg.update(saved)
+            loaded = True
         except Exception:
             pass
+    old_version = cfg.get("config_version", 0)
+    if migrate_config(cfg):
+        if loaded and old_version < CONFIG_VERSION:
+            # 迁移前备份一份 V2 配置，出问题可以手动还原
+            try:
+                bak = CONFIG_PATH + ".v2.bak"
+                if not os.path.exists(bak):
+                    shutil.copyfile(CONFIG_PATH, bak)
+            except OSError:
+                pass
+    project_active(cfg)
     return cfg
 
 
 def save_config(cfg):
+    # 老代码直接改顶层键（webui_root 等），保存前先同步回当前实例
+    if cfg.get("instances"):
+        absorb_active(cfg)
     # 先写临时文件再原子替换：直接 "w" 打开会先截断原文件，
     # 写入中断（断电/磁盘满/杀软）就留下一份空配置，下次启动回到默认
     tmp_path = CONFIG_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        json.dump({k: v for k, v in cfg.items() if not k.startswith("_")},
+                  f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, CONFIG_PATH)
 
 
@@ -557,8 +716,156 @@ def build_subprocess_env(cfg, root_dir):
     return env
 
 
+# ============================================================
+# ComfyUI
+# ============================================================
+COMFY_ENTRY = "main.py"
+
+
+def comfy_layout(root):
+    """
+    识别 ComfyUI 的目录结构，返回 (comfy_dir, 自带 python 路径或 "")；不是 ComfyUI 返回 (None, "")。
+
+    支持三种常见形态：
+      官方便携包   ComfyUI_windows_portable/{python_embeded, ComfyUI/main.py}
+      秋叶等整合包 root/{main.py, python/python.exe}；root 选到里层 ComfyUI
+                   目录时，自带 python 在上一级（ComfyUI-aki-vX/{ComfyUI, python}）
+      自己 git 的   root/{main.py, venv 或 .venv}
+    根目录选到便携包外层或 ComfyUI 本体都能认。
+    """
+    if not root or not os.path.isdir(root):
+        return None, ""
+    cand = [root, os.path.join(root, "ComfyUI")]
+    comfy_dir = None
+    for d in cand:
+        if os.path.isfile(os.path.join(d, COMFY_ENTRY)) and (
+                os.path.isdir(os.path.join(d, "comfy")) or os.path.isfile(os.path.join(d, "nodes.py"))):
+            comfy_dir = d
+            break
+    if not comfy_dir:
+        return None, ""
+    parent = os.path.dirname(comfy_dir)
+    pys = [
+        os.path.join(comfy_dir, "python_embeded", "python.exe"),
+        os.path.join(parent, "python_embeded", "python.exe"),
+        os.path.join(root, "python_embeded", "python.exe"),
+        os.path.join(comfy_dir, "python", "python.exe"),
+        os.path.join(root, "python", "python.exe"),
+        # 秋叶 ComfyUI 整合包：ComfyUI-aki-vX/{ComfyUI, python/python.exe}，
+        # root 选到里层 ComfyUI 目录时，自带 python 在它的上一级
+        os.path.join(parent, "python", "python.exe"),
+        os.path.join(comfy_dir, "venv", "Scripts", "python.exe"),
+        os.path.join(comfy_dir, ".venv", "Scripts", "python.exe"),
+        os.path.join(root, "venv", "Scripts", "python.exe"),
+        os.path.join(root, ".venv", "Scripts", "python.exe"),
+        os.path.join(parent, "venv", "Scripts", "python.exe"),
+        os.path.join(parent, ".venv", "Scripts", "python.exe"),
+    ]
+    for p in pys:
+        if os.path.isfile(p):
+            return comfy_dir, p
+    return comfy_dir, ""
+
+
+def detect_kind(root):
+    """'comfyui' / 'forge' / None"""
+    if not root or not os.path.isdir(root):
+        return None
+    if comfy_layout(root)[0]:
+        return "comfyui"
+    if os.path.isfile(os.path.join(root, "webui.bat")) or (
+            os.path.isfile(os.path.join(root, "launch.py"))
+            and os.path.isdir(os.path.join(root, "modules"))):
+        return "forge"
+    return None
+
+
+def comfy_python(cfg, root):
+    custom = (cfg.get("custom_python_path") or "").strip().strip('"')
+    if custom:
+        return custom
+    return comfy_layout(root)[1] or ""
+
+
+def build_comfy_args(cfg):
+    """ComfyUI 的 main.py 参数（列表）"""
+    args = []
+    if cfg.get("enable_listen"):
+        args += ["--listen", "0.0.0.0"]
+    port = str(cfg.get("port", "")).strip()
+    if port:
+        args += ["--port", port]
+    gpu_id = str(cfg.get("gpu_device_id", "")).strip()
+    if gpu_id:
+        args += ["--cuda-device", gpu_id]
+    for arg in (_lookup(VRAM_MODE_OPTIONS_NEO2, cfg.get("vram_mode", "auto")),
+                _lookup(PRECISION_MODE_OPTIONS_NEO2, cfg.get("precision_mode", "auto")),
+                _lookup(UNET_PRECISION_OPTIONS_NEO2, cfg.get("unet_precision", "auto")),
+                _lookup(VAE_PRECISION_OPTIONS_NEO2, cfg.get("vae_precision", "auto")),
+                _lookup(TEXT_ENC_PRECISION_OPTIONS_NEO2, cfg.get("text_enc_precision", "auto")),
+                _lookup(ATTENTION_OPTIONS_NEO2, cfg.get("attention_impl", "auto"))):
+        if arg:
+            args.append(arg)
+    reserve = str(cfg.get("reserve_vram_gb", "")).strip()
+    if reserve and reserve not in ("0", "0.0"):
+        args += ["--reserve-vram", reserve]
+    if cfg.get("cuda_malloc"):
+        args.append("--cuda-malloc")
+    if cfg.get("comfy_sage"):
+        args.append("--use-sage-attention")
+    if cfg.get("comfy_flash"):
+        args.append("--use-flash-attention")
+    if cfg.get("comfy_fast"):
+        args.append("--fast")
+    if cfg.get("autolaunch"):
+        args.append("--auto-launch")
+    extra_paths = cfg.get("_extra_model_paths")
+    if extra_paths:
+        args += ["--extra-model-paths-config", extra_paths]
+    extra = (cfg.get("extra_args") or "").strip()
+    if extra:
+        import shlex
+        try:
+            args += shlex.split(extra, posix=False)
+        except ValueError:
+            args += extra.split()
+    return args
+
+
+def build_comfy_env(cfg, root_dir):
+    """ComfyUI 子进程环境：消毒 + git 路径 + 镜像（ComfyUI 不走 webui.bat，不需要 PYTHON/VENV_DIR）"""
+    env = {}
+    for k, v in os.environ.items():
+        if k in _ENV_STRIP_EXACT or any(k.startswith(p) for p in _ENV_STRIP_PREFIX):
+            continue
+        env[k] = v
+    custom_git = (cfg.get("custom_git_path") or "").strip() or detect_bundled_git(root_dir) or ""
+    if custom_git:
+        env["GIT_PYTHON_GIT_EXECUTABLE"] = custom_git
+        git_dir = custom_git.replace("/", "\\").rsplit("\\", 1)[0]
+        if git_dir and git_dir != custom_git:
+            env["PATH"] = git_dir + ";" + env.get("PATH", "")
+    try:
+        import mirror_manager as mm
+        if mm.resolve_mode(cfg):
+            env.update(mm.pip_env_overrides(True))
+            env["HF_ENDPOINT"] = mm.HF_MIRROR
+    except Exception:
+        pass
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        env["GIT_CONFIG_GLOBAL"] = _empty_gitconfig_path()
+    except OSError:
+        pass
+    return env
+
+
 def build_commandline_args(cfg):
     """根据配置生成 COMMANDLINE_ARGS 字符串（只包含真实存在、真的会生效的命令行参数）"""
+    if is_comfy(cfg):
+        return " ".join(build_comfy_args(cfg))
     args = []
 
     if cfg.get("enable_listen"):
