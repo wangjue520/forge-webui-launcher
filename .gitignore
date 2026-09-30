@@ -30,3 +30,6 @@ Thumbs.db
 # 自动下载的便携运行环境（体积大，每台机器自己下）
 python/
 git/
+
+# 启动器按配置自动生成的主题引导文件
+web/js/current_theme.js

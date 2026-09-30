@@ -20,6 +20,7 @@ import threading
 import webview
 from webview.dom import DOMEventHandler
 
+import config_manager as cm
 from webview_api import LauncherApi
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -87,6 +88,7 @@ def _bind_dom_events(window, api):
 def main():
     _patch_http_server_backlog()
     api = LauncherApi()
+    cm.write_theme_file(api.cfg)   # 开屏动画在后端应答前就要读风格文件
     window = webview.create_window(
         "WWY 启动器",
         os.path.join(APP_DIR, "web", "index.html"),

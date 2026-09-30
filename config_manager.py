@@ -401,10 +401,33 @@ def load_config():
     return cfg
 
 
+def write_theme_file(cfg):
+    """把界面风格写成 web/js/current_theme.js。
+
+    开屏动画在后端应答之前就要知道用哪套风格，而 pywebview 每次启动的端口
+    都随机，localStorage 按 origin（含端口）隔离、跨启动根本拿不到——所以
+    风格走磁盘文件。每次保存配置和启动时都重写，ZIP 覆盖更新也冲不掉。
+    """
+    theme = str(cfg.get("ui_theme") or "terminal")
+    content = ("/* 由启动器按当前配置自动生成，请勿手改（改了也会被覆盖） */\n"
+               f"window.WWY_THEME_ID = {json.dumps(theme)};\n")
+    path = os.path.join(os.path.dirname(CONFIG_PATH), "web", "js", "current_theme.js")
+    try:
+        if os.path.isfile(path):
+            with open(path, "r", encoding="utf-8") as f:
+                if f.read() == content:
+                    return
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError:
+        pass
+
+
 def save_config(cfg):
     # 老代码直接改顶层键（webui_root 等），保存前先同步回当前实例
     if cfg.get("instances"):
         absorb_active(cfg)
+    write_theme_file(cfg)
     # 先写临时文件再原子替换：直接 "w" 打开会先截断原文件，
     # 写入中断（断电/磁盘满/杀软）就留下一份空配置，下次启动回到默认
     tmp_path = CONFIG_PATH + ".tmp"
