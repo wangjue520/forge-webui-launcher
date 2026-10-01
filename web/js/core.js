@@ -392,30 +392,49 @@
    * 不再用 pywebview 的 DOM 事件转发：它会把整个事件连同整棵 DOM 树序列化，
    * 拖动时每次 dragover 都要几百毫秒、几 MB，界面直接卡死。 */
   function bindFileDrop() {
+    // ---- 临时诊断：定位拖放问题用，定位完删掉 ----
+    const dbg = (m) => { try { App.api.drop_debug(m); } catch (e) {} };
+    let dragSeen = false;
+    // 捕获阶段、不做任何过滤的原始记录：区分「事件根本没到」和「被 hasFiles 过滤」
+    let overLogged = false;
+    ["dragenter", "dragover", "drop"].forEach((ev) =>
+      window.addEventListener(ev, (e) => {
+        if (ev === "dragenter") overLogged = false;
+        if (ev === "dragover") { if (overLogged) return; overLogged = true; }
+        dbg(`原始 ${ev} types=${e.dataTransfer ? Array.from(e.dataTransfer.types || []).join(",") : "无 dataTransfer"}`);
+      }, true));
     const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
     const allow = (e) => {
       if (!hasFiles(e)) return;
+      if (!dragSeen) { dragSeen = true; dbg(`dragenter page=${App.currentPage} types=${Array.from(e.dataTransfer.types || []).join(",")}`); }
       e.preventDefault();                       // 不 preventDefault 浏览器就不允许放下（还会把文件当网页打开）
       e.dataTransfer.dropEffect = App.pages[App.currentPage] && App.pages[App.currentPage].onDropped ? "copy" : "none";
     };
     document.addEventListener("dragenter", allow);
     document.addEventListener("dragover", allow);
     document.addEventListener("drop", async (e) => {
-      if (!hasFiles(e)) return;
+      const wasDragging = dragSeen; dragSeen = false;
+      if (!hasFiles(e)) { if (wasDragging) dbg("drop 事件但 hasFiles=false"); return; }
       e.preventDefault();
       const files = e.dataTransfer.files;
+      dbg(`drop page=${App.currentPage} files=${files ? files.length : "null"} names=${files ? Array.from(files, (f) => f.name).join("|") : ""}`);
       if (!files || !files.length) return;
       const mod = App.pages[App.currentPage];
       if (!mod || !mod.onDropped) { App.toast("这个页面不接收拖入的文件", ""); return; }
-      if (mod.onDropStart) mod.onDropStart(files.length);
+      // 页面侧反馈一旦抛错，后面路径查询和错误提示就全没了——包起来让错误可见
+      try { if (mod.onDropStart) mod.onDropStart(files.length); }
+      catch (err) { dbg("onDropStart 抛错: " + err.message); App.toast("拖放处理出错：" + err.message, "error", 5000); }
       const wv = window.chrome && window.chrome.webview;
+      dbg(`chrome.webview=${!!wv} postMessageWithAdditionalObjects=${!!(wv && wv.postMessageWithAdditionalObjects)}`);
       if (wv && wv.postMessageWithAdditionalObjects) {
         // FileList 按 WebIDL 转成 sequence 有兼容风险，显式转成数组再发
-        try { wv.postMessageWithAdditionalObjects("FilesDropped", Array.from(files)); } catch (err) { /* 交给下面报错 */ }
+        try { wv.postMessageWithAdditionalObjects("FilesDropped", Array.from(files)); dbg("postMessageWithAdditionalObjects 已发"); }
+        catch (err) { dbg("postMessageWithAdditionalObjects 抛错: " + err.message); }
       }
       const names = Array.from(files, (f) => f.name);
       let r = null;
       try { r = await App.api.drop_files(names); } catch (err) { r = { ok: false, error: err.message }; }
+      dbg(`drop_files 返回 ${JSON.stringify(r)}`);
       if (r && r.legacy) {                      // 旧通道：路径稍后通过 app/dropped 送过来，进度由页面自己再显示
         if (mod.onDropFail) mod.onDropFail();
         return;
@@ -426,6 +445,7 @@
         App.toast("没能读到拖入文件的路径" + (r && r.error ? "：" + r.error : "（请从资源管理器里直接拖文件或文件夹）"), "error", 5000);
         return;
       }
+      dbg(`onDropped paths=${paths.join("|")}`);
       mod.onDropped(paths);
     });
   }

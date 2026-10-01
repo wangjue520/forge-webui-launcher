@@ -490,7 +490,14 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .db-target em { font-style: normal; color: var(--ink); background: var(--yel); padding: 0 4px; margin-right: 6px; font-family: var(--sans); }
 .db-busy { display: flex; align-items: center; gap: 8px; flex: 0 0 46%; }
 .db-busy[hidden] { display: none; }
+.db-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 0 0 30%; }
+.db-info b { font-size: 12px; white-space: nowrap; }
+.db-name { font: 11px var(--mono); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-pct { font: 700 12px var(--mono); min-width: 36px; text-align: right; }
 .db-progress { flex: 1; margin: 0; }
+/* 还不知道总量时（读取/分析阶段）：进度条来回滑动 */
+.db-progress.indeterminate .progress-bar { width: 40% !important; animation: db-slide 1.1s ease-in-out infinite alternate; }
+@keyframes db-slide { from { margin-left: 0; } to { margin-left: 60%; } }
 /* 拖着文件经过窗口时：提示条变黄，整个页面描一圈黑框 */
 #page-models.drag-active .drop-banner { background: var(--yel); border-color: var(--ink); border-style: solid; }
 #page-models.drag-active .drop-banner .db-target { color: var(--ink); }

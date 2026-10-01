@@ -271,14 +271,17 @@
   }
   // 更新进度区；pct 为 null 时显示来回滑动的「不确定」进度条
   function busySet(o) {
-    if ("stage" in o) $("#md-import-stage").textContent = o.stage || "";
-    if ("name" in o) { $("#md-import-name").textContent = o.name || ""; $("#md-import-name").title = o.name || ""; }
-    if ("foot" in o) $("#md-import-text").textContent = o.foot || "";
+    const setText = (sel, v) => { const el = $(sel); if (el) { el.textContent = v; } };
+    if ("stage" in o) setText("#md-import-stage", o.stage || "");
+    if ("name" in o) { setText("#md-import-name", o.name || ""); const el = $("#md-import-name"); if (el) el.title = o.name || ""; }
+    if ("foot" in o) setText("#md-import-text", o.foot || "");
     if ("pct" in o) {
+      const busy = $("#md-import-busy"), bar = $("#md-import-bar");
+      if (!busy || !bar) return;
       const indet = o.pct == null;
-      $("#md-import-busy .db-progress").classList.toggle("indeterminate", indet);
-      $("#md-import-bar").style.width = indet ? "" : Math.max(0, Math.min(100, o.pct)) + "%";
-      $("#md-import-pct").textContent = indet ? "" : Math.floor(o.pct) + "%";
+      busy.querySelector(".db-progress").classList.toggle("indeterminate", indet);
+      bar.style.width = indet ? "" : Math.max(0, Math.min(100, o.pct)) + "%";
+      setText("#md-import-pct", indet ? "" : Math.floor(o.pct) + "%");
     }
   }
   function setPreparing(v, n) {

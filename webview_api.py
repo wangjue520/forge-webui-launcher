@@ -641,8 +641,23 @@ class LauncherApi:
     def handle_dropped_paths(self, paths):
         """由入口处的 DOM drop 事件调用：把拖入文件的完整路径推给前端处理"""
         paths = [p for p in (paths or []) if isinstance(p, str) and p.strip()]
+        self._drop_debug_write("PY", f"handle_dropped_paths(旧通道) paths={paths}")
         if paths:
             self._emit("app", "dropped", paths=paths)
+        return {"ok": True}
+
+    # ---- 临时诊断（定位拖放问题用，定位完删掉）----
+    def _drop_debug_write(self, who, msg):
+        try:
+            os.makedirs(os.path.join(APP_DIR, "launcher_data"), exist_ok=True)
+            with open(os.path.join(APP_DIR, "launcher_data", "drop_debug.log"),
+                      "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.now().strftime('%H:%M:%S.%f')[:-3]}] {who}: {msg}\n")
+        except OSError:
+            pass
+
+    def drop_debug(self, msg):
+        self._drop_debug_write("JS", msg)
         return {"ok": True}
 
     def drop_files(self, names):
@@ -655,7 +670,9 @@ class LauncherApi:
         _dnd_state 不可用（pywebview 内部结构变了）时返回 legacy=True，前端改等
         webview_main 里旧 DOM 事件通道推过来的 app/dropped。"""
         st = self._dnd_state
-        if not isinstance(st, dict) or not isinstance(st.get("paths"), list):
+        pool = st.get("paths") if isinstance(st, dict) else None
+        self._drop_debug_write("PY", f"drop_files({names}) pool={pool if pool else type(st).__name__}")
+        if not isinstance(st, dict) or not isinstance(pool, list):
             return {"ok": False, "legacy": True}
         pool = st["paths"]
         paths = []
