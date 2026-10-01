@@ -440,14 +440,20 @@ def save_sidecar_metadata(final_path, version_info, file_info):
 
 
 def download_preview_image(final_path, version_info, api_key=None):
-    """下载第一张预览图，保存为 {文件名}.preview.png"""
+    """下载第一张真图片（跳过视频）作为预览，保存为 {文件名}.preview.png"""
     images = version_info.get("images") or []
-    if not images:
+    url = None
+    for u in images:
+        u = u.get("url") if isinstance(u, dict) else u
+        if u and not u.split("?", 1)[0].lower().endswith((".mp4", ".webm", ".mov", ".gif")):
+            url = u.replace("/original=true/", "/width=450/")   # 预览用小图，原图几十 MB
+            break
+    if not url:
         return None
     preview_path = os.path.splitext(final_path)[0] + ".preview.png"
-    headers = _headers(api_key, images[0])
+    headers = _headers(api_key, url)
     try:
-        resp = requests.get(images[0], headers=headers, timeout=30)
+        resp = requests.get(url, headers=headers, timeout=30)
         resp.raise_for_status()
         with open(preview_path, "wb") as f:
             f.write(resp.content)

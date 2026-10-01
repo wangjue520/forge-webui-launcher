@@ -591,6 +591,7 @@
         if (e.ok) {
           const via = e.source === "liblib" ? "[liblib] " : "";
           App.toast(`已补全信息：${via}${e.info.modelName}（${e.info.baseModel || "未知基础模型"}）`, "ok", 4500);
+          if (selected) pendingSelect = selected.path;   // 详情区跟着刷新，新补的预览图立刻可见
           if (curCat >= 0) loadCat(curCat);
         } else if (e.not_found) {
           App.toast("Civitai 和 liblib 上都没有这个哈希对应的模型（可能是本地训练/合并的，也可以在详情里粘贴 liblib 链接手动绑定）", "error", 6000);

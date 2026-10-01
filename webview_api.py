@@ -2711,6 +2711,32 @@ def _merge_trained_words(existing_info, new_words, source):
         existing_info["trainedWordsSource"] = source
 
 
+_PREVIEW_VIDEO_EXTS = (".mp4", ".webm", ".mov", ".gif")
+
+
+def _pick_preview_url(images):
+    """从 Civitai images 里挑第一张真正的图片：跳过视频（预览图列表里经常混着
+    mp4，直接当 png 存下来浏览器显示不出来），并把 original=true 换成 width=450
+    小图——原图动辄几十 MB，预览用不着。"""
+    for img in images or []:
+        url = img.get("url") if isinstance(img, dict) else (img if isinstance(img, str) else None)
+        if not url:
+            continue
+        if url.split("?", 1)[0].lower().endswith(_PREVIEW_VIDEO_EXTS):
+            continue
+        return url.replace("/original=true/", "/width=450/")
+    return None
+
+
+def _preview_is_video(path):
+    """已存在的预览文件其实是视频（旧版本会把 mp4 存成 .preview.png）——要重下"""
+    try:
+        with open(path, "rb") as f:
+            return f.read(12)[4:8] == b"ftyp"   # ISO-BMFF 视频容器（mp4/mov）
+    except OSError:
+        return False
+
+
 def write_sidecar_from_version(model_path, data, digest, api_key=None, fetch_preview=True):
     """按查询结果写 .civitai.info（格式与 civitai_downloader 一致），顺带补预览图。
     已有触发词是手动输入的则保留（站点数据不覆盖手动）。"""
@@ -2736,12 +2762,14 @@ def write_sidecar_from_version(model_path, data, digest, api_key=None, fetch_pre
     base, _ext = os.path.splitext(model_path)
     write_sidecar(model_path, info)
 
-    if fetch_preview and not any(os.path.exists(base + s) for s in
-                                 (".preview.png", ".png", ".jpg", ".jpeg", ".webp")):
-        for img in (data.get("images") or [])[:1]:
-            url = img.get("url")
-            if not url:
-                continue
+    if fetch_preview:
+        existing = [base + s for s in (".preview.png", ".png", ".jpg", ".jpeg", ".webp")
+                    if os.path.exists(base + s)]
+        # 有预览但其实是旧版本误存的视频 → 当没有处理，重新下载
+        if existing and not (len(existing) == 1 and _preview_is_video(existing[0])):
+            return info
+        url = _pick_preview_url(data.get("images"))
+        if url:
             try:
                 # 图片 URL 来自 API 数据，可能指向站外主机——Authorization
                 # 只发给 civitai 自己的域名，避免 API Key 泄露给第三方
