@@ -315,6 +315,9 @@ Forge 默认 `output\txt2img-images\` / `output\img2img-images\`（Classic 分�
 **Q21：启动 ComfyUI 报 No module named 'xxx'**
 多半是解释器没指对：ComfyUI 整合包的依赖在它自带的 Python 里。启动器会自动探测常见布局（官方便携包、秋叶整合包的里层/外层、`venv`/`.venv`）；探测不到时在「一键启动」页「Python 解释器」里手动填整合包自带的 `python.exe` 完整路径。
 
+**Q22：部署日志里出现 "error launching git: ??????"**
+便携 Git 解压出来了但跑不起来（问号是 Git 自己把中文系统错误打成了乱码）。新版启动器解压后会先验证 Git 能不能运行，不行就自动退回上一个正式版，最多试 3 个版本，日志里会写明真正原因（比如被杀毒软件拦截）。都不行时：把部署目录加入杀软白名单再点「开始部署」，或先安装官方 Git（https://git-scm.com/download/win）再取消勾选「自动下载便携版 Python + Git」重新部署。
+
 ---
 
 ## 进阶：配置文件与目录结构

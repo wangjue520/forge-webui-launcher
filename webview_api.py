@@ -1059,6 +1059,7 @@ def _deploy_flow(self, target, branch, use_portable):
             except OSError:
                 pass
             return e
+        _drop_broken_bundled_git(target, log)
         deploy_env = make_env()
 
         bundled_python = os.path.join(target, "python", "python.exe")
@@ -1362,30 +1363,85 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
         if need_git:
-            log("[便携环境] 查询 git-for-windows 最新版本 ...\n")
-            assets, body = pe.list_release_assets_with_meta(
-                pe.GIT_REPO, tag=None, cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
-            asset = pe.pick_git_asset(assets)
-            if not asset:
-                raise pe.PortableEnvError("没有找到 PortableGit 64位安装包")
-            expected = pe.pick_git_asset_sha256(body, asset["name"])
-            if not expected:
-                raise pe.PortableEnvError(
-                    f"git-for-windows 发布信息中没有 {asset['name']} 的校验和，无法验证下载内容，已中止")
-            log(f"[便携环境] 下载 {asset['name']} ...\n")
-            archive_path = os.path.join(tmp, asset["name"])
-            if not _cached_archive_ok(archive_path, expected, log):
-                pe.download_file(asset["url"], archive_path,
-                                 progress_cb=progress,
-                                 cancel_flag=self._deploy_cancel.is_set,
-                                 cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
-            pe.verify_downloaded_file(archive_path, expected,
-                                      what=f"Git 安装包 {asset['name']}")
-            # 自解压包执行前再验 Authenticode 签名（双保险）
-            pe.verify_pe_signature(archive_path, log_cb=lambda m: log(m + "\n"))
-            git_exe = pe.extract_portable_git(archive_path, target,
-                                              log_cb=lambda m: log(m + "\n"))
-            log(f"[便携环境] Git 部署完成: {git_exe}\n")
+            _deploy_portable_git(self, target, tmp, log, progress)
+
+
+def _deploy_portable_git(self, target, tmp, log, progress):
+    """
+    下载并解压便携 Git，解压后必须真的能跑（git --version）才算成功。
+
+    Git for Windows 新版偶尔在部分电脑上跑不起来（2.56 刚把主程序从 mingw64
+    挪到 ucrt64；新发布的程序装机量低，也更容易被杀软按"信誉"拦截），表现为
+    cmd\\git.exe 报 "error launching git: ????"。所以从最新版开始，跑不起来就
+    自动退回上一个正式版，最多试 3 个；都不行再看系统里有没有能用的 Git。
+    """
+    net_log = lambda m: log(m + "\n")
+    git_root = os.path.join(target, "git")
+    log("[便携环境] 查询 git-for-windows 最近的版本 ...\n")
+    try:
+        releases = pe.list_recent_releases(pe.GIT_REPO, 4, cfg=self._deploy_cfg, log_cb=net_log)
+    except pe.PortableEnvError:
+        releases = []
+    if not releases:   # 列表接口不通时退回只查最新版（老逻辑）
+        assets, body = pe.list_release_assets_with_meta(pe.GIT_REPO, tag=None, cfg=self._deploy_cfg, log_cb=net_log)
+        releases = [("latest", assets, body)]
+    failures = []
+    tried = 0
+    for tag, assets, body in releases:
+        asset = pe.pick_git_asset(assets)
+        if not asset:
+            continue
+        expected = pe.pick_git_asset_sha256(body, asset["name"])
+        if not expected:
+            log(f"[便携环境] {asset['name']} 的发布信息里没有校验和，跳过这个版本\n")
+            continue
+        if tried >= 3:
+            break
+        tried += 1
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        log(f"[便携环境] 下载 {asset['name']} ...\n")
+        archive_path = os.path.join(tmp, asset["name"])
+        if not _cached_archive_ok(archive_path, expected, log):
+            pe.download_file(asset["url"], archive_path,
+                             progress_cb=progress,
+                             cancel_flag=self._deploy_cancel.is_set,
+                             cfg=self._deploy_cfg, log_cb=net_log)
+        pe.verify_downloaded_file(archive_path, expected, what=f"Git 安装包 {asset['name']}")
+        # 自解压包执行前再验 Authenticode 签名（双保险）
+        pe.verify_pe_signature(archive_path, log_cb=net_log)
+        shutil.rmtree(git_root, ignore_errors=True)   # 上一个版本没跑起来的残留先清掉
+        git_exe = pe.extract_portable_git(archive_path, target, log_cb=net_log)
+        ok, detail = pe.check_portable_git(git_root)
+        if ok:
+            log(f"[便携环境] Git 部署完成: {git_exe}（{detail}）\n")
+            return
+        failures.append(f"{asset['name']}：{detail}")
+        log(f"[便携环境] {asset['name']} 解压好了但在这台电脑上运行不了：\n    {detail}\n"
+            "    改用上一个版本再试 ...\n")
+    shutil.rmtree(git_root, ignore_errors=True)
+    sys_ok, sys_info = pe.system_git_ok()
+    if sys_ok:
+        log(f"[便携环境] 便携 Git 都运行不了，改用系统里已安装的 Git：{sys_info}\n")
+        return
+    raise pe.PortableEnvError(
+        "便携 Git 解压后无法运行：\n  " + "\n  ".join(failures or ["没有找到可用的 PortableGit 安装包"]) +
+        "\n\n常见原因是杀毒软件（360、火绒、Windows 安全中心等）拦截或删除了 Git 的程序文件。"
+        "可以把安装目录加入杀软白名单后重新点「开始部署」；"
+        "或者先安装官方 Git（https://git-scm.com/download/win，一路下一步即可），"
+        "再取消勾选「自动下载便携版 Python + Git」重新部署。")
+
+
+def _drop_broken_bundled_git(target, log):
+    """目标目录里已有的便携 Git 跑不起来就删掉，让部署重新准备（否则会一直用坏的那份）"""
+    git_root = os.path.join(target, "git")
+    if not os.path.exists(os.path.join(git_root, "cmd", "git.exe")):
+        return
+    ok, detail = pe.check_portable_git(git_root)
+    if ok:
+        return
+    log(f"[部署] 目录里已有的便携 Git 运行不了（{detail}），删除后重新准备\n")
+    shutil.rmtree(git_root, ignore_errors=True)
 
 
 def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
@@ -2036,6 +2092,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             except OSError:
                 pass
             return e
+        _drop_broken_bundled_git(target, log)
         env = make_env()
 
         bundled_python = os.path.join(target, "python", "python.exe")
@@ -2052,6 +2109,7 @@ def _deploy_flow_comfy(self, target, use_portable):
                 f"Git: {'需要' if need_git else '跳过'})\n")
             self._deploy_portable_env(target, "comfyui", need_python, need_git, log, progress)
             progress(0, 0)
+            env = make_env()   # 便携 Git 刚装好：重建环境，让 GIT 路径进 PATH
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
 

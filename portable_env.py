@@ -458,6 +458,104 @@ def extract_portable_git(archive_path, root_dir, log_cb=None):
     return git_exe
 
 
+def list_recent_releases(repo, count=6, cfg=None, log_cb=None):
+    """最近几个正式 release：[(tag, assets, body)]，新的在前（跳过预发布/草稿）。
+    便携 Git 的最新版在某些电脑上跑不起来时，按这个顺序往前退。"""
+    data = _get_json(f"{GITHUB_API}/repos/{repo}/releases?per_page=15", cfg, log_cb)
+    out = []
+    for rel in data if isinstance(data, list) else []:
+        if rel.get("prerelease") or rel.get("draft"):
+            continue
+        assets = [{"name": a["name"], "url": a["browser_download_url"],
+                   "digest": a.get("digest") or ""} for a in rel.get("assets", [])]
+        out.append((rel.get("tag_name") or "", assets, rel.get("body") or ""))
+        if len(out) >= count:
+            break
+    return out
+
+
+def _decode_output(data):
+    if not data:
+        return ""
+    for enc in ("utf-8", "mbcs" if os.name == "nt" else "latin-1", "gbk"):
+        try:
+            return data.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return data.decode("utf-8", "replace")
+
+
+# 真正的 git.exe 所在目录：2.56 起是 ucrt64（Git for Windows 跟着 MSYS2 停止
+# 支持 Win8.1），更早的版本是 mingw64；cmd\git.exe 只是个转发壳
+GIT_MSYSTEM_DIRS = ("ucrt64", "mingw64", "clangarm64")
+
+
+def check_portable_git(git_root):
+    """
+    便携 Git 能不能真正跑起来：(ok, 说明)。
+
+    cmd\\git.exe 是个转发壳，它启动真正的 git.exe 失败时只会打印
+    "error launching git: <系统错误>"，而且系统错误是中文时会被它自己
+    变成一串问号，用户根本看不出原因。所以壳失败后，再用 Python 直接
+    启动真正的 git.exe：Python 的 OSError 带着 Windows 的原始错误码和
+    可读的中文说明（比如"文件包含病毒或潜在的垃圾软件"= 被杀软拦了）。
+    """
+    flags = 0x08000000 if os.name == "nt" else 0
+    wrapper = os.path.join(git_root, "cmd", "git.exe")
+    if not os.path.exists(wrapper):
+        return False, "找不到 cmd\\git.exe"
+    try:
+        r = subprocess.run([wrapper, "--version"], capture_output=True, timeout=30,
+                           stdin=subprocess.DEVNULL, creationflags=flags)
+        out = (_decode_output(r.stdout) + _decode_output(r.stderr)).strip()
+        if r.returncode == 0 and out.startswith("git version"):
+            return True, out
+        detail = f"cmd\\git.exe 运行失败（退出码 {r.returncode}）：{out[:160]}"
+    except subprocess.TimeoutExpired:
+        detail = "cmd\\git.exe 运行超时"
+    except OSError as e:
+        detail = f"cmd\\git.exe 无法启动：{e}"
+
+    real = None
+    for sub in GIT_MSYSTEM_DIRS:
+        p = os.path.join(git_root, sub, "bin", "git.exe")
+        if os.path.exists(p):
+            real = (sub, p)
+            break
+    if not real:
+        return False, detail + "；git 主程序（ucrt64\\bin\\git.exe）不存在——文件不完整，多半是被杀毒软件删掉了"
+    sub, p = real
+    try:
+        r = subprocess.run([p, "--version"], capture_output=True, timeout=30,
+                           stdin=subprocess.DEVNULL, creationflags=flags)
+        out = (_decode_output(r.stdout) + _decode_output(r.stderr)).strip()
+        if r.returncode == 0:
+            detail += f"；直接运行 {sub}\\bin\\git.exe 是正常的（{out}），问题出在转发壳启动它的环节"
+        else:
+            detail += f"；直接运行 {sub}\\bin\\git.exe 也失败（退出码 {r.returncode}）：{out[:160]}"
+    except OSError as e:
+        detail += f"；直接启动 {sub}\\bin\\git.exe 被系统拒绝：{e}"
+    except subprocess.TimeoutExpired:
+        detail += f"；直接运行 {sub}\\bin\\git.exe 超时"
+    return False, detail
+
+
+def system_git_ok():
+    """系统 PATH 里的 git 能不能用：(ok, git 路径或说明)"""
+    import shutil
+    g = shutil.which("git")
+    if not g:
+        return False, "系统里没有装 Git"
+    try:
+        r = subprocess.run([g, "--version"], capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
+                           creationflags=0x08000000 if os.name == "nt" else 0)
+        if r.returncode == 0:
+            return True, g
+        return False, f"系统 Git 运行失败（退出码 {r.returncode}）"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return False, f"系统 Git 无法运行：{e}"
+
+
 def tune_bundled_git(git_root, log_cb=None):
     """关掉便携 Git 的 Schannel 证书吊销检查（http.schannelCheckRevoke=false）。
 
