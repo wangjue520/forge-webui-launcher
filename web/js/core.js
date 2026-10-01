@@ -385,16 +385,61 @@
     $("#launch-cmd-preview").textContent = cmd && cmd.trim() ? cmd : "（无）";
   };
 
+  /* ---------- 文件拖放 ----------
+   * 网页拿不到拖入文件的磁盘路径。WebView2 下把 File 列表交给原生侧
+   * （postMessageWithAdditionalObjects），pywebview 会记下每个文件的完整路径，
+   * 再按文件名向 Python 要回来（api.drop_files）。
+   * 不再用 pywebview 的 DOM 事件转发：它会把整个事件连同整棵 DOM 树序列化，
+   * 拖动时每次 dragover 都要几百毫秒、几 MB，界面直接卡死。 */
+  function bindFileDrop() {
+    const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+    const allow = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();                       // 不 preventDefault 浏览器就不允许放下（还会把文件当网页打开）
+      e.dataTransfer.dropEffect = App.pages[App.currentPage] && App.pages[App.currentPage].onDropped ? "copy" : "none";
+    };
+    document.addEventListener("dragenter", allow);
+    document.addEventListener("dragover", allow);
+    document.addEventListener("drop", async (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      const files = e.dataTransfer.files;
+      if (!files || !files.length) return;
+      const mod = App.pages[App.currentPage];
+      if (!mod || !mod.onDropped) { App.toast("这个页面不接收拖入的文件", ""); return; }
+      if (mod.onDropStart) mod.onDropStart(files.length);
+      const wv = window.chrome && window.chrome.webview;
+      if (wv && wv.postMessageWithAdditionalObjects) {
+        // FileList 按 WebIDL 转成 sequence 有兼容风险，显式转成数组再发
+        try { wv.postMessageWithAdditionalObjects("FilesDropped", Array.from(files)); } catch (err) { /* 交给下面报错 */ }
+      }
+      const names = Array.from(files, (f) => f.name);
+      let r = null;
+      try { r = await App.api.drop_files(names); } catch (err) { r = { ok: false, error: err.message }; }
+      if (r && r.legacy) {                      // 旧通道：路径稍后通过 app/dropped 送过来，进度由页面自己再显示
+        if (mod.onDropFail) mod.onDropFail();
+        return;
+      }
+      const paths = (r && r.paths) || [];
+      if (!paths.length) {
+        if (mod.onDropFail) mod.onDropFail();
+        App.toast("没能读到拖入文件的路径" + (r && r.error ? "：" + r.error : "（请从资源管理器里直接拖文件或文件夹）"), "error", 5000);
+        return;
+      }
+      mod.onDropped(paths);
+    });
+  }
+
   /* ---------- 全局事件 ---------- */
   function registerGlobalEvents() {
     App.on("app", "error", (e) => App.toast(e.text || "发生未知错误", "error", 5000));
 
-    // 文件拖放：完整路径由 Python 侧（pywebview DOM 事件）拿到后推到这里，
-    // 分发给当前激活的页面处理
+    // 文件拖放的兜底通道：pywebview 内部结构变了时，Python 侧用旧的 DOM 事件拿路径再推到这里
     App.on("app", "dropped", (e) => {
       const mod = App.pages[App.currentPage];
       if (mod && mod.onDropped) mod.onDropped(e.paths || []);
     });
+    bindFileDrop();
 
     App.on("app", "confirm_exit", async (e) => {
       // 后端会带上正在运行的实例名单；没有（旧后端）就从本地状态算

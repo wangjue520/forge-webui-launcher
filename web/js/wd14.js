@@ -143,7 +143,7 @@
       });
       $("#wd-clear").addEventListener("click", () => { images = []; renderImageList(); });
 
-      // 拖放：完整路径由 Python 侧 pywebview DOM 事件拿到后经 app/dropped → onDropped 进来；
+      // 拖放：完整路径由 core.js bindFileDrop 拿到后调用 onDropped；
       // 这里仅作为少数能拿到 .path 的平台的兜底
       const drop = $("#wd-images");
       ["dragover", "dragenter"].forEach((ev) => drop.addEventListener(ev, (e) => {

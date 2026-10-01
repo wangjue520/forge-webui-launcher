@@ -83,6 +83,8 @@ DEFAULT_CONFIG = {
     "comfy_sage": False,          # --use-sage-attention
     "comfy_flash": False,         # --use-flash-attention
     "comfy_fast": False,          # --fast
+    "comfy_enable_manager": True,  # 装了内置 ComfyUI-Manager 依赖时自动加 --enable-manager
+    "deploy_comfy_nodes": None,    # 部署 ComfyUI 时顺带装的节点 id 列表；None = comfy_nodes 里的默认推荐
     # ---------------- V3：多实例 ----------------
     # 实例表：每个实例保存下面 INSTANCE_KEYS 里的全部键。顶层同名键始终是
     # 「当前实例」的投影——老代码照旧读写 cfg["webui_root"] 等，保存时由
@@ -842,6 +844,18 @@ def build_comfy_args(cfg):
         args.append("--fast")
     if cfg.get("autolaunch"):
         args.append("--auto-launch")
+    # 内置 ComfyUI-Manager：依赖装好了（pip 包 comfyui_manager 在）就自动启用。
+    # 没装依赖时加了这个参数 ComfyUI 只会打警告，但也别给用户添乱，所以先检查
+    if cfg.get("comfy_enable_manager", True) and "--enable-manager" not in (cfg.get("extra_args") or ""):
+        try:
+            import comfy_nodes
+            root = (cfg.get("webui_root") or "").strip()
+            comfy_dir = comfy_layout(root)[0]
+            if comfy_nodes.manager_builtin_supported(comfy_dir) and \
+                    comfy_nodes.manager_pip_installed(comfy_python(cfg, root)):
+                args.append("--enable-manager")
+        except Exception:
+            pass
     extra_paths = cfg.get("_extra_model_paths")
     if extra_paths:
         args += ["--extra-model-paths-config", extra_paths]

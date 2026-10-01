@@ -29,6 +29,7 @@ import sys
 import threading
 import time
 import traceback
+import urllib.parse
 import webbrowser
 from datetime import datetime
 
@@ -44,6 +45,7 @@ import wd14_venv_manager as venv
 import updater
 import model_library as ml
 import output_index as oi
+import comfy_nodes
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -481,6 +483,7 @@ class LauncherApi:
         self._batch_cancel = False
         self._import_thread = None      # 拖拽上传
         self._import_cancel = False
+        self._dnd_state = None          # pywebview 的拖放路径池，由 webview_main 注入
 
         # 常用插件
         self._ext_thread = None
@@ -641,6 +644,36 @@ class LauncherApi:
         if paths:
             self._emit("app", "dropped", paths=paths)
         return {"ok": True}
+
+    def drop_files(self, names):
+        """前端拖放拿完整路径（web/js/core.js bindFileDrop）。
+
+        放下文件时前端先 postMessageWithAdditionalObjects("FilesDropped", files)，
+        pywebview 原生侧把 (文件名, 完整路径) 存进 _dnd_state["paths"]；WebView2
+        的消息是按发出顺序处理的，这个调用到达时路径一定已经存好。这里按文件名
+        匹配取出（取过的从池里删掉，免得下次拖同名文件拿错）。
+        _dnd_state 不可用（pywebview 内部结构变了）时返回 legacy=True，前端改等
+        webview_main 里旧 DOM 事件通道推过来的 app/dropped。"""
+        st = self._dnd_state
+        if not isinstance(st, dict) or not isinstance(st.get("paths"), list):
+            return {"ok": False, "legacy": True}
+        pool = st["paths"]
+        paths = []
+        for name in names or []:
+            hit = None
+            for i, item in enumerate(pool):
+                if urllib.parse.unquote(str(item[0])) == name:
+                    hit = i
+                    break
+            if hit is None:
+                continue
+            full = urllib.parse.unquote(str(pool.pop(hit)[1]))
+            if full and full not in paths:
+                paths.append(full)
+        del pool[32:]   # 没匹配上的残留（拖了又取消等）别无限攒
+        if paths:
+            return {"ok": True, "paths": paths}
+        return {"ok": False, "error": "原生侧没有记下这些文件的路径"}
 
     def _spawn(self, target, name="worker"):
         t = threading.Thread(target=self._guarded, args=(target,), daemon=True, name=name)
@@ -981,7 +1014,7 @@ def _api_deploy_precheck(self, target, branch, use_portable):
     return {"ok": not has_error, "issues": issues, "already_installed": already_installed}
 
 
-def _api_deploy_start(self, target, branch, use_portable):
+def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None):
     # 检查和置位必须原子，否则双击会并发跑两个部署线程
     with self._deploy_lock:
         if self._deploy_running:
@@ -998,6 +1031,14 @@ def _api_deploy_start(self, target, branch, use_portable):
         # 部署用一份独立配置：装到别的目录（= 新实例）时不能沿用当前实例的
         # Python/Git 路径和启动参数，也不能提前改掉当前实例的分支
         self._deploy_cfg = _deploy_cfg_for(self, target, branch)
+        if branch == "comfyui" and isinstance(comfy_nodes_sel, list):
+            # 记住这次的勾选，下次部署默认还是它
+            self.cfg["deploy_comfy_nodes"] = [i for i in comfy_nodes_sel if comfy_nodes.find(i)]
+            self._deploy_cfg["deploy_comfy_nodes"] = self.cfg["deploy_comfy_nodes"]
+            try:
+                cm.save_config(self.cfg)
+            except Exception:
+                pass
 
         self._deploy_cancel.clear()
         self._deploy_running = True
@@ -2223,7 +2264,24 @@ def _deploy_flow_comfy(self, target, use_portable):
                        text="ComfyUI 依赖安装失败，请查看部署日志。修复后重新点「开始部署」会跳过已完成的步骤。")
             return
 
-        # ---- 6. 冒烟测试（失败只提醒，不算部署失败）----
+        # ---- 6. 常用节点（失败只提醒，不算部署失败）----
+        node_ids = dcfg.get("deploy_comfy_nodes")
+        if not isinstance(node_ids, list):
+            node_ids = comfy_nodes.default_ids()
+        if node_ids:
+            log(f"\n[部署] 安装常用节点（{len(node_ids)} 个，单个失败不影响部署）...\n")
+            res = comfy_nodes.install(
+                node_ids, target, py, git_exe,
+                run=lambda prog, args, cwd, e, t: self._deploy_run_cmd(prog, args, cwd, log, env=e, timeout=t),
+                log=log, env=env, cancelled=self._deploy_cancel.is_set,
+                gh_proxies=_gh_proxies(dcfg, lambda m: log(m + "\n")), pip_mirror_args=pip_mirror)
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            log("[部署] 常用节点：" + comfy_nodes.summary_text(res) + "\n")
+            if res["failed"]:
+                log("[部署] 失败的节点可以之后在「常用插件」页重新安装\n")
+
+        # ---- 7. 冒烟测试（失败只提醒，不算部署失败）----
         log("\n[部署] 冒烟测试：以 CPU 模式初始化一次 ComfyUI ...\n")
         rc = self._deploy_run_cmd(py, ["-s", "main.py", "--quick-test-for-ci", "--cpu"],
                                   target, log, env=env, timeout=900)
@@ -3043,7 +3101,14 @@ def _api_models_import_plan(self, cat_index, paths):
         return {"ok": False, "error": "请先在左侧选一个模型分类"}
     if not isinstance(paths, list) or not paths:
         return {"ok": False, "error": "没有收到文件"}
-    plan = ml.plan_import(cat["path"], paths)
+    last = [0.0]
+
+    def scan_progress(i, n, name):   # 文件多的时候让界面看到「分析文件 i/n」而不是卡住
+        now = time.monotonic()
+        if i == n or now - last[0] >= 0.1:
+            last[0] = now
+            self._emit("models", "import_scan", i=i, n=n, name=name)
+    plan = ml.plan_import(cat["path"], paths, progress=scan_progress)
     items = plan["items"]
     sug = _import_suggest(self, cat, plan["counts"])
     free = plan["free_bytes"]
@@ -3622,71 +3687,188 @@ def _api_open_output_folder(self, which):
 # 常用插件
 # ============================================================
 
-# ComfyUI 常用节点（装进 custom_nodes）。其余节点建议用 ComfyUI-Manager 在网页里装。
-COMFY_NODE_CATALOG = [
-    ("ComfyUI-Manager", "节点管理器：在 ComfyUI 网页里一键搜索/安装/更新其他节点、补装缺失节点。强烈建议第一个装。",
-     "https://github.com/Comfy-Org/ComfyUI-Manager.git", "ComfyUI-Manager"),
-    ("ComfyUI-Custom-Scripts", "pysssss 脚本合集：提示词自动补全、图片预览增强、工作流小工具。",
-     "https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git", "ComfyUI-Custom-Scripts"),
-    ("ComfyUI-Impact-Pack", "FaceDetailer 等检测修复节点（相当于 WebUI 的 ADetailer）。首次启动会自动装依赖，时间较长。",
-     "https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "ComfyUI-Impact-Pack"),
-    ("ComfyUI-VideoHelperSuite", "视频加载 / 合成 / 保存 mp4 的常用节点，做视频工作流基本必装。",
-     "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git", "ComfyUI-VideoHelperSuite"),
-    ("rgthree-comfy", "工作流整理节点：分组开关、上下文传递、种子控制等，大工作流更好管理。",
-     "https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
-]
-
-
-def _ext_catalog(self):
-    """(目录列表, 安装目录)。ComfyUI 装进 custom_nodes，WebUI 装进 extensions"""
-    root = (self.cfg.get("webui_root") or "").strip()
-    if cm.is_comfy(self.cfg):
+def _ext_target(self, iid=None):
+    """「常用插件」页的安装目标实例：(实例配置, 实例信息 dict)。iid 为空 = 当前实例"""
+    iid = iid or self.cfg.get("active_instance")
+    cfg = cm.instance_cfg(self.cfg, iid) if iid else None
+    if cfg is None:
+        cfg, iid = self.cfg, self.cfg.get("active_instance")
+    root = (cfg.get("webui_root") or "").strip()
+    comfy = cm.is_comfy(cfg)
+    if comfy:
         comfy_dir = cm.comfy_layout(root)[0]
-        return COMFY_NODE_CATALOG, (os.path.join(comfy_dir, "custom_nodes") if comfy_dir else None)
-    return EXTENSION_CATALOG, (os.path.join(root, "extensions") if root else None)
+        target_dir = os.path.join(comfy_dir, "custom_nodes") if comfy_dir else None
+    else:
+        comfy_dir = None
+        target_dir = os.path.join(root, "extensions") if root else None
+    r = self._runners.get(iid) if iid else None
+    info = {
+        "id": iid, "name": cfg.get("_name") or cm.KIND_LABELS.get(cfg.get("webui_branch"), "WebUI"),
+        "kind": "comfyui" if comfy else "forge",
+        "kind_label": cm.KIND_LABELS.get(cfg.get("webui_branch"), "WebUI"),
+        "root": root, "target_dir": target_dir or "",
+        "running": bool(r and r.running()),
+    }
+    return cfg, info, comfy_dir
 
 
-def _api_ext_list(self):
-    root = (self.cfg.get("webui_root") or "").strip()
-    catalog, ext_dir = _ext_catalog(self)
-    branch = self.cfg.get("webui_branch", "neo2")
+def _git_for(cfg, root):
+    """git 选取顺序与部署/启动一致：自定义路径 > 便携版 > 系统 PATH"""
+    custom_git = (cfg.get("custom_git_path") or "").strip().strip('"')
+    cands = [custom_git] if custom_git else []
+    cands += [os.path.join(root, "git", "cmd", "git.exe"),
+              os.path.join(os.path.dirname(root.rstrip("\\/")), "git", "cmd", "git.exe")]
+    for c in cands:
+        if c and os.path.exists(c):
+            return c
+    return "git" if shutil.which("git") else None
+
+
+def _gh_proxies(cfg, log=None):
+    """要走 GitHub 加速时返回代理前缀列表（按顺序尝试，最后直连），否则空"""
+    try:
+        import mirror_manager as mm
+        if mm.resolve_github_mode(cfg, log):
+            return list(mm.GITHUB_PROXIES)
+    except Exception:
+        pass
+    return []
+
+
+def _pip_mirror(cfg, log=None):
+    try:
+        import mirror_manager as mm
+        if mm.resolve_mode(cfg, log):
+            return mm.pip_index_args(True)
+    except Exception:
+        pass
+    return []
+
+
+def _api_ext_list(self, iid=None):
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    root = info["root"]
+    has_root = bool(root and os.path.isdir(root))
+    if info["kind"] == "comfyui":
+        py = cm.comfy_python(cfg, root)
+        items = comfy_nodes.list_status(comfy_dir, py) if comfy_dir else []
+        return {"ok": True, "items": items, "has_root": has_root and bool(comfy_dir),
+                "comfy": True, "target": info, "groups": comfy_nodes.GROUP_LABELS,
+                "manager_builtin": comfy_nodes.manager_builtin_supported(comfy_dir)}
+    branch = cfg.get("webui_branch", "neo2")
+    ext_dir = info["target_dir"]
     items = []
-    for name, desc, url_raw, folder_raw in catalog:
+    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
         folder = _resolve_by_branch(folder_raw, branch)
         if not folder or not _resolve_by_branch(url_raw, branch):
             continue  # 该分支不可用的扩展直接不显示
         installed = bool(ext_dir) and os.path.isdir(os.path.join(ext_dir, folder))
-        items.append({"name": name, "desc": desc, "installed": installed})
-    return {"ok": True, "items": items, "has_root": bool(root and os.path.isdir(root)),
-            "comfy": cm.is_comfy(self.cfg)}
+        items.append({"id": name, "name": name, "desc": desc, "installed": installed})
+    return {"ok": True, "items": items, "has_root": has_root, "comfy": False, "target": info}
 
 
-def _api_ext_install(self, names):
+def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
+    """「常用插件」页跑命令：流式写日志、可取消、有超时（加速代理卡死时不至于永远等）"""
+    log = lambda t: self._emit("ext", "log", text=t)
+    try:
+        proc = subprocess.Popen([program] + list(args), cwd=cwd, env=env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
+    except OSError as e:
+        log(f"[插件] 无法启动 {program}: {e}\n")
+        return 1
+    self._ext_proc = proc
+    q = queue.Queue()
+
+    def reader():
+        try:
+            while True:
+                data = proc.stdout.read1(4096)
+                if not data:
+                    break
+                q.put(data)
+        except Exception:
+            pass
+        finally:
+            q.put(None)
+
+    threading.Thread(target=reader, daemon=True, name="ext-cmd-reader").start()
+    t0 = time.monotonic()
+    while True:
+        try:
+            data = q.get(timeout=0.5)
+        except queue.Empty:
+            data = b""
+        if data is None:
+            break
+        if data:
+            log(cm.decode_process_output(data))
+        if self._ext_cancel or (timeout and time.monotonic() - t0 > timeout):
+            if not self._ext_cancel:
+                log(f"\n[插件] 超过 {timeout} 秒没完成，已中止\n")
+            kill_process_tree(proc.pid)
+            break
+    try:
+        return proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        return -9
+
+
+def _api_ext_install(self, names, iid=None):
     if self._ext_thread and self._ext_thread.is_alive():
         return {"ok": False, "error": "已有安装任务在进行中"}
-    root = (self.cfg.get("webui_root") or "").strip()
-    catalog, ext_dir = _ext_catalog(self)
-    if not root or not ext_dir:
-        return {"ok": False, "error": "请先在「一键启动」页设置好根目录"}
-    branch = self.cfg.get("webui_branch", "neo2")
-
-    # git 选取顺序与部署/启动保持一致：自定义路径 > 便携版 > 系统 PATH
-    #（用户手动指定的 git 优先——便携版可能损坏，正是用户绕开它的原因）
-    custom_git = (self.cfg.get("custom_git_path") or "").strip().strip('"')
-    bundled_git = os.path.join(root, "git", "cmd", "git.exe")
-    if custom_git and os.path.exists(custom_git):
-        git_exe = custom_git
-    elif os.path.exists(bundled_git):
-        git_exe = bundled_git
-    elif shutil.which("git"):
-        git_exe = "git"
-    else:
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    root = info["root"]
+    if not root or not info["target_dir"]:
+        return {"ok": False, "error": f"实例「{info['name']}」还没有设置正确的根目录"}
+    git_exe = _git_for(cfg, root)
+    if not git_exe:
         return {"ok": False, "error": "未检测到 Git。可以先在「环境部署」页部署便携环境，"
                                       "或手动安装：https://git-scm.com/download/win"}
+    names = list(names or [])
 
+    if info["kind"] == "comfyui":
+        # 节点要往该实例的 Python 里装依赖，运行中的 .pyd 被占用会装失败
+        if info["running"]:
+            return {"ok": False, "error": f"「{info['name']}」正在运行。安装节点要往它的 Python 环境里装依赖，"
+                                          "运行中文件被占用会失败——请先停止这个实例再安装。"}
+        py = cm.comfy_python(cfg, root)
+        ids = [n for n in names if comfy_nodes.find(n)
+               and not comfy_nodes.is_installed(comfy_nodes.find(n), comfy_dir, py)]
+        if not ids:
+            return {"ok": False, "error": "请先勾选要安装的节点（已安装的会自动跳过）"}
+        self._ext_cancel = False
+
+        def work_comfy():
+            log = lambda t: self._emit("ext", "log", text=t)
+            try:
+                log(f"[插件] 安装到：{info['name']}（{info['target_dir']}）\n")
+                env = cm.build_comfy_env(cfg, root)
+                res = comfy_nodes.install(
+                    ids, comfy_dir, py, git_exe,
+                    run=lambda prog, args, cwd, e, t: _ext_run_cmd(self, prog, args, cwd, e, t),
+                    log=log, env=env, cancelled=lambda: self._ext_cancel,
+                    gh_proxies=_gh_proxies(cfg, lambda m: log(m + "\n")),
+                    pip_mirror_args=_pip_mirror(cfg, lambda m: log(m + "\n")))
+                if self._ext_cancel:
+                    log("\n[插件] 已取消\n")
+                else:
+                    log("\n[插件] 完成：" + comfy_nodes.summary_text(res) + "\n"
+                        "重启 ComfyUI 后新节点生效。\n")
+                self._emit("ext", "done")
+            finally:
+                self._ext_proc = None
+                self._emit("ext", "state", running=False)
+
+        self._emit("ext", "state", running=True)
+        self._ext_thread = self._spawn(work_comfy, name="ext-install")
+        return {"ok": True}
+
+    ext_dir = info["target_dir"]
+    branch = cfg.get("webui_branch", "neo2")
     selected = []
-    for name, desc, url_raw, folder_raw in catalog:
-        if name not in (names or []):
+    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
+        if name not in names:
             continue
         folder = _resolve_by_branch(folder_raw, branch)
         url = _resolve_by_branch(url_raw, branch)
@@ -3703,13 +3885,9 @@ def _api_ext_install(self, names):
     def work():
         log = lambda t: self._emit("ext", "log", text=t)
         try:
+            log(f"[插件] 安装到：{info['name']}（{ext_dir}）\n")
             os.makedirs(ext_dir, exist_ok=True)
-            use_mirror = False
-            try:
-                import mirror_manager as mm
-                use_mirror = mm.resolve_github_mode(self.cfg, lambda m: log(m + "\n"))
-            except Exception:
-                pass
+            use_mirror = bool(_gh_proxies(cfg, lambda m: log(m + "\n")))
             for name, url, folder in selected:
                 if self._ext_cancel:
                     break
@@ -3717,36 +3895,17 @@ def _api_ext_install(self, names):
                 if use_mirror:
                     try:
                         import mirror_manager as mm
-                        mirrored = mm.github_url(url, True, 0)
-                        if mirrored != url:
-                            u = mirrored
+                        u = mm.github_url(url, True, 0)
                     except Exception:
                         pass
-                target = os.path.join(ext_dir, folder)
                 log(f"\n[插件] 正在安装: {name}\n")
-                try:
-                    self._ext_proc = subprocess.Popen(
-                        [git_exe, "clone", u, target], cwd=ext_dir,
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                        stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
-                except OSError as e:
-                    log(f"[插件] 无法启动 git: {e}\n")
-                    continue
-                proc = self._ext_proc
-                try:
-                    while True:
-                        # read1() 而非 read()：read 会攒满 4096 字节才返回，
-                        # git 输出停顿时段日志会一直卡住不显示
-                        data = proc.stdout.read1(4096)
-                        if not data:
-                            break
-                        log(cm.decode_process_output(data))
-                except Exception:
-                    pass
-                rc = proc.wait()
+                rc = _ext_run_cmd(self, git_exe, ["clone", u, os.path.join(ext_dir, folder)],
+                                  ext_dir, None, 900)
                 if self._ext_cancel:
+                    shutil.rmtree(os.path.join(ext_dir, folder), ignore_errors=True)
                     break
                 if rc != 0:
+                    shutil.rmtree(os.path.join(ext_dir, folder), ignore_errors=True)
                     log(f"[插件] 「{name}」安装返回非零退出码 ({rc})，跳过继续下一个\n")
             if self._ext_cancel:
                 log("\n[插件] 已取消\n")
@@ -3760,6 +3919,16 @@ def _api_ext_install(self, names):
     self._emit("ext", "state", running=True)
     self._ext_thread = self._spawn(work, name="ext-install")
     return {"ok": True}
+
+
+def _api_comfy_node_catalog(self):
+    """部署页：随 ComfyUI 一起装的节点清单 + 上次的勾选"""
+    sel = self.cfg.get("deploy_comfy_nodes")
+    if not isinstance(sel, list):
+        sel = comfy_nodes.default_ids()
+    items = [{"id": n["id"], "name": n["name"], "desc": n["desc"], "group": n["group"],
+              "default": bool(n.get("default"))} for n in comfy_nodes.CATALOG]
+    return {"ok": True, "items": items, "selected": sel, "groups": comfy_nodes.GROUP_LABELS}
 
 
 def _api_ext_cancel(self):
@@ -4778,6 +4947,7 @@ for _name, _fn in {
     "ext_list": _api_ext_list,
     "ext_install": _api_ext_install,
     "ext_cancel": _api_ext_cancel,
+    "comfy_node_catalog": _api_comfy_node_catalog,
     "wd14_models": _api_wd14_models,
     "wd14_load_model": _api_wd14_load_model,
     "wd14_import_model": _api_wd14_import_model,

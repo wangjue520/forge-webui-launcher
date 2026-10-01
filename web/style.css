@@ -29,8 +29,8 @@
   --border: var(--line);
   --input-bg: #fafaf8;
   --text: var(--ink);
-  --text-dim: #4b4d53;
-  --text-faint: #86888d;
+  --text-dim: #3f4147;
+  --text-faint: #5a5c61;          /* 在纸面最深处（#d9dad5）上也有 4.7:1 */
   --accent: var(--ink);
   --accent-2: var(--ink-2);
   --accent-grad: var(--yel);
@@ -42,14 +42,19 @@
   --green-grad: var(--ink);
   --ok: #148a57;
   --warn: #a67800;
-  --bad: #cf3b32;
-  --danger: #cf3b32;
+  --bad: #ad2a22;
+  --danger: #ad2a22;
   --radius-sm: 0;
   --radius: 0;
   --radius-lg: 0;
   --shadow: 0 10px 30px rgba(18, 19, 22, .18);
-  --mono: "Cascadia Mono", "Cascadia Code", Consolas, "Courier New", monospace;
-  --disp: "Bahnschrift", "DIN Alternate", "Segoe UI", "Microsoft YaHei UI", sans-serif;
+  /* 字体（web/fonts/ 里随附，见 fonts/fonts.css）：
+     正文 Inter + 思源黑体；标题 / 数字 Barlow Semi Condensed（DIN 系工业感）+ 思源黑体粗体；
+     编号 / 路径 / 日志 JetBrains Mono。每一组都把中文字体排在西文后面，
+     中文不会再落到系统等宽字体（宋体）上 */
+  --sans: "WWY Inter", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --mono: "WWY Mono", "Cascadia Mono", Consolas, "WWY Sans SC", "Microsoft YaHei UI", monospace;
+  --disp: "WWY Barlow", "Bahnschrift", "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
   --cut: 8px;   /* 切角尺寸 */
 }
 
@@ -59,8 +64,10 @@
 html, body { height: 100%; }
 
 body {
-  font-family: "Microsoft YaHei UI", "Segoe UI", system-ui, sans-serif;
+  font-family: var(--sans);
   font-size: 13px;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
   color: var(--text);
   background: linear-gradient(180deg, var(--paper), var(--paper-2));
   overflow: hidden;
@@ -119,7 +126,7 @@ body {
 }
 .nav-item::after {   /* 右侧编号 01 02 … */
   content: counter(nav, decimal-leading-zero);
-  margin-left: auto; font: 10px var(--mono); letter-spacing: .1em; color: #5c5e63;
+  margin-left: auto; font: 10px var(--mono); letter-spacing: .1em; color: #85878c;
 }
 .nav-item svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .nav-item:hover { background: var(--ink-2); color: #f1f2ee; }
@@ -137,14 +144,14 @@ body {
 .nav-item > span { white-space: nowrap; }
 .nav-tag {
   margin-left: auto; font-style: normal; font-size: 9.5px; font-weight: 400;
-  padding: 0 4px; border: 1px solid currentColor; opacity: .65; white-space: nowrap;
+  padding: 0 4px; border: 1px solid currentColor; color: #9a9ca1; white-space: nowrap;
 }
 .nav-item:has(.nav-tag)::after { display: none; }   /* 有标签的项不显示编号，免得挤换行 */
 
 .sidebar-footer { padding: 12px 14px 0; border-top: 1px solid rgba(255, 255, 255, .08); }
 .sidebar-footer::before {
   content: "STATUS // 运行状态"; display: block; margin-bottom: 8px;
-  font: 9.5px var(--mono); letter-spacing: .2em; color: #6d6f74;
+  font: 9.5px var(--mono); letter-spacing: .2em; color: #8e9095;
 }
 
 /* ============ 状态标签 ============ */
@@ -269,7 +276,7 @@ input:focus, select:focus, textarea:focus {
   box-shadow: inset 3px 0 0 var(--ink), 0 0 0 3px rgba(255, 242, 0, .45);
 }
 input:disabled, select:disabled, textarea:disabled { background: var(--panel-2); color: var(--text-faint); }
-input::placeholder, textarea::placeholder { color: #a3a5a9; }
+input::placeholder, textarea::placeholder { color: #75777c; }
 textarea { min-height: 90px; resize: vertical; line-height: 1.55; }
 textarea.ta-sm { min-height: 64px; }
 
@@ -359,7 +366,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .btn-success { color: var(--yel); }
 .btn-accent:hover, .btn-success:hover { background: var(--ink-3); color: var(--yel); }
 .btn-accent:disabled, .btn-success:disabled { background: var(--ink); color: #f3f4f0; }
-.btn-lg { padding: 12px 30px; font: 700 14.5px var(--disp), "Microsoft YaHei UI", sans-serif; letter-spacing: .06em; --cut: 11px; }
+.btn-lg { padding: 12px 30px; font: 700 15px var(--disp); letter-spacing: .06em; --cut: 11px; }
 .btn-sm { padding: 6px 12px; font-size: 12px; }
 .btn-xs { padding: 3px 10px; font-size: 11px; }
 .btn-danger-text { color: var(--bad); }
@@ -480,7 +487,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .drop-banner .db-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .drop-banner .db-text b { font-size: 13px; }
 .db-target { font: 11px var(--mono); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.db-target em { font-style: normal; color: var(--ink); background: var(--yel); padding: 0 4px; margin-right: 6px; font-family: "Microsoft YaHei UI", sans-serif; }
+.db-target em { font-style: normal; color: var(--ink); background: var(--yel); padding: 0 4px; margin-right: 6px; font-family: var(--sans); }
 .db-busy { display: flex; align-items: center; gap: 8px; flex: 0 0 46%; }
 .db-busy[hidden] { display: none; }
 .db-progress { flex: 1; margin: 0; }
@@ -599,6 +606,20 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .ext-name { font-weight: 700; font-size: 13px; }
 .ext-status { font: 10.5px var(--mono); color: var(--ink); background: var(--yel); padding: 1px 6px; margin-left: 8px; }
 .ext-desc { color: var(--text-faint); font-size: 12px; line-height: 1.6; margin-top: 3px; }
+.ext-status.ext-rec { background: transparent; color: var(--ink); outline: 1px solid var(--ink); outline-offset: -1px; }
+.ext-group {
+  margin: 14px 0 6px; font: 700 10.5px var(--mono); letter-spacing: .14em; color: var(--text-dim);
+  display: flex; align-items: center; gap: 10px;
+}
+.ext-group::after { content: ""; flex: 1; border-bottom: 1px solid var(--line); }
+.ext-group:first-child { margin-top: 0; }
+/* 安装目标 */
+.ext-target { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.ext-target .ic-kind:empty { display: none; }
+.ext-target-name { font-size: 14px; }
+.ext-target select { width: auto; min-width: 260px; max-width: 100%; }
+.ext-target-path { margin-top: 8px; font: 11.5px var(--mono); color: var(--text-dim); word-break: break-all; user-select: text; }
+#ext-target-warn { color: var(--warn); }
 
 /* ============ 环境部署 ============ */
 .env-grid { display: grid; grid-template-columns: 70px 1fr; gap: 8px 12px; margin-bottom: 10px; align-items: center; }
@@ -632,7 +653,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 @keyframes modalIn { from { opacity: 0; transform: translateY(12px); clip-path: polygon(0 0, 100% 0, 100% 0, 0 0); } }
 #modal-title {
   display: flex; align-items: center; gap: 10px;
-  padding: 16px 20px 8px; font: 700 15px var(--disp), "Microsoft YaHei UI", sans-serif; letter-spacing: .02em;
+  padding: 16px 20px 8px; font: 700 15px var(--disp); letter-spacing: .02em;
 }
 #modal-title::before {
   content: "▼"; width: 20px; height: 20px; flex: none; background: var(--ink); color: var(--yel);
@@ -742,7 +763,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .src-badge[data-tone="webui"]   { background: #2f5fa8; }
 .src-badge[data-tone="comfy"]   { background: #2c7a5f; }
 .src-badge[data-tone="nai"]     { background: #6a48a8; }
-.src-badge[data-tone="alt"]     { background: #b06a24; }
+.src-badge[data-tone="alt"]     { background: #94561b; }
 .src-badge[data-tone="sidecar"] { background: #50535c; }
 .src-badge[data-tone="plain"] {
   background: transparent; color: var(--text-dim);
@@ -823,7 +844,7 @@ textarea.ta-prompt {
 /* 侧栏实例切换器 */
 .inst-switch { margin: -2px 12px 12px; padding: 8px 10px; background: var(--ink-2); border: 1px solid rgba(255, 255, 255, .08); }
 .inst-switch[hidden] { display: none; }
-.is-label { display: block; font: 9px var(--mono); letter-spacing: .2em; color: #6d6f74; margin-bottom: 5px; }
+.is-label { display: block; font: 9px var(--mono); letter-spacing: .2em; color: #8e9095; margin-bottom: 5px; }
 .is-row { display: flex; align-items: center; gap: 8px; }
 .is-dot { width: 7px; height: 7px; flex: none; background: #5c5e63; }
 .is-dot[data-state="ready"], .is-dot[data-state="running"] { background: var(--yel); box-shadow: 0 0 6px rgba(255, 242, 0, .8); }
@@ -876,7 +897,7 @@ textarea.ta-prompt {
 .pv-list { max-height: 180px; overflow: auto; background: var(--ink); color: #d4d6cf; padding: 8px 10px; margin: 8px 0; font: 11px/1.6 var(--mono); white-space: nowrap; }
 .pv-line b { color: var(--yel); font-weight: normal; }
 .pv-dup { font-style: normal; background: var(--yel); color: var(--ink); padding: 0 4px; margin-right: 6px; }
-.pv-warn { border-left: 4px solid var(--bad); background: rgba(207, 59, 50, .08); padding: 6px 10px; margin: 8px 0; color: var(--bad); }
+.pv-warn { border-left: 4px solid var(--bad); background: rgba(173, 42, 34, .07); padding: 6px 10px; margin: 8px 0; color: var(--bad); }
 #modal-body input[type="text"] { margin-top: 4px; }
 
 /* ============ 输出管理 ============ */
@@ -928,7 +949,7 @@ textarea.ta-prompt {
 
 .out-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; gap: 8px; }
 .out-bar { display: flex; align-items: center; gap: 12px; }
-.out-count { font: 700 13px var(--disp), "Microsoft YaHei UI", sans-serif; }
+.out-count { font: 700 14px var(--disp); font-variant-numeric: tabular-nums; }
 .out-bar .hint { margin: 0; }
 .out-bar-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 .out-bar-right select { width: auto; padding: 5px 28px 5px 8px; font-size: 12px; }
@@ -986,3 +1007,72 @@ textarea.ta-prompt {
 .od-text { font: 12px/1.6 var(--mono); white-space: pre-wrap; word-break: break-word; background: var(--input-bg); border: 1px solid var(--line-2); padding: 8px 10px; max-height: 180px; overflow: auto; }
 .od-text.dim { color: var(--text-dim); }
 .od-path { margin-top: 14px; font: 10.5px var(--mono); color: var(--text-faint); word-break: break-all; }
+
+/* 部署页：随 ComfyUI 一起装的节点 */
+#deploy-nodes .chk-row, #deploy-nodes-more .chk-row { align-items: flex-start; margin: 6px 0; }
+#deploy-nodes .chk-row .ext-desc, #deploy-nodes-more .chk-row .ext-desc { margin-top: 1px; }
+.deploy-nodes-more { margin-top: 10px; }
+.deploy-nodes-more summary { cursor: pointer; color: var(--text-dim); font-size: 12.5px; padding: 4px 0; user-select: none; }
+.deploy-nodes-more summary:hover { color: var(--ink); }
+.deploy-nodes-group { margin: 10px 0 2px; font: 700 10.5px var(--mono); letter-spacing: .12em; color: var(--text-dim); }
+
+
+/* ============================================================
+   终末地 · 细节打磨（只作用于默认风格；极简 / 液态玻璃有 data-ui-base，不受影响）
+   ============================================================ */
+/* 标题：西文 Barlow、中文思源黑体粗体，字距略开，更像游戏里的界面标题 */
+:root:not([data-ui-base]) #page-title { font: 800 22px/1.1 var(--disp); letter-spacing: .05em; }
+:root:not([data-ui-base]) .brand-name { font-weight: 800; letter-spacing: .05em; }
+:root:not([data-ui-base]) .brand-logo { font: 800 22px var(--disp); }
+:root:not([data-ui-base]) .card-title { font-family: var(--disp); font-size: 14px; letter-spacing: .03em; }
+:root:not([data-ui-base]) .card-title-hint { font-family: var(--sans); letter-spacing: 0; }
+:root:not([data-ui-base]) .sub-title { font-family: var(--disp); font-size: 13px; letter-spacing: .03em; }
+:root:not([data-ui-base]) #modal-title { letter-spacing: .04em; }
+:root:not([data-ui-base]) .nav-item { letter-spacing: .02em; }
+:root:not([data-ui-base]) .btn { letter-spacing: .02em; }
+:root:not([data-ui-base]) .btn-lg { letter-spacing: .1em; }
+
+/* 数字一律等宽：时钟、表格、计数、进度不会左右跳 */
+:root:not([data-ui-base]) :is(.topbar-clock, .data-table, .progress-text, .facet em, .col-item em, #out-sel-count, .out-count, .jr-time, .sp-pct) {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 禁用按钮：不再整体变淡，改成工业感的斜线底纹 + 灰字（终末地里不可用的格子就是这种斜线） */
+:root:not([data-ui-base]) .btn:disabled {
+  opacity: 1; color: var(--text-faint); border-color: var(--line);
+  background: repeating-linear-gradient(-45deg, rgba(18, 19, 22, .07) 0 3px, transparent 3px 7px), var(--panel-2);
+  box-shadow: none;
+}
+:root:not([data-ui-base]) .btn-primary:disabled {
+  color: rgba(18, 19, 22, .5); border-color: rgba(18, 19, 22, .3);
+  background: repeating-linear-gradient(-45deg, rgba(18, 19, 22, .1) 0 3px, transparent 3px 7px), #efeaa0;
+}
+:root:not([data-ui-base]) :is(.btn-accent, .btn-success):disabled {
+  color: #8e9095; border-color: var(--ink-3);
+  background: repeating-linear-gradient(-45deg, rgba(255, 255, 255, .06) 0 3px, transparent 3px 7px), var(--ink-2);
+}
+
+/* 键盘操作时的焦点框：黑框 + 黄色外圈 */
+:root:not([data-ui-base]) :is(.btn, .chip, .choice-item, .cat-item):focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; box-shadow: 0 0 0 5px var(--yel); }
+:root:not([data-ui-base]) .nav-item:focus-visible { outline: 2px solid var(--yel); outline-offset: -2px; }
+
+/* 已安装的扩展：不再整体半透明（字会糊），改成浅一档的底 + 左侧黑条 */
+:root:not([data-ui-base]) .ext-item.installed { opacity: 1; background: var(--panel-2); box-shadow: inset 3px 0 0 var(--ink); }
+:root:not([data-ui-base]) .ext-item.installed .ext-name { color: var(--text-dim); }
+
+/* 已撤销的整理记录：划掉，而不是整体变淡 */
+:root:not([data-ui-base]) .journal-row.undone { opacity: 1; background: var(--panel-2); }
+:root:not([data-ui-base]) .journal-row.undone .jr-title { text-decoration: line-through; color: var(--text-faint); }
+
+/* 输入框：悬停时左侧出现一条细黑线，和聚焦状态呼应 */
+:root:not([data-ui-base]) :is(input[type="text"], input[type="password"], input[type="number"], select, textarea):hover:not(:focus):not(:disabled) {
+  box-shadow: inset 2px 0 0 var(--line-strong);
+}
+
+/* 表格表头：等宽小字 + 字距，和页面编号同一种语气 */
+:root:not([data-ui-base]) .data-table th { font: 600 11px var(--mono); letter-spacing: .08em; }
+
+/* 提示条：错误用实心红块标记，文字仍是浅色 */
+:root:not([data-ui-base]) .toast { font-weight: 500; letter-spacing: .02em; }
+:root:not([data-ui-base]) .toast.error { color: #ffd9d6; border-left-color: #e0473d; }
+:root:not([data-ui-base]) .nav-item.active .nav-tag { color: var(--ink); }

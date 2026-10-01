@@ -158,9 +158,11 @@ def _same_size_twin(dest, size):
     return None
 
 
-def plan_import(target_dir, paths):
+def plan_import(target_dir, paths, progress=None, detect=True):
     """
     只读不写：算出这次上传会做什么，给界面确认用。
+    progress(i, n, name)：每处理一个文件回调一次（读文件头判断类型要时间）；
+    detect=False 时不读文件头（kind 全为 None），开始复制前重算计划用。
     返回 {items:[{src, dest, rel, size, action, kind}], ignored:[...],
           counts:{lora, full}, total_bytes, free_bytes}
     action: copy / rename（目标同名但内容不同，改名复制）/ skip（已存在同一个文件）
@@ -168,7 +170,10 @@ def plan_import(target_dir, paths):
     raw, ignored = _collect(paths)
     items, counts, total = [], {"lora": 0, "full": 0}, 0
     taken = set()
-    for src, rel in raw:
+    n = len(raw)
+    for idx, (src, rel) in enumerate(raw, 1):
+        if progress:
+            progress(idx, n, os.path.basename(src))
         try:
             size = os.path.getsize(src)
         except OSError:
@@ -186,7 +191,7 @@ def plan_import(target_dir, paths):
                 dest = _free_name(dest, taken)
                 action = "rename"
         taken.add(os.path.normcase(dest))
-        kind = detect_kind(src)
+        kind = detect_kind(src) if detect else None
         if kind in counts:
             counts[kind] += 1
         if action != "skip":

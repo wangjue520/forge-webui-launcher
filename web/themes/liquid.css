@@ -1,0 +1,465 @@
+/* ============================================================
+   液态玻璃（liquid-light / liquid-dark）— 仿 iOS 26 / macOS 26 Liquid Glass
+   叠在 themes/minimal.css 之上（themes.js：css 按顺序加载，base: minimal），
+   结构、对比度规则沿用极简，这里换「材质 / 字体 / 布局细节 / 动效」。
+
+   和毛玻璃的区别——苹果的做法是分两层：
+   · 浮在上面的导航层（侧栏、顶部标题胶囊、提示条）是「透明玻璃」：
+     几乎不模糊，背后的画面清清楚楚，只在边缘一圈被弯折（折射 + 轻微色散），
+     边缘有一圈会随指针移动的高光。折射由 js/liquid.js 按每块玻璃的尺寸生成位移图
+   · 内容层（卡片、列表）是接近不透明的「材质」，像设置里的分组列表，
+     保证文字清楚；页面往上滚时，内容从顶部玻璃胶囊下面经过，能看到边缘的弯折
+
+   字体：有苹方 / SF 时直接用（macOS）；Windows 上用随附的 Inter（西文，
+   最接近 SF Pro 的开源字体）+ 思源黑体子集（中文，和苹方同一类风格），
+   都是 SIL OFL 授权，可随软件分发。
+   ============================================================ */
+
+/* 字体的 @font-face 统一写在 fonts/fonts.css（index.html 里先于主题加载） */
+
+/* ---------- 浅色 ---------- */
+[data-ui-theme="liquid-light"] {
+  color-scheme: light;
+  --lg-tint: rgba(255, 255, 255, .34);          /* 透明玻璃的底色：很淡 */
+  --lg-tint-bar: rgba(255, 255, 255, .6);
+  --lg-veil: rgba(242, 242, 247, .52);
+  --lg-mat: rgba(255, 255, 255, .9);            /* 内容材质：接近不透明 */
+  --lg-mat-2: rgba(255, 255, 255, .95);
+  --lg-rim-hi: rgba(255, 255, 255, .95);
+  --lg-rim-lo: rgba(255, 255, 255, .45);
+  --lg-rim-line: rgba(255, 255, 255, .55);
+  --lg-glint: rgba(255, 255, 255, 1);
+  --lg-drop: 0 10px 34px rgba(30, 40, 90, .14), 0 1px 3px rgba(30, 40, 90, .08);
+  --lg-lens: rgba(255, 255, 255, .78);
+  --lg-lens-shadow: 0 2px 10px rgba(30, 40, 90, .12), 0 0 0 .5px rgba(30, 40, 90, .06);
+  --lg-switch-off: rgba(120, 120, 128, .2);
+  --lg-switch-on: #34c759;
+
+  --m-bg: #eef1f8;
+  --m-surface: var(--lg-mat);
+  --m-fill: rgba(118, 118, 128, .12);
+  --m-fill-2: rgba(118, 118, 128, .2);
+  --m-sunken: rgba(118, 118, 128, .1);
+  --m-border: rgba(60, 60, 67, .14);
+  --m-border-2: rgba(60, 60, 67, .08);
+  --m-border-strong: rgba(60, 60, 67, .26);
+  --m-text: #1d1d1f;
+  --m-text-2: #3a3a3c;
+  --m-text-3: #58585c;
+  --m-text-off: #8e8e93;
+  --m-accent: #0071e3;          /* 白字 4.7:1 */
+  --m-accent-hover: #0062c4;
+  --m-accent-soft: rgba(0, 113, 227, .1);
+  --m-accent-soft-2: rgba(0, 113, 227, .18);
+  --m-accent-text: #0056b3;
+  --m-on-accent: #ffffff;
+  --m-ok: #1b7a33;
+  --m-warn: #935700;
+  --m-bad: #d70015;
+  --m-bad-soft: rgba(215, 0, 21, .08);
+  --m-overlay: rgba(0, 0, 0, .2);
+  --m-media-bg: rgba(118, 118, 128, .12);
+  --m-toast-bg: rgba(255, 255, 255, .66);
+  --m-toast-text: #1d1d1f;
+  --m-toast-bad: #c4001a;
+  --m-toast-ok: #1a7431;
+  --m-scroll: rgba(60, 60, 67, .26);
+  --m-scroll-hover: rgba(60, 60, 67, .42);
+  --m-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 6px 22px rgba(40, 50, 90, .07);
+  --m-shadow-pop: 0 24px 70px rgba(0, 0, 0, .2);
+}
+
+/* ---------- 深色 ---------- */
+[data-ui-theme="liquid-dark"] {
+  color-scheme: dark;
+  --lg-tint: rgba(28, 28, 32, .34);
+  --lg-tint-bar: rgba(28, 28, 32, .6);
+  --lg-veil: rgba(0, 0, 0, .42);
+  --lg-mat: rgba(28, 28, 30, .9);
+  --lg-mat-2: rgba(36, 36, 40, .95);
+  --lg-rim-hi: rgba(255, 255, 255, .5);
+  --lg-rim-lo: rgba(255, 255, 255, .12);
+  --lg-rim-line: rgba(255, 255, 255, .16);
+  --lg-glint: rgba(255, 255, 255, .85);
+  --lg-drop: 0 12px 36px rgba(0, 0, 0, .5), 0 1px 3px rgba(0, 0, 0, .3);
+  --lg-lens: rgba(255, 255, 255, .13);
+  --lg-lens-shadow: 0 2px 10px rgba(0, 0, 0, .35), 0 0 0 .5px rgba(255, 255, 255, .08);
+  --lg-switch-off: rgba(120, 120, 128, .36);
+  --lg-switch-on: #30d158;
+
+  --m-bg: #050608;
+  --m-surface: var(--lg-mat);
+  --m-fill: rgba(118, 118, 128, .24);
+  --m-fill-2: rgba(118, 118, 128, .32);
+  --m-sunken: rgba(118, 118, 128, .2);
+  --m-border: rgba(255, 255, 255, .1);
+  --m-border-2: rgba(255, 255, 255, .06);
+  --m-border-strong: rgba(255, 255, 255, .2);
+  --m-text: #f5f5f7;
+  --m-text-2: #d1d1d6;
+  --m-text-3: #aeaeb2;
+  --m-text-off: #6e6e73;
+  --m-accent: #0071e3;          /* 白字 4.7:1 */
+  --m-accent-hover: #0062c4;    /* 悬停加深而不是变亮：白字 5.8:1 */
+  --m-accent-soft: rgba(10, 132, 255, .18);
+  --m-accent-soft-2: rgba(10, 132, 255, .3);
+  --m-accent-text: #8ac4ff;
+  --m-on-accent: #ffffff;
+  --m-ok: #30d158;
+  --m-warn: #ffd60a;
+  --m-bad: #ff6961;
+  --m-bad-soft: rgba(255, 105, 97, .14);
+  --m-overlay: rgba(0, 0, 0, .5);
+  --m-media-bg: rgba(0, 0, 0, .35);
+  --m-toast-bg: rgba(40, 40, 44, .62);
+  --m-toast-text: #f5f5f7;
+  --m-toast-bad: #ff9a94;
+  --m-toast-ok: #7ee2a0;
+  --m-scroll: rgba(255, 255, 255, .22);
+  --m-scroll-hover: rgba(255, 255, 255, .36);
+  --m-shadow: 0 1px 0 rgba(255, 255, 255, .04) inset;
+  --m-shadow-pop: 0 30px 80px rgba(0, 0, 0, .6);
+}
+
+/* ---------- 字体 / 形状 ---------- */
+[data-ui-theme^="liquid"] {
+  --lg-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "WWY Inter", "PingFang SC", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --disp: -apple-system, BlinkMacSystemFont, "SF Pro Display", "WWY Inter", "PingFang SC", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --mono: "SF Mono", ui-monospace, "Cascadia Mono", Menlo, Consolas, "PingFang SC", "WWY Sans SC", monospace;
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 22px;
+  --lg-spring: cubic-bezier(.34, 1.36, .64, 1);
+  --lg-ease: cubic-bezier(.32, .72, 0, 1);       /* 苹果常用的「快出慢停」 */
+}
+[data-ui-theme^="liquid"] body {
+  background: var(--m-bg);
+  font-family: var(--lg-font);
+  font-size: 13.5px; letter-spacing: -.003em;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+[data-ui-theme^="liquid"] :is(button, input, select, textarea) { font-family: inherit; }
+
+/* ---------- 流动壁纸（画布由 js/liquid.js 驱动） ---------- */
+#lg-bg { display: none; }
+[data-ui-theme^="liquid"] #lg-bg {
+  display: block; position: fixed; inset: 0; width: 100%; height: 100%;
+  z-index: 0; pointer-events: none;
+}
+[data-ui-theme^="liquid"] #layout { position: relative; z-index: 1; }
+/* 内容区整体压一层浅色（不模糊）：壁纸还在流动，但变柔和，
+   表格、预览框这类本身透明的区域上文字也清楚 */
+[data-ui-theme^="liquid"] #main { background: var(--lg-veil); }
+
+/* ============================================================
+   透明玻璃（导航层）
+   不支持折射的浏览器：退回较轻的模糊；支持时 liquid.js 会在元素上
+   内联写 backdrop-filter: url(#lg-fN) ...（优先级更高）
+   ============================================================ */
+[data-ui-theme^="liquid"] :is(#sidebar, #lg-topglass, .toast) {
+  -webkit-backdrop-filter: blur(10px) saturate(1.8);
+  backdrop-filter: blur(10px) saturate(1.8);
+  /* 两道内描边：左上亮、右下弱，像光从左上打在玻璃厚边上 */
+  box-shadow:
+    inset 1.5px 1.5px 0 -.5px var(--lg-rim-hi),
+    inset -1px -1px 0 -.5px var(--lg-rim-lo),
+    inset 0 0 0 .5px var(--lg-rim-line),
+    var(--lg-drop);
+}
+/* 跟着指针走的边缘高光：只亮玻璃外缘 1.5px 那一圈 */
+[data-ui-theme^="liquid"] :is(#sidebar, #lg-topglass)::after {
+  content: ""; display: block; position: absolute; inset: 0;
+  width: auto; height: auto; margin: 0; border: 0;
+  border-radius: inherit; padding: 1.5px; pointer-events: none; z-index: 3;
+  background: radial-gradient(180px circle at var(--lg-mx, 30%) var(--lg-my, 0%), var(--lg-glint), transparent 70%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  opacity: .35; transition: opacity .4s;
+}
+[data-ui-theme^="liquid"] :is(#sidebar, #lg-topglass).lg-hot::after { opacity: 1; }
+
+/* ---------- 侧栏：悬浮在壁纸上的一整块透明玻璃 ---------- */
+[data-ui-theme^="liquid"] #sidebar {
+  width: 232px;
+  margin: 10px 0 10px 10px; height: calc(100% - 20px);
+  border: 0; border-radius: 34px;
+  padding: 16px 0 12px;
+  position: relative; z-index: 2;
+  background: var(--lg-tint);
+  color: var(--m-text-2);
+}
+/* 玻璃后面是彩色壁纸，侧栏里的次级文字加深一档，保证在任何颜色上都清楚 */
+[data-ui-theme="liquid-light"] #sidebar { --m-text-2: #2c2c2e; --m-text-3: #48484a; --m-fill: rgba(255, 255, 255, .5); }
+[data-ui-theme="liquid-dark"] #sidebar { --m-text-2: #e5e5ea; --m-text-3: #c7c7cc; --m-fill: rgba(255, 255, 255, .1); }
+[data-ui-theme^="liquid"] #sidebar::before { display: none; }
+
+[data-ui-theme^="liquid"] .brand { border-bottom-color: transparent; padding: 8px 20px 16px; margin-bottom: 4px; }
+/* App 图标式的圆角方块 */
+[data-ui-theme^="liquid"] .brand-logo {
+  border-radius: 11px; font-family: var(--disp); font-weight: 700; font-size: 20px;
+  background: linear-gradient(180deg, #47a1ff, #0071e3);
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), inset 0 -1px 0 rgba(0, 0, 0, .12), 0 4px 12px rgba(0, 113, 227, .3);
+}
+[data-ui-theme^="liquid"] .brand-name { font: 650 15px/1.25 var(--disp); letter-spacing: -.01em; }
+[data-ui-theme^="liquid"] .brand-sub { font-size: 11.5px; letter-spacing: 0; }
+[data-ui-theme^="liquid"] .brand-ver { font-family: var(--lg-font); font-size: 11px; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+[data-ui-theme^="liquid"] .sidebar-footer { border-top-color: transparent; }
+[data-ui-theme^="liquid"] .inst-switch { border-radius: 16px; border-color: transparent; margin-left: 12px; margin-right: 12px; }
+[data-ui-theme^="liquid"] .is-label { letter-spacing: .02em; }
+[data-ui-theme^="liquid"] #inst-switch-select option,
+[data-ui-theme^="liquid"] select option { background: var(--m-bg); }
+
+/* 导航项：选中只改颜色，不改字重（字重变化会让文字宽度跳一下） */
+[data-ui-theme^="liquid"] #nav { position: relative; }
+[data-ui-theme^="liquid"] .nav-item {
+  position: relative; z-index: 1;
+  margin: 1px 12px; padding: 8px 12px; border-radius: 12px;
+  font-size: 13.5px; font-weight: 500; letter-spacing: -.005em;
+  transition: color .3s, background-color .25s;
+}
+[data-ui-theme^="liquid"] .nav-item:hover { background: var(--m-fill); color: var(--m-text); }
+[data-ui-theme^="liquid"] .nav-item svg { color: var(--m-accent-text); transition: color .3s; }
+[data-ui-theme^="liquid"] .nav-item.active,
+[data-ui-theme^="liquid"] .nav-item.active:hover {
+  background: transparent; box-shadow: none; font-weight: 500;
+  color: var(--m-accent-text);
+}
+[data-ui-theme^="liquid"] .nav-tag { border-radius: 999px; padding: 1px 7px; }
+
+/* 选中项的玻璃胶囊（liquid.js 用弹簧动画移动它），永远在文字下面 */
+#lg-lens { display: none; }
+[data-ui-theme^="liquid"] #lg-lens {
+  display: block; position: absolute; left: 12px; right: 12px; top: 0; height: 36px;
+  border-radius: 12px; pointer-events: none; z-index: 0;
+  background: var(--lg-lens);
+  box-shadow: inset 1px 1px 0 -.5px var(--lg-rim-hi), inset -1px -1px 0 -.5px var(--lg-rim-lo), var(--lg-lens-shadow);
+  transform-origin: 50% 50%; will-change: transform;
+  opacity: 0; transition: opacity .3s;
+}
+[data-ui-theme^="liquid"] #lg-lens.on { opacity: 1; }
+
+/* ============================================================
+   顶部：大标题 → 滚动后缩进玻璃胶囊（iOS 导航栏）
+   页头浮在内容上面，内容从它下面滚过去
+   ============================================================ */
+[data-ui-theme^="liquid"] #topbar {
+  position: absolute; left: 0; right: 0; top: 0; height: 86px;
+  display: block; padding: 0; border: 0; background: none;
+  z-index: 5; pointer-events: none;
+}
+[data-ui-theme^="liquid"] #topbar > :not(#lg-topglass) { pointer-events: auto; }
+#lg-topglass { display: none; }
+[data-ui-theme^="liquid"] #lg-topglass {
+  display: block; position: absolute; left: 14px; right: 18px; top: 10px; height: 52px;
+  border-radius: 26px; z-index: -1; pointer-events: none;
+  background: var(--lg-tint-bar);
+  opacity: 0; transform: scale(.97);
+  transition: opacity .35s var(--lg-ease), transform .5s var(--lg-spring);
+}
+[data-ui-theme^="liquid"] #main.lg-condensed #lg-topglass { opacity: 1; transform: none; }
+[data-ui-theme^="liquid"] .page-head {
+  position: absolute; left: 34px; top: 26px;
+  transform-origin: 0 0; transition: transform .5s var(--lg-ease);
+}
+[data-ui-theme^="liquid"] #page-title {
+  font: 700 32px/1.15 var(--disp); letter-spacing: -.024em; color: var(--m-text);
+  white-space: nowrap;
+}
+/* 缩小到 17px 左右，正好居中在 52px 高的胶囊里 */
+[data-ui-theme^="liquid"] #main.lg-condensed .page-head { transform: translate(0, 0) scale(.55); }
+[data-ui-theme^="liquid"] #topbar-extra { position: absolute; right: 34px; top: 10px; height: 52px; }
+[data-ui-theme^="liquid"] #content { padding: 86px 28px 40px; scroll-padding-top: 76px; }
+
+/* ============================================================
+   内容材质（卡片 / 列表）：接近不透明，像「设置」里的分组列表
+   ============================================================ */
+[data-ui-theme^="liquid"] :is(.card, .card-flat, .inst-card, .out-filters, .drop-banner, .ext-item, .console-wrap) {
+  background-color: var(--lg-mat);
+  -webkit-backdrop-filter: blur(30px) saturate(1.6);
+  backdrop-filter: blur(30px) saturate(1.6);
+  border: 0;
+  box-shadow: var(--m-shadow);
+}
+[data-ui-theme^="liquid"] :is(.card, .card-flat, .inst-card, .out-filters, .drop-banner, .ext-item)::before,
+[data-ui-theme^="liquid"] :is(.card, .card-flat, .inst-card, .out-filters, .drop-banner, .ext-item)::after { display: none; }
+[data-ui-theme^="liquid"] .card { border-radius: 22px; padding: 18px 22px; margin-bottom: 14px; }
+[data-ui-theme^="liquid"] .card-title { font: 600 15px/1.3 var(--disp); letter-spacing: -.012em; }
+[data-ui-theme^="liquid"] .sub-title { font-weight: 600; letter-spacing: -.005em; }
+[data-ui-theme^="liquid"] .inst-card { border-radius: 22px; }
+[data-ui-theme^="liquid"] .ext-item { border-radius: 18px; }
+[data-ui-theme^="liquid"] .out-detail {
+  border-radius: 26px 0 0 26px; border: 0;
+  background-color: var(--lg-mat-2);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8); backdrop-filter: blur(40px) saturate(1.8);
+  box-shadow: var(--m-shadow-pop);
+}
+[data-ui-theme^="liquid"] .console-wrap { border-radius: 18px; }
+[data-ui-theme^="liquid"] .console-head { background: transparent; border-bottom-color: var(--m-border-2); font-weight: 600; letter-spacing: 0; }
+[data-ui-theme^="liquid"] .console-head .btn { background: var(--m-fill); border-color: transparent; }
+[data-ui-theme^="liquid"] .console { background: transparent; font-family: var(--mono); }
+/* 提示块可能直接放在壁纸上：先垫一层材质，再叠淡蓝，文字对比度才稳定 */
+[data-ui-theme^="liquid"] .hint-block {
+  border-left: 0; border-radius: 16px; border-color: transparent;
+  background: linear-gradient(var(--m-accent-soft), var(--m-accent-soft)), var(--lg-mat);
+}
+[data-ui-theme^="liquid"] .code-box { border-radius: 12px; border-color: transparent; font-family: var(--mono); }
+
+/* 页面切换：轻轻浮上来（不用模糊滤镜，整页模糊很耗性能） */
+[data-ui-theme^="liquid"] .page { animation: lgPageIn .5s var(--lg-ease); }
+@keyframes lgPageIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- 按钮：胶囊，灰色填充；主按钮实心系统蓝 ---------- */
+[data-ui-theme^="liquid"] .btn {
+  border-radius: 999px; border-color: transparent;
+  background: var(--m-fill); color: var(--m-text); font-weight: 500;
+  box-shadow: none;
+  transition: transform .45s var(--lg-spring), background-color .2s, box-shadow .2s;
+}
+[data-ui-theme^="liquid"] .btn:hover { background: var(--m-fill-2); border-color: transparent; }
+[data-ui-theme^="liquid"] .btn:active:not(:disabled) { transform: scale(.95); transition-duration: .12s; background: var(--m-fill-2); }
+[data-ui-theme^="liquid"] .btn-primary,
+[data-ui-theme^="liquid"] .btn-accent,
+[data-ui-theme^="liquid"] .btn-success {
+  background: var(--m-accent); border-color: transparent; border-radius: 999px; color: #ffffff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 4px 14px color-mix(in srgb, var(--m-accent) 28%, transparent);
+}
+[data-ui-theme^="liquid"] .btn-primary:hover,
+[data-ui-theme^="liquid"] .btn-accent:hover,
+[data-ui-theme^="liquid"] .btn-success:hover { background: var(--m-accent-hover); border-color: transparent; color: #ffffff; }
+[data-ui-theme^="liquid"] .btn-lg { font-weight: 600; letter-spacing: -.005em; }
+[data-ui-theme^="liquid"] .btn:disabled,
+[data-ui-theme^="liquid"] .btn-primary:disabled,
+[data-ui-theme^="liquid"] .btn-accent:disabled,
+[data-ui-theme^="liquid"] .btn-success:disabled {
+  background: var(--m-fill); border-color: transparent; box-shadow: none; transform: none;
+}
+[data-ui-theme^="liquid"] .btn-danger-text:hover { border-color: transparent; }
+[data-ui-theme^="liquid"] .console-head .btn { border-radius: 999px; }
+
+/* ---------- 输入框：无边框的灰色填充，聚焦时一圈蓝色光晕 ---------- */
+[data-ui-theme^="liquid"] input[type="text"],
+[data-ui-theme^="liquid"] input[type="password"],
+[data-ui-theme^="liquid"] input[type="number"],
+[data-ui-theme^="liquid"] select,
+[data-ui-theme^="liquid"] textarea {
+  border-radius: 10px; border-color: transparent;
+  transition: box-shadow .25s, background-color .2s;
+}
+[data-ui-theme^="liquid"] input:hover:not(:disabled):not(:focus),
+[data-ui-theme^="liquid"] select:hover:not(:disabled):not(:focus),
+[data-ui-theme^="liquid"] textarea:hover:not(:disabled):not(:focus) { border-color: transparent; background-color: var(--m-fill); }
+[data-ui-theme^="liquid"] input:focus,
+[data-ui-theme^="liquid"] select:focus,
+[data-ui-theme^="liquid"] textarea:focus {
+  border-color: var(--m-accent); box-shadow: 0 0 0 3.5px var(--m-accent-soft-2);
+}
+
+/* ---------- 复选框 → iOS 开关 ---------- */
+[data-ui-theme^="liquid"] .chk-row { align-items: center; }
+[data-ui-theme^="liquid"] .chk-row i {
+  width: 42px; height: 26px; margin-top: 0; border-radius: 999px; border: 0;
+  background: var(--lg-switch-off);
+  transition: background-color .3s;
+}
+[data-ui-theme^="liquid"] .chk-row:hover i { border: 0; }
+[data-ui-theme^="liquid"] .chk-row i::after,
+[data-ui-theme^="liquid"] .chk-row input:checked + i::after {
+  content: ""; position: absolute; left: 2px; top: 2px; width: 22px; height: 22px;
+  border: 0; border-radius: 999px; transform: none;
+  background: #ffffff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 3px 1px rgba(0, 0, 0, .06), 0 0 0 .5px rgba(0, 0, 0, .04);
+  transition: transform .45s var(--lg-spring), width .25s var(--lg-ease);
+}
+[data-ui-theme^="liquid"] .chk-row input:checked + i { background: var(--lg-switch-on); }
+[data-ui-theme^="liquid"] .chk-row input:checked + i::after { transform: translateX(16px); }
+[data-ui-theme^="liquid"] .chk-row:active i::after { width: 28px; }
+[data-ui-theme^="liquid"] .chk-row:active input:checked + i::after { transform: translateX(10px); }
+[data-ui-theme^="liquid"] .chk-row input:disabled + i { opacity: .5; }
+[data-ui-theme^="liquid"] .chk-row .tag { border-radius: 999px; }
+
+/* ---------- 滑块：iOS 圆钮 ---------- */
+[data-ui-theme^="liquid"] input[type="range"] { height: 4px; border-radius: 2px; background: var(--m-fill-2); }
+[data-ui-theme^="liquid"] input[type="range"]::-webkit-slider-thumb {
+  width: 22px; height: 22px; border: 0; background: #fff;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 0 0 .5px rgba(0, 0, 0, .06);
+}
+
+/* ---------- 进度条：圆头，缓慢流动的一道光 ---------- */
+[data-ui-theme^="liquid"] .progress { border-radius: 999px; }
+[data-ui-theme^="liquid"] .progress-bar {
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--m-accent) 0 40%, color-mix(in srgb, var(--m-accent) 60%, #fff) 50%, var(--m-accent) 60% 100%);
+  background-size: 250% 100%; animation: lgFlow 2.6s linear infinite;
+}
+@keyframes lgFlow { from { background-position: 100% 0; } to { background-position: -150% 0; } }
+
+/* ---------- 状态胶囊：运行中轻轻呼吸 ---------- */
+[data-ui-theme^="liquid"] .status-pill { border-color: transparent; background: var(--m-fill); }
+[data-ui-theme^="liquid"] #sidebar .status-pill,
+[data-ui-theme^="liquid"] #sidebar .status-pill[data-state] { border-color: transparent; }
+[data-ui-theme^="liquid"] .status-pill[data-state="ready"] .dot,
+[data-ui-theme^="liquid"] .status-pill[data-state="running"] .dot { animation: lgPulse 2.2s ease-in-out infinite; }
+[data-ui-theme^="liquid"] .status-pill[data-state="starting"] .dot { animation: lgPulse 1s ease-in-out infinite; }
+@keyframes lgPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.35); } }
+
+/* ---------- 弹窗：变暗不模糊，面板是厚材质 + 弹簧缩放 ---------- */
+[data-ui-theme^="liquid"] #modal-mask { -webkit-backdrop-filter: none; backdrop-filter: none; }
+[data-ui-theme^="liquid"] #modal {
+  border-radius: 30px; border: 0;
+  background-color: var(--lg-mat-2);
+  -webkit-backdrop-filter: blur(40px) saturate(1.8); backdrop-filter: blur(40px) saturate(1.8);
+  box-shadow: inset 0 0 0 .5px var(--lg-rim-line), var(--m-shadow-pop);
+  animation: lgPop .5s var(--lg-spring);
+}
+[data-ui-theme^="liquid"] #modal-title { font: 600 17px/1.3 var(--disp); letter-spacing: -.015em; }
+@keyframes lgPop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+/* 弹窗里的「删除」：实心红 + 白字 */
+[data-ui-theme^="liquid"] #modal-buttons .btn-danger,
+[data-ui-theme^="liquid"] #modal-buttons .btn-danger:hover {
+  background: #d70015; border-color: transparent; color: #ffffff; filter: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .22), 0 4px 14px rgba(215, 0, 21, .25);
+}
+
+/* ---------- 提示条：玻璃胶囊（也有边缘折射） ---------- */
+[data-ui-theme^="liquid"] .toast {
+  position: relative;
+  border: 0; border-radius: 22px; padding: 12px 20px;
+  background-color: var(--m-toast-bg); color: var(--m-toast-text);
+  font-weight: 500;
+  animation: lgPop .5s var(--lg-spring);
+}
+
+/* ---------- 其它细节 ---------- */
+[data-ui-theme^="liquid"] .chip { border-radius: 999px; transition: transform .35s var(--lg-spring), background-color .2s; }
+[data-ui-theme^="liquid"] .chip:active { transform: scale(.94); }
+[data-ui-theme^="liquid"] .oc { border-radius: 16px; overflow: hidden; transition: transform .45s var(--lg-spring); }
+[data-ui-theme^="liquid"] .oc:hover { transform: translateY(-2px) scale(1.015); }
+[data-ui-theme^="liquid"] ::-webkit-scrollbar { width: 12px; height: 12px; }
+[data-ui-theme^="liquid"] ::-webkit-scrollbar-thumb { border: 3.5px solid transparent; border-radius: 999px; background-clip: padding-box; }
+[data-ui-theme^="liquid"] #content::-webkit-scrollbar-track { margin-top: 70px; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ui-theme^="liquid"] .page,
+  [data-ui-theme^="liquid"] #modal,
+  [data-ui-theme^="liquid"] .toast,
+  [data-ui-theme^="liquid"] .progress-bar,
+  [data-ui-theme^="liquid"] .status-pill .dot { animation: none !important; }
+}
+
+/* ---------- 表格 / 预览框 / 分类列表：和卡片同一种材质 ---------- */
+[data-ui-theme^="liquid"] :is(.table-wrap, .preview-box, .detail-view) {
+  background-color: var(--lg-mat); border-color: transparent; border-radius: 18px;
+  box-shadow: var(--m-shadow);
+}
+[data-ui-theme^="liquid"] .card :is(.table-wrap, .preview-box) { box-shadow: inset 0 0 0 1px var(--m-border-2); }
+[data-ui-theme^="liquid"] .data-table th { background: transparent; border-bottom-color: var(--m-border); letter-spacing: 0; font-weight: 600; }
+[data-ui-theme^="liquid"] .data-table tbody tr.selected { box-shadow: none; }
+[data-ui-theme^="liquid"] .cat-item { border-radius: 10px; }
+[data-ui-theme^="liquid"] .cat-item.active { box-shadow: none; font-weight: 500; }

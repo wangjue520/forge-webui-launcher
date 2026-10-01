@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>WWY 启动器</title>
+<link rel="stylesheet" href="fonts/fonts.css">
 <link rel="stylesheet" href="style.css">
 <link rel="stylesheet" href="splash.css">
 </head>
@@ -385,6 +386,15 @@
           <select id="deploy-branch"></select>
         </div>
 
+        <div class="card" id="deploy-nodes-card" hidden>
+          <div class="card-title">随部署一起安装的常用节点<span class="card-title-hint">装进新实例的 custom_nodes，节点依赖一并装好；之后可在「常用插件」页增减</span></div>
+          <div id="deploy-nodes"></div>
+          <details class="deploy-nodes-more">
+            <summary>更多可选节点</summary>
+            <div id="deploy-nodes-more"></div>
+          </details>
+        </div>
+
         <div class="card">
           <div class="card-title">安装目录</div>
           <div class="row">
@@ -548,10 +558,21 @@
 
       <!-- ======== 常用插件 ======== -->
       <section class="page" id="page-extensions">
-        <div class="hint hint-block">勾选想装的扩展，点「安装选中项」会依次 git clone 到 extensions/ 目录下。已经装过的会显示「已安装」并自动跳过，不会重复下载。需要先在「一键启动」页设置好 WebUI 根目录。部分扩展（ADetailer、WD14 Tagger）会根据「高级选项」页当前选择的分支自动装对应的兼容版本，不用你自己判断。</div>
+        <div class="card ext-target-card">
+          <div class="card-title">安装到<span class="card-title-hint" id="ext-target-hint"></span></div>
+          <div class="ext-target">
+            <span class="ic-kind" id="ext-target-kind"></span>
+            <b class="ext-target-name" id="ext-target-name">—</b>
+            <select id="ext-target-sel" hidden></select>
+          </div>
+          <div class="ext-target-path" id="ext-target-path"></div>
+          <div class="hint" id="ext-target-warn" data-status="warn" hidden></div>
+        </div>
+        <div class="hint hint-block" id="ext-intro"></div>
         <div id="ext-list"></div>
         <div class="action-row">
           <button class="btn" id="ext-refresh">刷新安装状态</button>
+          <button class="btn" id="ext-pick-default" hidden>勾选推荐项</button>
           <button class="btn btn-accent" id="ext-install">
             <svg class="btn-icon"><use href="#i-download"/></svg>安装选中项
           </button>
@@ -839,6 +860,7 @@
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
 <script src="js/outputs.js"></script>
+<script src="js/liquid.js"></script>
 <script src="js/deco.js"></script>
 </body>
 </html>

@@ -27,6 +27,10 @@
      VARIANTS：目前只有 terminal 一套实现（就是下面这套终末地动画）；以后新
      风格自带开屏时，在这里按变体名分发到各自的时间轴实现即可。 */
   var variant = (window.WWYThemes && window.WWYThemes.current().splash) || "terminal";
+  if (variant === "liquid") {
+    liquidSplash(el);
+    return;
+  }
   if (variant === "none") {
     el.remove();
     window.Splash = { ready: function () {} };
@@ -172,4 +176,40 @@
     },
   };
   setTimeout(function () { if (!bootReady) window.Splash.ready(); tryClose(true); }, MAX_MS);
+
+  /* ---------- 液态玻璃开屏 ----------
+   * 背景色团流动 → 一滴玻璃从中心弹出 → 横向流开成胶囊，露出图标和名字 →
+   * 胶囊下面一条细进度 → 就绪后玻璃放大、化开，露出同样背景的主界面。 */
+  function liquidSplash(host) {
+    var reduceM = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var MIN = reduceM ? 500 : 1500, MAX = 9000, start = performance.now();
+    var ready = false, leaving = false, done = false;
+    host.className = "sp-liquid";
+    host.innerHTML =
+      '<div class="lq-bg"><i class="lq-b b1"></i><i class="lq-b b2"></i><i class="lq-b b3"></i><i class="lq-b b4"></i></div>' +
+      '<div class="lq-drop"><div class="lq-logo">W</div>' +
+      '<div class="lq-text"><b>WWY 启动器</b><span>AI 绘图启动器</span></div></div>' +
+      '<div class="lq-bar"><i></i></div>';
+    requestAnimationFrame(function () { host.classList.add("lq-in"); });
+    setTimeout(function () { host.classList.add("lq-open"); }, reduceM ? 0 : 520);
+    var bar = host.querySelector(".lq-bar i"), pct = 0;
+    function tick(now) {
+      if (done) return;
+      var cap = ready ? 100 : 88 * (1 - Math.exp(-(now - start) / 900));
+      pct += (cap - pct) * .12;
+      if (bar) bar.style.transform = "scaleX(" + (pct / 100).toFixed(3) + ")";
+      if (ready && pct > 99 && now - start >= MIN) leave();
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+    function leave() {
+      if (leaving) return;
+      leaving = true;
+      host.classList.add("lq-out");
+      setTimeout(function () { done = true; host.remove(); }, reduceM ? 150 : 620);
+    }
+    host.addEventListener("click", function () { if (ready) leave(); });
+    window.Splash = { ready: function () { ready = true; } };
+    setTimeout(function () { ready = true; leave(); }, MAX);
+  }
 })();

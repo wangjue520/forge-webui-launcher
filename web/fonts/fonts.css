@@ -1,0 +1,28 @@
+/* 随附字体（全部 SIL Open Font License 1.1，可随软件分发，许可证见同目录 OFL-*.txt）
+   只在页面真正用到某个字体时才会加载；都是子集（常用字 + 程序里出现过的字），
+   没覆盖到的生僻字会自动回落到系统字体（微软雅黑）。
+
+   WWY Sans SC  — 思源黑体 / Noto Sans SC 子集，400–900 可变字重（中文）
+   WWY Inter    — Inter 可变字体（液态玻璃的西文正文，最接近 SF Pro）
+   WWY Barlow   — Barlow Semi Condensed（终末地的西文标题 / 数字，DIN 系工业感）
+   WWY Mono     — JetBrains Mono（终末地的编号、路径、日志） */
+@font-face {
+  font-family: "WWY Sans SC";
+  src: url("NotoSansSC-Sub.woff2") format("woff2");
+  font-weight: 400 900; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "WWY Inter";
+  src: url("InterVariable-Sub.woff2") format("woff2");
+  font-weight: 400 800; font-style: normal; font-display: swap;
+}
+@font-face { font-family: "WWY Barlow"; src: url("BarlowSemiCondensed-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "WWY Barlow"; src: url("BarlowSemiCondensed-Medium.woff2") format("woff2"); font-weight: 500; font-display: swap; }
+@font-face { font-family: "WWY Barlow"; src: url("BarlowSemiCondensed-SemiBold.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "WWY Barlow"; src: url("BarlowSemiCondensed-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "WWY Barlow"; src: url("BarlowSemiCondensed-ExtraBold.woff2") format("woff2"); font-weight: 800 900; font-display: swap; }
+@font-face {
+  font-family: "WWY Mono";
+  src: url("JetBrainsMono-Sub.woff2") format("woff2");
+  font-weight: 400 800; font-style: normal; font-display: swap;
+}

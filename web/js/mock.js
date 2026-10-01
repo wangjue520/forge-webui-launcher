@@ -202,11 +202,19 @@
         { path: "", rel: "（演示数据）v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
         { path: "", rel: "（演示数据）ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
       ], total: 2, no_info: 1, is_lora: false }),
-      ext_list: () => ok({ ok: true, has_root: false, items: [
-        { name: "ADetailer（演示）", desc: "脸部/手部自动修复", installed: false },
-        { name: "Tag Autocomplete（演示）", desc: "提示词标签自动补全", installed: false },
-        { name: "Prompt All-in-One（演示）", desc: "提示词输入框全家桶", installed: false },
+      ext_list: () => ok({ ok: true, has_root: false, comfy: false,
+        target: { id: "demo", name: "Forge Neo", kind: "forge", kind_label: "Forge Neo", root: "", target_dir: "", running: false },
+        items: [
+        { id: "ADetailer（演示）", name: "ADetailer（演示）", desc: "脸部/手部自动修复", installed: false },
+        { id: "Tag Autocomplete（演示）", name: "Tag Autocomplete（演示）", desc: "提示词标签自动补全", installed: false },
+        { id: "Prompt All-in-One（演示）", name: "Prompt All-in-One（演示）", desc: "提示词输入框全家桶", installed: false },
       ] }),
+      comfy_node_catalog: () => ok({ ok: true, selected: ["comfyui-manager", "rgthree-comfy"], groups: { core: "推荐（部署 ComfyUI 时默认安装）", extra: "按需安装" },
+        items: [
+          { id: "comfyui-manager", name: "ComfyUI-Manager（节点管理器）", desc: "（演示）节点管理器", group: "core", default: true },
+          { id: "rgthree-comfy", name: "rgthree-comfy", desc: "（演示）工作流整理", group: "core", default: true },
+          { id: "gguf", name: "ComfyUI-GGUF", desc: "（演示）GGUF 量化模型", group: "extra", default: false },
+        ] }),
       wd14_models: () => ok({ ok: true, model_ready: false, models: [
         { key: "wd-vit-tagger-v3", label: "wd-vit-tagger-v3（默认，速度快，~380MB）", cached: false,
           urls: ["https://hf-mirror.com/SmilingWolf/wd-vit-tagger-v3/tree/main",

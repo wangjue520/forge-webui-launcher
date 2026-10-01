@@ -38,6 +38,41 @@
     } catch (e) { el.textContent = "检测失败：" + e.message; el.dataset.status = "bad"; }
   }
 
+  /* ---------- 随 ComfyUI 一起装的节点 ---------- */
+  let nodeCatalogLoaded = false;
+  async function loadNodeCatalog() {
+    if (nodeCatalogLoaded || !App.api.comfy_node_catalog) return;
+    try {
+      const r = await App.api.comfy_node_catalog();
+      if (!r || r.ok === false) return;
+      const sel = new Set(r.selected || []);
+      const row = (it) => `<label class="chk-row"><input type="checkbox" data-node="${App.esc(it.id)}"${sel.has(it.id) ? " checked" : ""}><i></i>` +
+        `<span><span class="ext-name">${App.esc(it.name)}</span><div class="ext-desc">${App.esc(it.desc)}</div></span></label>`;
+      const groups = r.groups || {};
+      const core = r.items.filter((i) => i.group === "core");
+      const rest = r.items.filter((i) => i.group !== "core");
+      $("#deploy-nodes").innerHTML = core.map(row).join("");
+      let html = "", g = null;
+      rest.forEach((it) => {
+        if (it.group !== g) { g = it.group; html += `<div class="deploy-nodes-group">${App.esc(groups[g] || g)}</div>`; }
+        html += row(it);
+      });
+      $("#deploy-nodes-more").innerHTML = html;
+      // 上次勾过「更多」里的节点就默认展开，免得用户以为没装
+      if (rest.some((i) => sel.has(i.id))) $(".deploy-nodes-more").open = true;
+      nodeCatalogLoaded = true;
+    } catch (e) { console.error(e); }
+  }
+  function syncNodesCard() {
+    const comfy = $("#deploy-branch").value === "comfyui";
+    $("#deploy-nodes-card").hidden = !comfy;
+    if (comfy) loadNodeCatalog();
+  }
+  function selectedNodes() {
+    if (!nodeCatalogLoaded) return null;   // 没加载出来就交给后端用默认推荐
+    return Array.from(document.querySelectorAll("#deploy-nodes-card input[data-node]:checked")).map((el) => el.dataset.node);
+  }
+
   async function onStart() {
     if (running) return;
     // 整个函数包一层兜底：预检查之后的任何异常（弹窗、返回值解析等）都必须
@@ -75,7 +110,8 @@
         if (v !== "go") return;
       } else if (!pre.already_installed) {
         const v = await App.modal("确认开始部署",
-          App.esc(`即将把 ${branch === "comfyui" ? "ComfyUI" : "Forge WebUI"} 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。`),
+          App.esc(`即将把 ${branch === "comfyui" ? "ComfyUI" : "Forge WebUI"} 部署到：\n${target}\n\n过程中会自动下载便携环境、源码和 torch 等依赖（视网速可能十几分钟以上），期间可以随时取消。` +
+            (branch === "comfyui" && (selectedNodes() || []).length ? `\n\n另外会安装勾选的 ${selectedNodes().length} 个常用节点及其依赖。` : "")),
           [
             { id: "go", label: "开始部署", kind: "primary" },
             { id: "cancel", label: "取消" },
@@ -84,7 +120,9 @@
       }
 
       try {
-        const r = await App.api.deploy_start(target, branch, usePortable);
+        const r = branch === "comfyui"
+          ? await App.api.deploy_start(target, branch, usePortable, selectedNodes())
+          : await App.api.deploy_start(target, branch, usePortable);
         if (r && r.ok === false) App.toast(r.error || "启动部署失败", "error");
       } catch (e) { App.toast("启动部署失败：" + e.message, "error"); }
     } catch (e) {
@@ -147,6 +185,8 @@
         sel.appendChild(o);
       });
       sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch : "neo2";
+      sel.addEventListener("change", syncNodesCard);
+      syncNodesCard();
 
       if (App.cfg.webui_root) {
         $("#deploy-target").value = App.cfg.webui_root;

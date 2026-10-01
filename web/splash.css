@@ -11,8 +11,9 @@
   --sp-mut: rgba(18, 19, 22, .52);
   --sp-faint: rgba(18, 19, 22, .14);
   --sp-yel: #fff200;
-  --sp-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
-  --sp-disp: "Bahnschrift", "DIN Alternate", "Segoe UI", "Arial Narrow", sans-serif;
+  --sp-mono: "WWY Mono", "Cascadia Mono", Consolas, "WWY Sans SC", monospace;
+  --sp-disp: "WWY Barlow", "Bahnschrift", "DIN Alternate", "WWY Sans SC", sans-serif;
+  --sp-sans: "WWY Inter", "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
   --sp-ease: cubic-bezier(.76, 0, .24, 1);
   --sp-out: cubic-bezier(.16, 1, .3, 1);
 
@@ -181,7 +182,7 @@
   width: 20px; height: 20px; background: var(--sp-ink); color: var(--sp-yel);
   font-size: 10px; letter-spacing: 0;
 }
-.sp-kicker span { color: var(--sp-mut); letter-spacing: .2em; font-family: "Microsoft YaHei UI", sans-serif; font-size: 11px; }
+.sp-kicker span { color: var(--sp-mut); letter-spacing: .2em; font-family: var(--sp-sans); font-size: 11px; }
 #splash.p-title .sp-kicker { opacity: 1; transform: none; }
 
 .sp-title-wrap { position: relative; display: inline-block; margin: 16px 0 18px; }
@@ -263,7 +264,7 @@
   display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;
   font: 10px var(--sp-mono); letter-spacing: .3em; color: var(--sp-mut);
 }
-.sp-prog-cn { font: 11px "Microsoft YaHei UI", sans-serif; letter-spacing: .2em; margin-left: 14px; font-weight: normal; }
+.sp-prog-cn { font: 11px var(--sp-sans); letter-spacing: .2em; margin-left: 14px; font-weight: normal; }
 .sp-pct { font: 700 24px/1 var(--sp-disp); letter-spacing: .06em; color: var(--sp-ink); font-variant-numeric: tabular-nums; }
 .sp-pct::after { content: "%"; font-size: 12px; margin-left: 2px; color: var(--sp-mut); }
 .sp-segs { display: grid; grid-template-columns: repeat(48, 1fr); gap: 3px; }
@@ -331,4 +332,84 @@
 @media (prefers-reduced-motion: reduce) {
   #splash *, #splash *::before, #splash *::after { animation-duration: .01s !important; animation-iteration-count: 1 !important; }
   .sp-scene, .sp-orbit, .sp-topo, .sp-wipe { transition-duration: .15s !important; }
+}
+
+/* ============================================================
+   液态玻璃开屏（themes.js 里 splash: "liquid"，js/splash.js 的 liquidSplash）
+   背景色团流动 → 玻璃水滴弹出 → 横向流开成胶囊 → 就绪后放大化开
+   ============================================================ */
+#splash.sp-liquid {
+  --lq-base: #eef2fb; --lq-glass: rgba(255, 255, 255, .5); --lq-rim: rgba(255, 255, 255, .95);
+  --lq-text: #0b0c10; --lq-sub: #464954; --lq-accent: #0a62d6;
+  --lq-b1: #a9c5ff; --lq-b2: #d4bcff; --lq-b3: #ffc9db; --lq-b4: #aeeedf;
+  background: var(--lq-base);
+  font-family: -apple-system, "SF Pro Display", "WWY Inter", "PingFang SC", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  transition: opacity .55s ease, background-color .55s ease;
+}
+[data-ui-theme="liquid-dark"] #splash.sp-liquid {
+  --lq-base: #080a12; --lq-glass: rgba(40, 44, 60, .45); --lq-rim: rgba(255, 255, 255, .4);
+  --lq-text: #f4f5f8; --lq-sub: #a7aab3; --lq-accent: #2f74ea;
+  --lq-b1: #1d2b78; --lq-b2: #3e1a70; --lq-b3: #5c1238; --lq-b4: #084c48;
+}
+#splash.sp-liquid.lq-out { opacity: 0; pointer-events: none; }
+.lq-bg { position: absolute; inset: -10%; filter: blur(60px) saturate(1.2); }
+.lq-b {
+  position: absolute; width: 46vmax; height: 46vmax; border-radius: 50%; opacity: .9;
+  animation: lqDrift 9s ease-in-out infinite alternate;
+}
+.lq-b.b1 { background: var(--lq-b1); left: 8%; top: 4%; }
+.lq-b.b2 { background: var(--lq-b2); right: 4%; top: 18%; animation-duration: 11s; animation-delay: -3s; }
+.lq-b.b3 { background: var(--lq-b3); left: 26%; bottom: -6%; animation-duration: 13s; animation-delay: -6s; }
+.lq-b.b4 { background: var(--lq-b4); right: 22%; bottom: 2%; animation-duration: 10s; animation-delay: -2s; }
+@keyframes lqDrift {
+  0% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(6vw, -4vh) scale(1.12); }
+  100% { transform: translate(-5vw, 5vh) scale(.92); }
+}
+.lq-drop {
+  position: absolute; left: 50%; top: 50%;
+  width: 88px; height: 88px; border-radius: 44px;
+  display: flex; align-items: center; justify-content: flex-start; gap: 16px;
+  padding: 0 12px; overflow: hidden; box-sizing: border-box;
+  background: var(--lq-glass);
+  -webkit-backdrop-filter: blur(22px) saturate(190%); backdrop-filter: blur(22px) saturate(190%);
+  box-shadow: inset 0 1px 0 var(--lq-rim), inset 0 0 0 1px rgba(255, 255, 255, .25),
+    0 18px 50px rgba(30, 40, 90, .22);
+  transform: translate(-50%, -50%) scale(.15); opacity: 0;
+  transition: transform .7s cubic-bezier(.34, 1.56, .64, 1), opacity .3s ease,
+    width .75s cubic-bezier(.5, 1.35, .45, 1), border-radius .75s ease;
+}
+.lq-in .lq-drop { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+.lq-open .lq-drop { width: 340px; }
+.lq-out .lq-drop {
+  transform: translate(-50%, -50%) scale(1.55); opacity: 0; filter: blur(10px);
+  transition: transform .6s cubic-bezier(.3, 0, .2, 1), opacity .5s ease, filter .5s ease;
+}
+.lq-logo {
+  width: 64px; height: 64px; flex: none; border-radius: 32px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 30px; color: #fff;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--lq-accent) 80%, #fff), var(--lq-accent));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), 0 6px 18px rgba(10, 98, 214, .35);
+}
+.lq-text {
+  display: flex; flex-direction: column; gap: 3px; white-space: nowrap;
+  opacity: 0; transform: translateX(-10px); transition: opacity .45s ease .25s, transform .6s cubic-bezier(.2, .9, .25, 1) .25s;
+}
+.lq-text b { font-size: 24px; font-weight: 700; color: var(--lq-text); letter-spacing: -.01em; }
+.lq-text span { font-size: 13px; color: var(--lq-sub); }
+.lq-open .lq-text { opacity: 1; transform: none; }
+.lq-bar {
+  position: absolute; left: 50%; top: calc(50% + 70px); width: 160px; height: 5px; margin-left: -80px;
+  border-radius: 3px; overflow: hidden; background: rgba(127, 127, 140, .22);
+  opacity: 0; transition: opacity .4s ease .5s;
+}
+.lq-open .lq-bar { opacity: 1; }
+.lq-out .lq-bar { opacity: 0; transition-delay: 0s; }
+.lq-bar i {
+  display: block; height: 100%; transform-origin: 0 50%; transform: scaleX(0);
+  background: linear-gradient(90deg, var(--lq-accent), #7ad7ff);
+}
+@media (prefers-reduced-motion: reduce) {
+  .lq-b { animation: none; }
 }

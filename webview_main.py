@@ -64,16 +64,34 @@ def _patch_http_server_backlog():
 
 
 def _bind_dom_events(window, api):
-    """绑定拖放事件。
+    """拖放：拿到拖入文件的完整路径。
 
-    网页里的 File 对象拿不到磁盘路径（浏览器安全限制），但 pywebview 5 会把
-    完整路径放在 Python 侧事件的 dataTransfer.files[i].pywebviewFullPath 里，
-    所以拖放在 Python 侧接收、再把路径推回前端。
+    网页里的 File 对象拿不到磁盘路径（浏览器安全限制）。WebView2 下 pywebview 的做法是：
+    JS 调 chrome.webview.postMessageWithAdditionalObjects("FilesDropped", files)，
+    原生侧把每个文件的完整路径存进 webview.dom._dnd_state["paths"]。
+
+    以前这里用 pywebview 的 DOMEventHandler 监听 dragover / drop，但它会把整个事件对象
+    序列化后传给 Python——事件里的 currentTarget 是 document，会把【整棵 DOM 树】连同
+    所有属性一起序列化（实测约 2MB、300ms 一次），而 dragover 在拖动时每秒触发十几次，
+    界面直接卡死，drop 也经常传不过来。
+
+    现在拖放完全由前端自己处理（web/js/core.js 的 bindFileDrop），只发文件名过来，
+    Python 侧（LauncherApi.drop_files）按文件名从 _dnd_state 里取完整路径。
+    这里只需要告诉 pywebview「有人在收拖放路径」（num_listeners > 0 它才会存）。
     """
-    def on_dragover(_e):
-        # dragover 必须 preventDefault，浏览器才允许 drop
-        pass
+    try:
+        from webview.dom import _dnd_state
+    except ImportError:
+        try:
+            from webview.util import _dnd_state
+        except ImportError:
+            _dnd_state = None
+    if isinstance(_dnd_state, dict) and "paths" in _dnd_state:
+        _dnd_state["num_listeners"] = _dnd_state.get("num_listeners", 0) + 1
+        api._dnd_state = _dnd_state
+        return
 
+    # 兜底（pywebview 内部结构变了）：退回旧做法，只监听 drop，不再监听 dragover
     def on_drop(e):
         files = ((e or {}).get("dataTransfer") or {}).get("files") or []
         paths = [f.get("pywebviewFullPath") for f in files
@@ -81,7 +99,6 @@ def _bind_dom_events(window, api):
         if paths:
             api.handle_dropped_paths(paths)
 
-    window.dom.document.events.dragover += DOMEventHandler(on_dragover, prevent_default=True)
     window.dom.document.events.drop += DOMEventHandler(on_drop, prevent_default=True)
 
 

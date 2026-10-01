@@ -260,21 +260,75 @@
     $("#md-batch-cancel").disabled = !v;
   }
 
+  /* ---------- 进度区（拖拽上传 / LoRA 整理共用） ---------- */
+  let preparing = false;   // 已放下文件、还在读路径 / 分析文件（还没开始复制）
+  function refreshBusy() {
+    const on = importing || organizing || preparing;
+    $("#page-models").classList.toggle("importing", on);
+    $("#md-import-busy").hidden = !on;
+    // 读取 / 分析阶段没法取消（很快，而且没有后台任务可停）
+    $("#md-import-cancel").hidden = !(importing || organizing);
+  }
+  // 更新进度区；pct 为 null 时显示来回滑动的「不确定」进度条
+  function busySet(o) {
+    if ("stage" in o) $("#md-import-stage").textContent = o.stage || "";
+    if ("name" in o) { $("#md-import-name").textContent = o.name || ""; $("#md-import-name").title = o.name || ""; }
+    if ("foot" in o) $("#md-import-text").textContent = o.foot || "";
+    if ("pct" in o) {
+      const indet = o.pct == null;
+      $("#md-import-busy .db-progress").classList.toggle("indeterminate", indet);
+      $("#md-import-bar").style.width = indet ? "" : Math.max(0, Math.min(100, o.pct)) + "%";
+      $("#md-import-pct").textContent = indet ? "" : Math.floor(o.pct) + "%";
+    }
+  }
+  function setPreparing(v, n) {
+    preparing = v;
+    if (v) busySet({ stage: "读取拖入的文件…", name: n ? `${n} 项` : "", pct: null, foot: "" });
+    refreshBusy();
+  }
+
   /* ---------- 拖拽上传 ---------- */
+  // 复制速度：每 0.5 秒以上取一次样，指数平滑，算剩余时间
+  const speed = { t: 0, done: 0, bps: 0 };
+  function fmtBytes(n) { return App.fmtBytes ? App.fmtBytes(n) : (n / 1048576).toFixed(1) + " MB"; }
+  function fmtEta(sec) {
+    if (!isFinite(sec) || sec < 0) return "";
+    if (sec < 60) return `剩余约 ${Math.max(1, Math.round(sec))} 秒`;
+    if (sec < 3600) return `剩余约 ${Math.floor(sec / 60)} 分 ${Math.round(sec % 60)} 秒`;
+    return `剩余约 ${Math.floor(sec / 3600)} 小时 ${Math.round((sec % 3600) / 60)} 分`;
+  }
   function setImporting(v) {
     importing = v;
-    $("#page-models").classList.toggle("importing", v || organizing);
-    $("#md-import-busy").hidden = !(v || organizing);
-    if (v) { $("#md-import-bar").style.width = "0%"; $("#md-import-text").textContent = "准备中…"; }
+    if (v) {
+      preparing = false;
+      speed.t = performance.now(); speed.done = 0; speed.bps = 0;
+      busySet({ stage: "开始复制…", name: "", pct: 0, foot: "" });
+    }
+    refreshBusy();
+  }
+  function onImportProgress(e) {
+    if (!importing) return;
+    const now = performance.now();
+    if (e.done != null && now - speed.t >= 500) {
+      const inst = (e.done - speed.done) * 1000 / (now - speed.t);
+      speed.bps = speed.bps ? speed.bps * 0.6 + inst * 0.4 : inst;
+      speed.t = now; speed.done = e.done;
+    }
+    const parts = [];
+    if (e.total) parts.push(`${fmtBytes(e.done || 0)} / ${fmtBytes(e.total)}`);
+    if (speed.bps > 0) {
+      parts.push(`${fmtBytes(speed.bps)}/s`);
+      if (e.total) parts.push(fmtEta((e.total - (e.done || 0)) / speed.bps));
+    }
+    busySet({ stage: e.n > 1 ? `复制中 ${e.i}/${e.n}` : "复制中", name: e.name || "", pct: e.pct || 0, foot: parts.join(" · ") });
   }
 
   /* ---------- LoRA 整理 ---------- */
   function setOrganizing(v) {
     organizing = v;
     $("#md-organize").disabled = v;
-    $("#page-models").classList.toggle("importing", v || importing);
-    $("#md-import-busy").hidden = !(v || importing);
-    if (v) { $("#md-import-bar").style.width = "0%"; $("#md-import-text").textContent = "查询模型信息…"; }
+    if (v) busySet({ stage: "查询模型信息…", name: "", pct: null, foot: "" });
+    refreshBusy();
   }
 
   async function startOrganize() {
@@ -326,12 +380,16 @@
   }
 
   async function handleDrop(paths) {
-    if (!paths || !paths.length) return;
+    if (!paths || !paths.length) { setPreparing(false); return; }
     if (importing) { App.toast("上一批模型还在复制，请等它完成或先取消", "error"); return; }
-    if (curCat < 0 || !categories[curCat]) { App.toast("请先在左侧选一个模型分类，再把文件拖进来", "error"); return; }
+    if (organizing) { setPreparing(false); App.toast("正在整理 LoRA，请等它完成再拖入", "error"); return; }
+    if (curCat < 0 || !categories[curCat]) { setPreparing(false); App.toast("请先在左侧选一个模型分类，再把文件拖进来", "error"); return; }
+    setPreparing(true, paths.length);
+    busySet({ stage: "分析文件…", name: paths.length > 1 ? `${paths.length} 项` : paths[0].split(/[\\/]/).pop() });
     let plan;
     try { plan = await App.api.models_import_plan(curCat, paths); }
-    catch (e) { App.toast("读取拖入的文件失败：" + e.message, "error"); return; }
+    catch (e) { setPreparing(false); App.toast("读取拖入的文件失败：" + e.message, "error"); return; }
+    setPreparing(false);   // 分析完了；下面可能弹确认框，确认后才真正开始复制
     if (!plan || plan.ok === false) { App.toast((plan && plan.error) || "读取拖入的文件失败", "error"); return; }
 
     if (!plan.count) {
@@ -374,7 +432,8 @@
     } catch (e) { App.toast("无法开始上传：" + e.message, "error"); }
   }
 
-  // 拖着文件经过窗口时高亮提示条（真正的 drop 由 Python 侧接收，见 webview_main._bind_dom_events）
+  // 拖着文件经过窗口时高亮提示条（真正的 drop 由 core.js bindFileDrop 统一接收，
+  // 拿到路径后调本页的 onDropped）
   function bindDragHighlight() {
     const page = $("#page-models");
     let depth = 0;
@@ -421,8 +480,7 @@
       $("#md-organize-undo").addEventListener("click", undoOrganize);
       App.on("models", "organize_progress", (e) => {
         if (!organizing) return;
-        $("#md-import-bar").style.width = (e.n ? e.i * 100 / e.n : 0) + "%";
-        $("#md-import-text").textContent = `${e.stage || ""} ${e.i}/${e.n} · ${e.name || ""}`;
+        busySet({ stage: `${e.stage || "整理"} ${e.i}/${e.n}`, name: e.name || "", pct: e.n ? e.i * 100 / e.n : null });
       });
       App.on("models", "organize_plan", showOrganizePlan);
       App.on("models", "organize_done", (e) => {
@@ -439,11 +497,11 @@
         if (curCat >= 0) loadCat(curCat);
         if (App.reloadLibrary) App.reloadLibrary();
       });
-      App.on("models", "import_progress", (e) => {
-        $("#md-import-bar").style.width = (e.pct || 0) + "%";
-        $("#md-import-text").textContent = e.name
-          ? `${e.i}/${e.n} · ${e.name} · ${Math.floor(e.pct || 0)}%` : `${Math.floor(e.pct || 0)}%`;
+      App.on("models", "import_scan", (e) => {
+        if (!preparing) return;
+        busySet({ stage: `分析文件 ${e.i}/${e.n}`, name: e.name || "", pct: e.n ? e.i * 100 / e.n : null });
       });
+      App.on("models", "import_progress", onImportProgress);
       App.on("models", "import_done", (e) => {
         setImporting(false);
         const parts = [];
@@ -554,6 +612,9 @@
       reloadAll();
     },
 
+    // core.js bindFileDrop：放下的一瞬间先给反馈（拿路径要一点时间），失败时收起
+    onDropStart(n) { if (!importing && !organizing) setPreparing(true, n); },
+    onDropFail() { setPreparing(false); },
     onDropped(paths) { handleDrop(paths); },
 
     onShow() {

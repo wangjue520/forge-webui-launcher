@@ -37,7 +37,7 @@
 - **LoRA 自动整理**：按底模/类型自动分进子文件夹，同步修正 ComfyUI 已保存工作流里的路径，可撤销
 - **WD14 反推**：图片自动打标签，独立环境不污染主环境
 - **图片信息**：读取/编辑 A1111、ComfyUI、NovelAI 等来源的生成参数，可检测并补齐缺失模型
-- **常用插件一键安装**：按分支自动适配兼容版本；ComfyUI 实例装进 custom_nodes
+- **常用插件一键安装**：按分支自动适配兼容版本；ComfyUI 实例装专用节点并自动装依赖，部署 ComfyUI 时推荐节点随部署自动安装
 - **国内网络优化**：按 IP 归属地自动判断走 GitHub 加速代理 / PyPI 镜像 / HF 镜像，失败自动回退官方源
 
 ---
@@ -171,7 +171,12 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 
 ### 常用插件
 
-勾选 →「安装选中项」→ 装完重启 WebUI 生效。列表按当前实例的分支自动适配（Neo 上不能用的隐藏，需要专门分支的自动换源）；ComfyUI 实例装进 custom_nodes。
+页面顶部「安装到」写明装给哪个实例、装进哪个目录；有多个实例时可以直接在这里换安装目标，不用先切换当前实例。
+
+- **WebUI 实例**：勾选 →「安装选中项」→ 装完重启 WebUI 生效。列表按实例的分支自动适配（Neo 上不能用的隐藏，需要专门分支的自动换源）。
+- **ComfyUI 实例**：显示 ComfyUI 专用节点清单（分「推荐 / 按需 / 作者自制」三组）。节点 clone 进 `custom_nodes`，并用该实例自己的 Python 把依赖一起装好（跳过 torch 系并锁定现有 torch 版本，不会被换成 CPU 版；整批装失败时逐个装）。因为要装依赖，实例运行中不能安装。
+- **ComfyUI-Manager** 已并入 ComfyUI 本体：这里装的是它的 pip 依赖，装好后启动 ComfyUI 时自动加 `--enable-manager`（老版本 ComfyUI 退回 clone 到 custom_nodes）。
+- 「环境部署」新装 ComfyUI 时会默认一起装「推荐」组：Manager、rgthree、Custom-Scripts、Impact Pack + Subpack（FaceDetailer）、UltimateSDUpscale、VideoHelperSuite、KJNodes；部署页可以增减，勾选会被记住。
 
 ### WD14 反推
 
@@ -199,8 +204,9 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 |---|---|
 | 终末地 · 工业终端（默认） | 浅灰工业纸面 + 柠檬黄高亮，带开屏动画 |
 | 极简 · 浅色 / 极简 · 深色 | 细线小圆角、无装饰、靛蓝点缀，无开屏动画 |
+| 液态玻璃 · 浅色 / 液态玻璃 · 深色 | 仿 iOS 26 / macOS 26 Liquid Glass：侧栏、顶部标题胶囊、提示条是透明玻璃，边缘真的会折射背后的画面（带轻微色散）；内容卡片是接近不透明的分组材质；缓慢流动的绸带壁纸；大标题滚动时缩进顶部胶囊；苹果系统配色，随附 Inter + 思源黑体子集字体（SIL OFL）；带自己的开屏动画 |
 
-新风格做成 `web/themes/xxx.css` 加注册表一条即可（见 `web/js/themes.js` 开头注释），开屏动画也变体化。
+新风格做成 `web/themes/xxx.css` 加注册表一条即可（见 `web/js/themes.js` 开头注释），开屏动画也变体化。液态玻璃复用极简的结构规则（`base: "minimal"`，选择器写 `[data-ui-base="minimal"]`），只叠一层材质与动效（`themes/liquid.css` + `js/liquid.js`，字体在 `web/fonts/`）。
 
 ---
 
