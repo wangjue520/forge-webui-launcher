@@ -1015,6 +1015,16 @@ textarea.ta-prompt {
 .od-text.dim { color: var(--text-dim); }
 .od-path { margin-top: 14px; font: 10.5px var(--mono); color: var(--text-faint); word-break: break-all; }
 
+/* 图片放大浏览（输出管理详情 → 点图片进入） */
+.od-media img { cursor: zoom-in; }
+.lightbox { position: fixed; inset: 0; z-index: 90; background: rgba(18, 19, 22, .9); display: flex; flex-direction: column; }
+.lightbox[hidden] { display: none; }
+.lb-tools { display: flex; gap: 6px; align-items: center; justify-content: center; padding: 10px; flex: none; }
+.lb-pct { font: 700 12px var(--mono); color: #e4e5e1; min-width: 52px; text-align: right; }
+.lb-stage { flex: 1; overflow: hidden; position: relative; cursor: grab; }
+.lb-stage.panning { cursor: grabbing; }
+#lb-img { position: absolute; left: 50%; top: 50%; max-width: none; user-select: none; }
+
 /* 部署页：随 ComfyUI 一起装的节点 */
 #deploy-nodes .chk-row, #deploy-nodes-more .chk-row { align-items: flex-start; margin: 6px 0; }
 #deploy-nodes .chk-row .ext-desc, #deploy-nodes-more .chk-row .ext-desc { margin-top: 1px; }

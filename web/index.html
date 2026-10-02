@@ -835,6 +835,19 @@
   </main>
 </div>
 
+<!-- 图片放大浏览 -->
+<div class="lightbox" id="lightbox" hidden>
+  <div class="lb-tools">
+    <span class="lb-pct" id="lb-pct">100%</span>
+    <button class="btn btn-xs" id="lb-in">＋ 放大</button>
+    <button class="btn btn-xs" id="lb-out">− 缩小</button>
+    <button class="btn btn-xs" id="lb-fit">适应窗口</button>
+    <button class="btn btn-xs" id="lb-actual">实际大小</button>
+    <button class="btn btn-xs" id="lb-close">关闭 ✕</button>
+  </div>
+  <div class="lb-stage" id="lb-stage"><img id="lb-img" alt="" draggable="false"></div>
+</div>
+
 <!-- 模态框 / 通知 -->
 <div id="modal-mask" hidden>
   <div id="modal">

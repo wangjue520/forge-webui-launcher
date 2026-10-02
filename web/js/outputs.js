@@ -371,6 +371,11 @@
     else if (d.kind === "video") media.innerHTML = `<video src="${url("f", id)}" controls autoplay loop muted></video>`;
     else if (d.kind === "image") media.innerHTML = `<img src="${url("f", id)}" alt="">`;
     else media.innerHTML = `<div class="od-missing">${App.esc(d.name)}<br>这种文件不能在这里预览，点「打开」用系统程序打开</div>`;
+    const mediaImg = media.querySelector("img");
+    if (mediaImg) {   // 点图片放大浏览
+      mediaImg.title = "点击放大";
+      mediaImg.addEventListener("click", () => lbShow(url("f", id)));
+    }
 
     const kv = (k, v) => v ? `<span class="k">${k}</span><span class="v">${App.esc(v)}</span>` : "";
     const chips = (arr, attr) => arr.map((t) =>
@@ -431,11 +436,94 @@
   }
 
   function closeDetail() {
+    lbHide();
     $("#out-detail").hidden = true;
     const v = $("#od-media video");
     if (v) v.pause();
     detailIdx = -1;
     detail = null;
+  }
+
+  /* ---------- 图片放大浏览 ----------
+   * 详情里点图片进入；滚轮以光标为中心缩放，拖动平移，
+   * 双击在「适应窗口 / 实际大小」间切换，点空白处或 Esc 退出。 */
+  const lb = { scale: 1, x: 0, y: 0, natW: 0, natH: 0 };
+
+  function lbApply() {
+    const img = $("#lb-img");
+    img.style.width = Math.round(lb.natW * lb.scale) + "px";
+    img.style.transform = `translate(calc(-50% + ${lb.x}px), calc(-50% + ${lb.y}px))`;
+    $("#lb-pct").textContent = Math.round(lb.scale * 100) + "%";
+  }
+
+  function lbFit() {
+    const r = $("#lb-stage").getBoundingClientRect();
+    if (lb.natW && lb.natH) lb.scale = Math.min(r.width / lb.natW, r.height / lb.natH, 1);
+    lb.x = lb.y = 0;
+    lbApply();
+  }
+
+  function lbShow(src) {
+    const img = $("#lb-img");
+    $("#lightbox").hidden = false;
+    img.onload = () => { lb.natW = img.naturalWidth; lb.natH = img.naturalHeight; lbFit(); };
+    img.src = src;
+  }
+
+  function lbHide() {
+    const box = $("#lightbox");
+    if (box.hidden) return;
+    box.hidden = true;
+    $("#lb-img").removeAttribute("src");
+  }
+
+  function lbZoom(k, cx, cy) {
+    const r = $("#lb-stage").getBoundingClientRect();
+    if (cx == null) { cx = r.width / 2; cy = r.height / 2; }
+    const ns = Math.min(20, Math.max(0.02, lb.scale * k));
+    // 保持光标（或中心）下的那个图点不动
+    const px = cx - r.width / 2 - lb.x, py = cy - r.height / 2 - lb.y;
+    lb.x = cx - r.width / 2 - px * ns / lb.scale;
+    lb.y = cy - r.height / 2 - py * ns / lb.scale;
+    lb.scale = ns;
+    lbApply();
+  }
+
+  function bindLightbox() {
+    const stage = $("#lb-stage");
+    stage.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      const r = stage.getBoundingClientRect();
+      lbZoom(e.deltaY < 0 ? 1.2 : 1 / 1.2, e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    let pan = null;
+    stage.addEventListener("pointerdown", (e) => {
+      pan = { x: e.clientX, y: e.clientY, ox: lb.x, oy: lb.y, moved: false };
+      stage.classList.add("panning");
+      stage.setPointerCapture(e.pointerId);
+    });
+    stage.addEventListener("pointermove", (e) => {
+      if (!pan) return;
+      const dx = e.clientX - pan.x, dy = e.clientY - pan.y;
+      if (Math.abs(dx) + Math.abs(dy) > 4) pan.moved = true;
+      lb.x = pan.ox + dx; lb.y = pan.oy + dy;
+      lbApply();
+    });
+    stage.addEventListener("pointerup", (e) => {
+      const wasPan = pan && pan.moved;
+      pan = null;
+      stage.classList.remove("panning");
+      if (!wasPan && e.target === stage) lbHide();   // 点图片外的空白处退出
+    });
+    stage.addEventListener("dblclick", () => {
+      if (Math.abs(lb.scale - 1) < 0.01) lbFit();
+      else { lb.scale = 1; lb.x = lb.y = 0; lbApply(); }
+    });
+    $("#lb-in").addEventListener("click", () => lbZoom(1.25));
+    $("#lb-out").addEventListener("click", () => lbZoom(1 / 1.25));
+    $("#lb-fit").addEventListener("click", lbFit);
+    $("#lb-actual").addEventListener("click", () => { lb.scale = 1; lb.x = lb.y = 0; lbApply(); });
+    $("#lb-close").addEventListener("click", lbHide);
   }
 
   async function deleteIds(list) {
@@ -559,10 +647,23 @@
       document.addEventListener("keydown", (e) => {
         if (App.currentPage !== "outputs" || $("#out-detail").hidden) return;
         if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
+        if (!$("#lightbox").hidden) {   // 放大浏览开着时，Esc 只退放大
+          if (e.key === "Escape") lbHide();
+          return;
+        }
         if (e.key === "Escape") closeDetail();
         else if (e.key === "ArrowLeft") $("#od-prev").click();
         else if (e.key === "ArrowRight") $("#od-next").click();
       });
+
+      // 点详情抽屉外任意处退出（点网格里的图是切换/选择，不算退出；放大浏览层和弹窗也不算）
+      document.addEventListener("click", (e) => {
+        if (App.currentPage !== "outputs" || $("#out-detail").hidden) return;
+        if (e.target.closest("#out-detail, #lightbox, #modal-mask, .oc")) return;
+        closeDetail();
+      });
+
+      bindLightbox();
 
       App.on("outputs", "scan_progress", (e) => {
         scanning = true;
