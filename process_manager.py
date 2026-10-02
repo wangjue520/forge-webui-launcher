@@ -697,9 +697,12 @@ class InstanceRunner:
             self.log("\n[启动器] 读取进程输出时出错:\n" + traceback.format_exc()[-800:] + "\n")
         finally:
             rc = proc.wait()
-            # rc==0 是进程自己正常退出的：ComfyUI-Manager 装/卸节点后的自动重启
-            # 就是这么实现的（日志里一般带 restart 字样）。别把它当成异常停止。
-            manager_restart = rc == 0 and "restart" in self.output_tail.lower()
+            # 程序自己发起的重启（ComfyUI-Manager 装/卸节点后的自动重启，新旧版
+            # Manager 退出前都会打一行 "Restarting..."）是正常流程，不是崩溃。
+            # 不依赖返回码：旧版 Manager 在 Windows 上用 os.execv 重启，老进程的
+            # 退出码没有保证。注意这种重启后新 ComfyUI 进程可能已经脱管在后台
+            # 继续跑着，提示里别说死「必须重启」。
+            manager_restart = "restarting" in self.output_tail.lower()
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
             # 只收尾「自己这一代、自己这个进程」：gen 对不上，或 self.proc 已经
             # 换成新一轮启动的进程时，什么都不动——否则会把刚启动的进程状态清掉
@@ -708,9 +711,10 @@ class InstanceRunner:
                 self.url = None
                 self.port = None
                 if manager_restart:
-                    self.log("[启动器] 这是 ComfyUI-Manager 装/卸节点后的自动重启（正常流程）。"
-                             "节点已经生效，直接再点一次「启动」就能继续用。\n")
-                    self.set_status("stopped", "已正常退出（Manager 自动重启，重新启动即可）")
+                    self.log("[启动器] 这是程序自己的自动重启（ComfyUI-Manager 装/卸节点后就是这样重启的），"
+                             "不是崩溃。如果界面还能正常打开就不用管——新进程可能已在后台运行；"
+                             "打不开的话再点一次「启动」。\n")
+                    self.set_status("stopped", "已正常退出（自动重启）")
                 elif rc == 0:
                     self.set_status("stopped", "已正常退出")
                 else:
