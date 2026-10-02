@@ -145,9 +145,10 @@ def is_installed(node, comfy_dir, py):
         return False
     cn = custom_nodes_dir(comfy_dir)
     if node["id"] == MANAGER_ID:
-        if manager_pip_installed(py):
-            return True
-        # 老办法装在 custom_nodes 里的也算（新版 ComfyUI 启用内置 Manager 时会自动停用旧的）
+        # 支持内置 Manager 的新版 ComfyUI 会无视甚至拒绝 custom_nodes 里的旧版
+        # Manager（整合包常自带一个），那种情况下只有 pip 依赖装好才算真装上了
+        if manager_builtin_supported(comfy_dir):
+            return manager_pip_installed(py)
         return any(os.path.isdir(os.path.join(cn, f)) for f in ("comfyui-manager", "ComfyUI-Manager"))
     if os.path.isdir(os.path.join(cn, node["folder"])):
         return True
@@ -309,6 +310,20 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
         if nid == MANAGER_ID and manager_builtin_supported(comfy_dir):
             rc = pip(["-r", os.path.join(comfy_dir, "manager_requirements.txt")], comfy_dir, label)
             if rc == 0:
+                # custom_nodes 里的旧版 Manager（整合包常自带）会跟内置版冲突，
+                # 新版 ComfyUI 会报错拒载——改名停用（可逆：改回原名即恢复）
+                for old in ("ComfyUI-Manager", "comfyui-manager"):
+                    old_dir = os.path.join(cn, old)
+                    if os.path.isdir(old_dir):
+                        disabled = old_dir + ".disabled"
+                        try:
+                            if os.path.exists(disabled):
+                                shutil.rmtree(disabled, ignore_errors=True)
+                            os.rename(old_dir, disabled)
+                            log(f"[节点] 已停用 custom_nodes 里的旧版 Manager（{old} → {old}.disabled），"
+                                "避免和内置版冲突\n")
+                        except OSError as e:
+                            log(f"[节点] 旧版 Manager 文件夹改名失败（{e}），请手动删除 custom_nodes\\{old}\n")
                 log("[节点] ComfyUI-Manager 已安装，启动 ComfyUI 时会自动加 --enable-manager 启用\n")
                 res["ok"].append(nid)
             else:

@@ -697,6 +697,9 @@ class InstanceRunner:
             self.log("\n[启动器] 读取进程输出时出错:\n" + traceback.format_exc()[-800:] + "\n")
         finally:
             rc = proc.wait()
+            # rc==0 是进程自己正常退出的：ComfyUI-Manager 装/卸节点后的自动重启
+            # 就是这么实现的（日志里一般带 restart 字样）。别把它当成异常停止。
+            manager_restart = rc == 0 and "restart" in self.output_tail.lower()
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
             # 只收尾「自己这一代、自己这个进程」：gen 对不上，或 self.proc 已经
             # 换成新一轮启动的进程时，什么都不动——否则会把刚启动的进程状态清掉
@@ -704,7 +707,14 @@ class InstanceRunner:
                 self.proc = None
                 self.url = None
                 self.port = None
-                self.set_status("stopped", "已停止")
+                if manager_restart:
+                    self.log("[启动器] 这是 ComfyUI-Manager 装/卸节点后的自动重启（正常流程）。"
+                             "节点已经生效，直接再点一次「启动」就能继续用。\n")
+                    self.set_status("stopped", "已正常退出（Manager 自动重启，重新启动即可）")
+                elif rc == 0:
+                    self.set_status("stopped", "已正常退出")
+                else:
+                    self.set_status("stopped", f"已停止（返回码 {rc}）")
                 self.emit("state", running=False)
 
     # ---------------------------------------------------------- 停止 ----
