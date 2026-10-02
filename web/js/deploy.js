@@ -66,6 +66,8 @@
   function syncNodesCard() {
     const comfy = $("#deploy-branch").value === "comfyui";
     $("#deploy-nodes-card").hidden = !comfy;
+    // 「环境诊断」按 webui.bat/venv 结构检测，是 Forge 专属逻辑，ComfyUI 部署时用不上
+    $("#deploy-diag-card").hidden = comfy;
     if (comfy) loadNodeCatalog();
   }
   function selectedNodes() {

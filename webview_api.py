@@ -708,6 +708,12 @@ class LauncherApi:
 
     def get_state(self):
         local_ver = updater.get_local_info(self.cfg)
+        deploy_branches = [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS]
+        # 当前活动实例是 ComfyUI 时把 ComfyUI 排到第一位（Forge 用户顺序不变）：
+        # 纯 ComfyUI 用户打开部署页，默认选中的就该是 ComfyUI 而不是 Forge Neo。
+        # 常量本身不改——部署页初始化（web/js/deploy.js）按这份列表生成下拉框。
+        if self.cfg.get("webui_branch") == "comfyui":
+            deploy_branches.sort(key=lambda b: b["key"] != "comfyui")
         return {
             "ok": True,
             "config": self.cfg,
@@ -719,7 +725,7 @@ class LauncherApi:
             "launcher": {"version": local_ver["version"], "commit": local_ver["commit"]},
             "mirror_status": self._mirror_status_text(),
             "settings_schema": self._settings_schema(),
-            "deploy_branches": [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS],
+            "deploy_branches": deploy_branches,
             "settings_branches": [{"label": l, "key": k} for l, k in SETTINGS_BRANCH_OPTIONS],
         }
 
@@ -977,9 +983,11 @@ def _api_deploy_precheck(self, target, branch, use_portable):
     if not already_installed and os.path.isdir(target):
         entries = set(os.listdir(target))
         if entries and not entries <= RESUMABLE_ENTRIES:
+            # 按所选分支说 ComfyUI / WebUI，免得选 ComfyUI 的用户被 "WebUI" 绕晕
+            kind_name = "ComfyUI" if branch == "comfyui" else "WebUI"
             issues.append({
                 "level": "error",
-                "text": "该目录已存在内容但不是有效的 WebUI 安装，请换一个空目录。\n\n目录里有："
+                "text": f"该目录已存在内容但不是有效的 {kind_name} 安装，请换一个空目录。\n\n目录里有："
                         + "、".join(sorted(entries)[:8]) + ("……" if len(entries) > 8 else ""),
             })
 
@@ -4925,8 +4933,12 @@ def _api_launcher_update(self):
 
 def _api_launcher_restart(self):
     """更新完成后重启启动器：拉起 start一键启动.bat 再关掉当前窗口。"""
-    if self.webui_running() or self.deploy_running():
-        return {"ok": False, "error": "WebUI 或部署任务仍在运行，请先停止再重启启动器"}
+    # 提示里按实际在跑的实例类型说 ComfyUI / WebUI（label() 取自实例配置），
+    # 纯 ComfyUI 用户不该看到一句 "WebUI 仍在运行"
+    running_labels = sorted({r.label() for r in list(self._runners.values()) if r.running()})
+    busy = running_labels + (["部署任务"] if self.deploy_running() else [])
+    if busy:
+        return {"ok": False, "error": "、".join(busy) + " 仍在运行，请先停止再重启启动器"}
     try:
         bat = os.path.join(APP_DIR, "start一键启动.bat")
         if os.name == "nt" and os.path.exists(bat):

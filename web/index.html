@@ -123,7 +123,7 @@
     </nav>
     <div class="sidebar-footer">
       <div id="global-status" class="status-pill" data-state="idle">
-        <span class="dot"></span><span id="global-status-text">WebUI 未启动</span>
+        <span class="dot"></span><span id="global-status-text">未启动</span>
       </div>
     </div>
   </aside>
@@ -147,7 +147,8 @@
         <!-- 多实例：所有实例的状态卡片 -->
         <div class="inst-cards" id="launch-instances" hidden></div>
         <div class="card">
-          <div class="card-title"><span id="launch-root-title">WebUI 根目录</span><span class="card-title-hint" id="launch-root-hint">包含 webui.bat 的那个文件夹</span></div>
+          <!-- 初始文案只是 boot 前的兜底：applyKindTexts()（js/instances.js）会按实例类型覆盖 -->
+          <div class="card-title"><span id="launch-root-title">根目录</span><span class="card-title-hint" id="launch-root-hint">ComfyUI 是包含 main.py 的文件夹；WebUI 是包含 webui.bat 的文件夹</span></div>
           <div class="row">
             <input type="text" id="launch-root" data-cfg="webui_root" placeholder="留空，点击右侧「浏览…」选择所在文件夹">
             <button class="btn" id="launch-browse">浏览…</button>
@@ -398,7 +399,7 @@
         <div class="card">
           <div class="card-title">安装目录</div>
           <div class="row">
-            <input type="text" id="deploy-target" placeholder="选择一个空目录，或已有的 WebUI 安装目录">
+            <input type="text" id="deploy-target" placeholder="选择一个空目录，或已有的 WebUI / ComfyUI 安装目录">
             <button class="btn" id="deploy-browse">浏览…</button>
             <button class="btn" id="deploy-check">检测该目录</button>
           </div>
@@ -414,7 +415,9 @@
           <div class="hint">Python 来自 astral-sh/python-build-standalone（uv 底层用的同一套真正独立、可重定位的 CPython 构建，不是阉割过 venv 的官方 embeddable 包）；Git 来自 git-for-windows 官方 PortableGit。两者都是运行时从 GitHub 实时查询最新版本下载，体积加起来大概 100~150MB。勾选后即使系统一个都没装也能部署。</div>
         </div>
 
-        <div class="card">
+        <!-- 环境诊断是 Forge 专属逻辑（按 webui.bat/venv 结构检测），
+             部署分支选 comfyui 时由 deploy.js 的 syncNodesCard() 隐藏 -->
+        <div class="card" id="deploy-diag-card">
           <div class="card-title">环境诊断<span class="card-title-hint">对已有安装做检测/修复，不需要重新部署</span></div>
           <div class="hint">如果你是已有安装（比如秋叶整合包）想检查一下 venv 版本对不对，或者遇到过 "hashlib has no attribute 'file_digest'" 这个报错，用下面两个按钮就够了，不用走完整的克隆部署流程。</div>
           <div class="row">

@@ -33,3 +33,6 @@ git/
 
 # 启动器按配置自动生成的主题引导文件
 web/js/current_theme.js
+
+# 自动生成的快捷方式（含本机绝对路径，由 create_shortcuts.ps1 按需生成）
+*.lnk

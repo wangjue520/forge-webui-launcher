@@ -8,6 +8,18 @@ title WWY 启动器
 rem 不开 enabledelayedexpansion：路径里如果带 ! 会被吞掉，这个脚本也用不到它
 setlocal
 
+rem ---------- 首次运行：在桌面放一个带图标的快捷方式 ----------
+rem bat 本身不能带图标（Windows 只认 .lnk/.exe 的图标），所以用脚本生成一个
+rem 指向入口 bat 的桌面快捷方式，图标就是 wwy_launcher_icon.ico。
+rem 只建一次（flag 文件标记）；用户手动删掉桌面图标后不会再自动重建。
+rem 任何一步失败都静默跳过，绝不影响正常启动。
+if not exist "%~dp0launcher_data\desktop_shortcut.flag" (
+    if exist "%~dp0create_shortcuts.ps1" (
+        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0create_shortcuts.ps1" -DesktopOnly >nul 2>nul
+    )
+    echo done>"%~dp0launcher_data\desktop_shortcut.flag" 2>nul
+)
+
 rem ===================================================================
 rem  启动入口：自己把环境准备好，用户只需要双击这一个文件。
 rem
