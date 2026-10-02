@@ -24,6 +24,7 @@ import config_manager as cm
 from webview_api import LauncherApi
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+ICON_PATH = os.path.join(APP_DIR, "wwy_launcher_icon.ico")
 
 
 def _patch_http_server_backlog():
@@ -131,7 +132,8 @@ def main():
 
     window.events.closing += on_closing
 
-    webview.start(lambda: _bind_dom_events(window, api))
+    webview.start(lambda: _bind_dom_events(window, api),
+                  icon=ICON_PATH if os.path.isfile(ICON_PATH) else None)
 
 
 if __name__ == "__main__":
