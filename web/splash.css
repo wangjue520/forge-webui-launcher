@@ -413,3 +413,292 @@
 @media (prefers-reduced-motion: reduce) {
   .lq-b { animation: none; }
 }
+
+/* ============================================================
+   矢量突破开屏（themes.js 里 splash: "vector"，js/splash.js 的 vectorSplash）
+   性能约定：所有运动只用 transform / opacity（合成器线程上跑，主线程忙也不掉帧）；
+            带滤镜的元素内容保持静止；不做字距 / 宽高 / 位置属性的动画。
+   缓动：
+     --vs-expo   快速冲出、长长地减速停稳（光条、唱片、镜头）
+     --vs-spring 带一点过冲回弹（软球、箭头头、准星）
+     --vs-rise   文字升起：起步快、收尾柔
+     --vs-in     撤场时的加速推近
+   ============================================================ */
+#splash.sp-vector {
+  --vs-paper: #ecefef; --vs-ink: #101a1b; --vs-cy: #1ec8cc; --vs-cy-deep: #087f83; --vs-hl: #ffe100;
+  --vs-grot: "WWY Grotesk", "Helvetica Neue", Helvetica, Arial, "WWY Sans SC", sans-serif;
+  --vs-expo: cubic-bezier(.16, 1, .3, 1);
+  --vs-spring: cubic-bezier(.34, 1.56, .64, 1);
+  --vs-rise: cubic-bezier(.2, .85, .15, 1);
+  --vs-inout: cubic-bezier(.65, 0, .35, 1);
+  --vs-in: cubic-bezier(.7, 0, .84, 0);
+  background: radial-gradient(ellipse 80% 70% at 30% 25%, #f8fafa, #e6ecec 70%, #dbe3e3);
+  font-family: var(--vs-grot); color: var(--vs-ink);
+  transition: opacity .42s ease;
+}
+#splash.sp-vector.vs-out2 { opacity: 0; }
+
+/* 细网点（静止） */
+.vs-dots { position: absolute; inset: 0; opacity: 0; transition: opacity .6s ease;
+  background: radial-gradient(rgba(16, 26, 27, .09) .9px, transparent 1.1px) 0 0 / 12px 12px; }
+.vs-1 .vs-dots { opacity: 1; }
+
+/* 镜头：整段从 1.07 倍缓慢拉远，远景层再额外横移一点 —— 画面始终在「呼吸」 */
+.vs-stage { position: absolute; inset: 0; will-change: transform, opacity; transform: scale(1.07); }
+.vs-1 .vs-stage { transform: scale(1); transition: transform 3.6s cubic-bezier(.22, .61, .36, 1); }
+.vs-far, .vs-mid { position: absolute; inset: 0; will-change: transform; }
+.vs-far { transform: translate3d(3vw, 0, 0); }
+.vs-1 .vs-far { transform: none; transition: transform 3.2s cubic-bezier(.22, .61, .36, 1); }
+.vs-mid { transform: translate3d(-1.5vw, 0, 0); }
+.vs-1 .vs-mid { transform: none; transition: transform 2.6s cubic-bezier(.22, .61, .36, 1); }
+/* 撤场：先轻轻缩一下（预备），再加速推近、淡出 */
+.vs-out0 .vs-stage { transform: scale(.985); transition: transform .17s cubic-bezier(.3, 0, .2, 1); }
+.vs-out1 .vs-stage { transform: scale(1.14); opacity: 0;
+  transition: transform .62s var(--vs-in), opacity .38s ease .14s; }
+
+/* 四角准星：旋转弹入 */
+.vs-cross { position: absolute; width: 30px; height: 30px; opacity: 0; transform: scale(.3) rotate(-90deg);
+  transition: opacity .3s ease, transform .7s var(--vs-spring);
+  background:
+    linear-gradient(var(--vs-cy), var(--vs-cy)) center / 100% 1.6px no-repeat,
+    linear-gradient(var(--vs-cy), var(--vs-cy)) center / 1.6px 100% no-repeat; }
+.vs-cross.x1 { left: 3vw; top: 4vh; } .vs-cross.x2 { right: 3vw; top: 4vh; transition-delay: .05s; }
+.vs-cross.x3 { left: 3vw; bottom: 4vh; transition-delay: .1s; } .vs-cross.x4 { right: 3vw; bottom: 4vh; transition-delay: .15s; }
+.vs-1 .vs-cross { opacity: .9; transform: none; }
+.vs-out1 .vs-cross { opacity: 0; transform: scale(1.6); transition: opacity .3s ease, transform .5s var(--vs-in); }
+
+/* 两列虚线小箭头：位移循环一个周期（合成器动画） */
+.vs-arrows { position: absolute; top: 0; bottom: 0; width: 40px; overflow: hidden; opacity: 0; transition: opacity .8s ease .15s;
+  -webkit-mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent);
+          mask-image: linear-gradient(transparent, #000 12%, #000 88%, transparent); }
+.vs-arrows::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: calc(100% + 38px); will-change: transform;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='38'%3E%3Cpath d='M12 12L4 4M4 4h5M4 4v5' fill='none' stroke='%231ec8cc' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") 0 0 / 16px 38px repeat-y,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='38'%3E%3Cpath d='M14 8H3M3 8l4-3.5M3 8l4 3.5' fill='none' stroke='%231ec8cc' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E") 22px 19px / 16px 38px repeat-y;
+  animation: vsArrows .55s linear infinite; }
+.vs-arrows-l { left: 31vw; } .vs-arrows-r { left: 57vw; }
+.vs-arrows-r::before { animation-duration: .8s; }
+.vs-1 .vs-arrows { opacity: .7; }
+@keyframes vsArrows { to { transform: translate3d(0, -38px, 0); } }
+
+/* 等高环：滤镜结果静止，只做「由小放大浮现」+ 两道波纹 */
+.vs-rings-wrap { position: absolute; left: 22vw; top: 50%; width: 96vh; height: 96vh; margin-top: -44vh;
+  opacity: 0; transform: scale(.8) rotate(-8deg); will-change: transform, opacity; }
+.vs-2 .vs-rings-wrap { opacity: 1; transform: none; transition: opacity 1s ease, transform 2.2s var(--vs-expo); }
+.vs-rings { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.vs-rings circle { fill: none; stroke: var(--vs-cy); stroke-width: 1; stroke-opacity: .5; }
+.vs-rings circle.mj { stroke-width: 1.8; stroke-opacity: .85; }
+.vs-ripple { position: absolute; left: 50%; top: 50%; width: 70%; height: 70%; margin: -35% 0 0 -35%; border-radius: 50%;
+  border: 2px solid rgba(30, 200, 204, .7); opacity: 0; transform: scale(.15); }
+.vs-2 .vs-ripple { animation: vsRipple 1.9s var(--vs-expo) forwards; }
+.vs-2 .vs-ripple.r2 { animation-delay: .32s; }
+@keyframes vsRipple { 0% { opacity: .9; transform: scale(.15); } 100% { opacity: 0; transform: scale(1.35); } }
+
+/* 立体场景（js/vector-scene.js）；vs-hold 时按住入场动画 */
+.vs-scene { z-index: 0; }
+.vs-hold .vb3-it { animation-play-state: paused; }
+
+/* 三条青色光条：从屏幕外「射」进来，急刹停稳；停稳后一道高光扫过 */
+.vs-bars { position: absolute; left: 0; top: 49vh; width: 48vw; }
+.vs-bar { display: block; position: relative; height: 13px; border-radius: 0 13px 13px 0; margin-bottom: 21px;
+  background: linear-gradient(90deg, #12b1b6, var(--vs-cy) 55%, #5edcdf);
+  box-shadow: 0 8px 16px -6px rgba(20, 180, 185, .55);
+  overflow: hidden; transform: translate3d(-101%, 0, 0); will-change: transform; }
+.vs-bar.b1 { width: 100%; } .vs-bar.b2 { width: 96%; } .vs-bar.b3 { width: 90%; }
+.vs-3 .vs-bar { transform: none; transition: transform .95s var(--vs-expo); }
+.vs-3 .vs-bar.b2 { transition-delay: .07s; } .vs-3 .vs-bar.b3 { transition-delay: .14s; }
+.vs-bar::after { content: ""; position: absolute; top: 0; bottom: 0; width: 26%; left: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .75), transparent);
+  transform: translate3d(-110%, 0, 0); }
+.vs-4 .vs-bar::after { transform: translate3d(420%, 0, 0); transition: transform 1.1s var(--vs-inout); }
+.vs-4 .vs-bar.b2::after { transition-delay: .08s; } .vs-4 .vs-bar.b3::after { transition-delay: .16s; }
+
+/* 折返箭头：描线 + 箭头头弹出 */
+.vs-bend { position: absolute; left: 0; top: calc(49vh + 96px); width: 27vw; height: 10vw; overflow: visible; }
+.vs-bend path:first-child { fill: none; stroke: var(--vs-cy); stroke-width: 13; stroke-linecap: round; stroke-linejoin: round;
+  stroke-dasharray: 1; stroke-dashoffset: 1; }
+.vs-3 .vs-bend path:first-child { stroke-dashoffset: 0; transition: stroke-dashoffset .7s var(--vs-inout) .18s; }
+.vs-bend .hd { fill: var(--vs-cy); stroke: var(--vs-cy); stroke-width: 5; stroke-linejoin: round;
+  transform-box: fill-box; transform-origin: 30% 30%; transform: scale(0) rotate(-30deg); }
+.vs-3 .vs-bend .hd { transform: none; transition: transform .5s var(--vs-spring) .82s; }
+
+/* 软球簇：一颗颗弹出（过冲回弹），之后各自浮动 */
+.vs-balls { position: absolute; left: 47vw; top: 46vh; width: 32vh; height: 26vh; margin-left: -16vh; }
+.vs-ball { position: absolute; width: var(--s); height: var(--s); margin: calc(var(--s) / -2) 0 0 calc(var(--s) / -2);
+  transform: scale(0); will-change: transform; }
+.vs-4 .vs-ball { transform: none; transition: transform .75s var(--vs-spring) var(--d); }
+.vs-ball b { position: absolute; inset: 0; border-radius: 50%;
+  background: radial-gradient(circle at 34% 28%, #fff 0%, #e2f8f9 10%, rgba(160, 232, 234, .95) 34%, #4fcfd3 70%, #23b4b9 100%);
+  box-shadow: inset -.6vh -.9vh 1.4vh rgba(0, 92, 96, .22), 0 1.6vh 2.2vh -1vh rgba(8, 92, 96, .45);
+  animation: vsBob var(--bp, 4s) ease-in-out infinite alternate; will-change: transform; }
+@keyframes vsBob { to { transform: translate3d(0, var(--by, -6px), 0); } }
+
+/* 立体唱片：带旋转从右侧滑入、长减速停稳；本体静止（光源不该跟着转），只有刻度环在转 */
+.vs-disc { position: absolute; right: -15vh; top: 50%; width: 70vh; height: 70vh; margin-top: -33vh;
+  opacity: 0; transform: translate3d(55%, 0, 0) rotate(-40deg) scale(.9); will-change: transform, opacity; }
+.vs-5 .vs-disc { opacity: 1; transform: none; transition: transform 1.25s var(--vs-expo), opacity .35s ease; }
+.vs-disc > * { position: absolute; inset: 0; width: 100%; height: 100%; }
+.vs-disc-shadow { border-radius: 50%; inset: 1.5% !important; width: auto !important; height: auto !important;
+  box-shadow: 0 4vh 6vh -1vh rgba(8, 40, 42, .45), 0 1vh 2vh rgba(8, 40, 42, .25); }
+.vs-ticks { will-change: transform; animation: vsSpin 14s linear infinite; }
+.vs-ticks line { stroke: rgba(233, 240, 240, .32); stroke-width: 1.4; }
+@keyframes vsSpin { to { transform: rotate(360deg); } }
+.vs-arcsvg { transform: rotate(-90deg); }
+.vs-arcsvg .arc { fill: none; stroke: var(--vs-cy); stroke-width: 20; stroke-linecap: round; }
+.vs-glow { left: 64% !important; top: 36% !important; width: 18% !important; height: 26% !important; border-radius: 50%;
+  background: var(--vs-cy); filter: blur(22px); opacity: 0; will-change: opacity, transform; }
+.vs-5 .vs-glow { animation: vsGlow 2.6s ease-in-out .5s infinite alternate both; }
+@keyframes vsGlow { from { opacity: .35; transform: translate3d(0, 4%, 0); } to { opacity: .85; transform: translate3d(0, -4%, 0); } }
+.vs-wave path { fill: none; stroke: #e9eeee; stroke-width: 2; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.vs-5 .vs-wave path { stroke-dashoffset: 0; transition: stroke-dashoffset 1.1s var(--vs-inout) .45s; }
+.vs-wave .hub { fill: #e9eeee; } .vs-wave .hub2 { fill: none; stroke: #e9eeee; stroke-width: 1.4; stroke-dasharray: 3 3; }
+.vs-pct { inset: auto !important; width: auto !important; height: auto !important; left: 50% !important; top: 66% !important;
+  transform: translateX(-50%); display: flex; align-items: baseline; gap: 6px;
+  color: rgba(233, 238, 238, .7); font: 400 11px var(--vs-grot); letter-spacing: -.01em; }
+.vs-pct b { font: 400 30px/1 var(--vs-grot); letter-spacing: -.05em; color: var(--vs-cy); font-variant-numeric: tabular-nums; }
+
+/* 左上角大字排版：逐字升起（错峰），整行同时从略宽收紧（用 scaleX，不动字距） */
+.vs-type { position: absolute; left: 5.5vw; top: 10vh; z-index: 2;
+  display: grid; grid-template-columns: 7.4vw auto; align-items: start;
+  --big: clamp(54px, 7.4vw, 118px); }
+.vs-lab { font: 400 clamp(9px, .85vw, 12px)/1 var(--vs-grot); letter-spacing: -.01em; text-transform: uppercase;
+  color: var(--vs-cy); padding-top: .25em; opacity: 0; transform: translate3d(-8px, 0, 0); }
+.vs-6 .vs-lab { opacity: 1; transform: none; transition: opacity .4s ease, transform .6s var(--vs-expo); }
+.vs-6 .vs-lab.r2 { transition-delay: .06s; } .vs-6 .vs-lab.r3 { transition-delay: .12s; }
+.vs-big { font: 400 var(--big)/.74 var(--vs-grot); letter-spacing: -.065em; color: var(--vs-cy); white-space: nowrap;
+  overflow: hidden; padding: .03em .1em .05em 0; margin-left: -.04em; }
+.vs-line { display: inline-block; transform-origin: 0 100%; transform: scaleX(1.1); }
+.vs-6 .vs-line { transform: none; transition: transform 1.1s var(--vs-expo); }
+.vs-line .ch { display: inline-block; transform: translate3d(0, 112%, 0); will-change: transform; }
+.vs-6 .vs-line .ch { transform: none; transition: transform .8s var(--vs-rise) calc(var(--i) * 22ms); }
+.vs-big.r3 { margin-top: .22em; }
+.vs-lab.r3 { padding-top: calc(.22 * var(--big) + .25em); }
+.vs-q { margin-left: .3em; letter-spacing: -.02em; }
+.vs-q b { font-weight: 400; display: inline-block; min-width: .55em; text-align: center; }
+.vs-under { grid-column: 2; margin-top: calc(-.11 * var(--big)); position: relative;
+  font: 400 calc(var(--big) * .2)/1 var(--vs-grot); letter-spacing: -.05em; color: var(--vs-cy); white-space: nowrap;
+  opacity: 0; transform: translate3d(-16px, 0, 0); }
+.vs-6 .vs-under { opacity: 1; transform: none; transition: opacity .5s ease .4s, transform .9s var(--vs-expo) .4s; }
+.vs-cn { grid-column: 2; margin-top: calc(var(--big) * .14);
+  font: 900 calc(var(--big) * .3)/1 "WWY Sans SC", "Microsoft YaHei UI", sans-serif; letter-spacing: .04em; color: var(--vs-ink);
+  opacity: 0; transform: translate3d(0, 14px, 0); }
+.vs-6 .vs-cn { opacity: 1; transform: none; transition: opacity .5s ease .5s, transform .8s var(--vs-expo) .5s; }
+.vs-node { position: absolute; left: 7.4vw; top: -5.4vh; display: flex; align-items: center; gap: 6px;
+  font: 400 clamp(13px, 1.4vw, 20px)/1 var(--vs-grot); letter-spacing: -.05em; color: var(--vs-cy);
+  opacity: 0; transform: translate3d(0, 8px, 0); }
+.vs-6 .vs-node { opacity: 1; transform: none; transition: opacity .4s ease, transform .7s var(--vs-expo); }
+.vs-node i { width: 46px; height: 15px;
+  background:
+    radial-gradient(circle at 7.5px 7.5px, var(--vs-cy) 7.5px, transparent 8px),
+    radial-gradient(circle at 21.5px 7.5px, var(--vs-cy) 7.5px, transparent 8px),
+    radial-gradient(circle at 35.5px 7.5px, var(--vs-cy) 7.5px, transparent 8px); }
+
+/* 左下角玻璃日志卡：浮起，行逐条滑入 */
+.vs-log { position: absolute; left: calc(5.5vw - 14px); bottom: calc(6vh - 12px); z-index: 2; display: flex; flex-direction: column; gap: 4px;
+  padding: 14px 18px 14px 14px; border-radius: 16px; min-width: 300px;
+  font: 400 clamp(9px, .8vw, 12px)/1 var(--vs-grot); letter-spacing: -.01em; color: var(--vs-ink);
+  background: linear-gradient(150deg, rgba(255, 255, 255, .78), rgba(255, 255, 255, .5));
+  border: 1px solid rgba(255, 255, 255, .85);
+  -webkit-backdrop-filter: blur(14px) saturate(150%); backdrop-filter: blur(14px) saturate(150%);
+  box-shadow: 0 1px 0 #fff inset, 0 20px 40px -20px rgba(10, 70, 74, .4);
+  opacity: 0; transform: translate3d(0, 18px, 0) scale(.97); transform-origin: left bottom; }
+.vs-7 .vs-log { opacity: 1; transform: none; transition: opacity .45s ease, transform .9s var(--vs-expo); }
+.vs-log .row { display: flex; align-items: center; gap: 8px; opacity: 0; transform: translate3d(-12px, 0, 0); }
+.vs-log .row.show { opacity: 1; transform: none; transition: opacity .3s ease, transform .6s var(--vs-expo); }
+.vs-log span { color: var(--vs-cy-deep); min-width: 52px; }
+.vs-log .row i { width: 46px; border-top: 1px dashed rgba(16, 26, 27, .3); }
+.vs-log em { font-style: normal; color: var(--vs-cy-deep); }
+.vs-log .vs-bridge em { color: #8a9799; animation: vsBlink 1.1s ease-in-out infinite; }
+.vs-log .vs-bridge.ok em { color: #05393b; background: linear-gradient(135deg, #6fe0e2, var(--vs-cy)); padding: 2px 7px; border-radius: 99px;
+  animation: vsPop .5s var(--vs-spring); box-shadow: 0 0 10px rgba(30, 200, 204, .55); }
+@keyframes vsBlink { 50% { opacity: .3; } }
+@keyframes vsPop { from { transform: scale(.6); } }
+.vs-note { display: flex; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(16, 26, 27, .07);
+  font: 400 clamp(8px, .75vw, 11px)/1.3 var(--vs-grot); letter-spacing: -.02em; color: var(--vs-cy-deep); }
+.vs-note i { width: 6px; height: 6px; border-radius: 50%; background: var(--vs-cy); margin-top: 2px; flex: none; box-shadow: 0 0 6px var(--vs-cy); }
+
+.vs-skip { position: absolute; right: 3vw; bottom: calc(4vh + 40px); z-index: 2;
+  font: 400 10px var(--vs-grot); letter-spacing: .02em; color: rgba(233, 238, 238, .6); opacity: 0; transition: opacity .4s ease; }
+.vs-ready .vs-skip { opacity: 1; }
+
+/* 撤场白光：从中心化开（只动透明度 / 缩放） */
+.vs-veil { position: absolute; inset: -20%; z-index: 6; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .95), rgba(240, 248, 248, .85) 40%, rgba(236, 242, 242, 0) 75%);
+  transform: scale(.6); will-change: transform, opacity; }
+.vs-out1 .vs-veil { opacity: 1; transform: scale(1.4); transition: opacity .3s ease, transform .7s var(--vs-expo); }
+.vs-out2 .vs-veil { opacity: 0; transition: opacity .42s ease; }
+
+/* 开屏期间，主界面的立体场景按住不动（撤场时才飘入，和开屏衔接成一个镜头） */
+:root.vb-splash #vb-deco .vb3-it { animation-play-state: paused; }
+
+@media (prefers-reduced-motion: reduce) {
+  .vs-arrows::before, .vs-ticks, .vs-glow, .vs-ball b, .vs-ripple { animation: none !important; }
+  .vs-1 .vs-stage, .vs-1 .vs-far, .vs-1 .vs-mid { transition: none; }
+}
+
+/* 离线渲染开屏视频时（tools/render_vector_splash.py 给 <html> 加 vs-render）：
+   会变的内容（版本号、跳过提示）不进视频，播放时由 HTML 叠加 */
+:root.vs-render .vs-num, :root.vs-render .vs-verw, :root.vs-render .vs-skip { visibility: hidden; }
+:root.vs-render .vs-log .vs-bridge em { animation: none !important; }
+
+/* ============================================================
+   矢量突破开屏 · 视频版（js/splash.js 的 vectorVideoSplash，默认）
+   画面是预渲染视频；盒子按视频比例铺满窗口（等同 object-fit: cover），
+   叠加层用盒子的百分比定位，任何窗口尺寸下都和视频画面对齐。
+   ============================================================ */
+#splash.sp-vector-video {
+  --vv-cy: #1ec8cc;
+  --vv-grot: "WWY Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  background: #e9eeee; overflow: hidden;
+  transition: opacity .42s ease;
+}
+#splash.sp-vector-video.vv-out2 { opacity: 0; }
+.vv-box {
+  /* 等同 object-fit: cover，但横向靠左：窗口比视频「瘦」时裁掉右边的唱片，不裁左边的大字 */
+  position: absolute; left: 0; top: 50%;
+  width: max(100vw, calc(100vh * var(--ar))); height: max(100vh, calc(100vw / var(--ar)));
+  transform: translate(0, -50%); will-change: transform, opacity;
+  container-type: size;
+}
+.vv-poster, .vv-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.vv-video { opacity: 0; }
+.vv-playing .vv-video { opacity: 1; }
+.vv-playing .vv-poster { visibility: hidden; }
+
+/* 版本号叠加：与视频里大字同字体、同字号、同缓动升起 */
+.vv-num { position: absolute; overflow: hidden; text-align: center;
+  font: 400 var(--big)/1 var(--vv-grot); letter-spacing: -.02em; color: var(--vv-cy);
+  display: flex; align-items: flex-end; justify-content: center; }
+.vv-num b { font-weight: 400; display: block; line-height: .74; padding-bottom: .02em;
+  transform: translate3d(0, 112%, 0); will-change: transform; }
+.vv-num-in .vv-num b { transform: none; transition: transform .8s cubic-bezier(.2, .85, .15, 1); }
+.vv-ver { position: absolute; white-space: nowrap;
+  font: 400 var(--small)/1 var(--vv-grot); letter-spacing: -.05em; color: var(--vv-cy);
+  display: flex; align-items: center;
+  opacity: 0; transform: translate3d(-16px, 0, 0); }
+.vv-ver b { font-weight: 400; }
+.vv-ver-in .vv-ver { opacity: 1; transform: none; transition: opacity .5s ease, transform .9s cubic-bezier(.16, 1, .3, 1); }
+
+/* 视频播完但后端还没就绪：盖住日志卡里 SYNC-03 的 CONNECTED，改显示闪烁的 WAITING */
+.vv-bridge { position: absolute; display: flex; align-items: center; justify-content: center; gap: .5em;
+  margin: -3px -8px -3px -5px; padding: 3px 8px 3px 5px; border-radius: 99px; white-space: nowrap;
+  font: 400 calc(var(--small) * .56)/1 var(--vv-grot); letter-spacing: -.01em; color: #6f7f82;
+  background: #f4f8f8; box-shadow: 0 0 0 1px rgba(16, 26, 27, .08);
+  opacity: 0; transition: opacity .3s ease; }
+.vv-bridge i { width: .55em; height: .55em; border-radius: 50%; background: var(--vv-cy); box-shadow: 0 0 6px var(--vv-cy);
+  animation: vvBlink 1.1s ease-in-out infinite; }
+@keyframes vvBlink { 50% { opacity: .25; } }
+.vv-waiting .vv-bridge { opacity: 1; }
+.vv-skip { position: absolute; right: 3.2%; bottom: 8%; font: 400 10px var(--vv-grot); color: rgba(233, 238, 238, .65);
+  opacity: 0; transition: opacity .4s ease; }
+.vv-ready .vv-skip { opacity: 1; }
+
+/* 撤场：预备收缩 → 加速推近 + 白光化开 → 淡出（只有一个图层在动） */
+.vv-out0 .vv-box { transform: translate(0, -50%) scale(.985); transition: transform .17s cubic-bezier(.3, 0, .2, 1); }
+.vv-out1 .vv-box { transform: translate(0, -50%) scale(1.14); opacity: 0;
+  transition: transform .62s cubic-bezier(.7, 0, .84, 0), opacity .38s ease .14s; }
+.vv-veil { position: absolute; inset: -20%; z-index: 6; pointer-events: none; opacity: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .95), rgba(240, 248, 248, .85) 40%, rgba(236, 242, 242, 0) 75%);
+  transform: scale(.6); will-change: transform, opacity; }
+.vv-out1 .vv-veil { opacity: 1; transform: scale(1.4); transition: opacity .3s ease, transform .7s cubic-bezier(.16, 1, .3, 1); }
+.vv-out2 .vv-veil { opacity: 0; transition: opacity .42s ease; }

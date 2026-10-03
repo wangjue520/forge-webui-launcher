@@ -1,0 +1,80 @@
+/* vector-scene.css — 「矢量突破」立体背景场景（js/vector-scene.js 生成），主界面与开屏共用
+   index.html 静态引入：只作用于 .vb3d 内部，其它风格下不存在这些元素，零影响。
+   性能约定：所有动画只动 transform / opacity；模糊（filter）放在内容静止的 .vb3-blur 上，
+   位移放在它外面的 .vb3-float / .vb3-it 上 —— 模糊只算一次，之后是合成器在搬贴图。 */
+.vb3d {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  --px: 0px;                              /* 视差：vector.js 翻页时改它 */
+}
+/* 柔光：让画面「透气」 */
+.vb3-haze {
+  position: absolute; inset: -10%;
+  background:
+    radial-gradient(ellipse 55% 45% at 38% 40%, rgba(255, 255, 255, .85), transparent 70%),
+    radial-gradient(ellipse 40% 35% at 78% 70%, rgba(198, 241, 242, .55), transparent 70%);
+}
+.vb3-it {
+  position: absolute; width: 0; height: 0;
+  opacity: var(--o, 1);
+  transform: translate3d(calc(var(--px) * var(--dz, 1)), 0, 0);
+  transition: transform 1.4s cubic-bezier(.16, 1, .3, 1);
+  animation: vb3In 1.5s cubic-bezier(.16, 1, .3, 1) var(--k, 0s) backwards;
+}
+@keyframes vb3In { from { opacity: 0; transform: translate3d(0, 46px, 0) scale(.82); } }
+.vb3-float, .vb3-blur { position: absolute; left: 0; top: 0; }
+.vb3-float { will-change: transform; }
+.vb3-live .vb3-float { animation: vb3Float var(--fp, 10s) ease-in-out var(--fd, 0s) infinite alternate; }
+@keyframes vb3Float { to { transform: translate3d(0, var(--fy, 10px), 0); } }
+
+/* ---------- 立体方块：浅青哑光板，带接缝线 ---------- */
+.vb3-box {
+  position: absolute; transform-style: preserve-3d;
+  transform: translate(-50%, -50%) rotateX(var(--rx)) rotateY(var(--ry)) rotateZ(var(--rz));
+}
+.vb3-blur:has(> .vb3-box) { perspective: 1100px; }
+.vb3-live .vb3-box.spin { animation: vb3Turn 16s ease-in-out var(--fd, 0s) infinite alternate; }
+@keyframes vb3Turn {
+  to { transform: translate(-50%, -50%) rotateX(calc(var(--rx) + 7deg)) rotateY(calc(var(--ry) + 16deg)) rotateZ(var(--rz)); }
+}
+.vb3-f {
+  position: absolute; backface-visibility: hidden;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .45);
+}
+.vb3-f.fr { background: linear-gradient(155deg, #a4e9eb 0%, #6fd7da 55%, #55cdd1 100%); }
+.vb3-f.bk { background: #3cbcc0; }
+.vb3-f.tp { background: linear-gradient(180deg, #e2f9f9, #b4eeef); }
+.vb3-f.bt { background: #2fb3b8; }
+.vb3-f.rt { background: linear-gradient(180deg, #4fc8cc, #2cb2b7); }
+.vb3-f.lt { background: linear-gradient(180deg, #8de0e2, #62d1d4); }
+/* 正面 / 顶面的接缝线（PV 里方块上的面板分割） */
+.vb3-f.fr::before, .vb3-f.tp::before {
+  content: ""; position: absolute; inset: 12%;
+  border: 1px solid rgba(255, 255, 255, .55); border-radius: 2px;
+  box-shadow: 0 0 0 1px rgba(20, 120, 125, .12);
+}
+.vb3-f.fr::after {
+  content: ""; position: absolute; left: 12%; right: 12%; top: 50%; height: 0;
+  border-top: 1px solid rgba(255, 255, 255, .4);
+}
+
+/* ---------- 软球：高光 + 底部反光（纯渐变，无滤镜） ---------- */
+.vb3-ball {
+  position: absolute; transform: translate(-50%, -50%); border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 28%, #ffffff 0%, #e2f8f9 10%, rgba(160, 232, 234, .95) 34%, #4fcfd3 70%, #23b4b9 100%);
+  box-shadow:
+    inset -8px -12px 22px rgba(0, 92, 96, .22),
+    inset 6px 8px 14px rgba(255, 255, 255, .45),
+    0 22px 34px -16px rgba(8, 92, 96, .4);
+  opacity: .94;
+}
+.vb3-ball::after {
+  content: ""; position: absolute; left: 22%; right: 22%; bottom: 8%; height: 18%;
+  border-radius: 50%; background: radial-gradient(ellipse, rgba(255, 255, 255, .5), transparent 70%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vb3-it, .vb3-live .vb3-float, .vb3-live .vb3-box.spin { animation: none !important; }
+  .vb3-it { transition: none; }
+}

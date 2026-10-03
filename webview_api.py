@@ -4932,7 +4932,7 @@ def _api_launcher_update(self):
 
 
 def _api_launcher_restart(self):
-    """更新完成后重启启动器：拉起 start一键启动.bat 再关掉当前窗口。"""
+    """更新完成后重启启动器：拉起 启动WWY启动器.bat 再关掉当前窗口。"""
     # 提示里按实际在跑的实例类型说 ComfyUI / WebUI（label() 取自实例配置），
     # 纯 ComfyUI 用户不该看到一句 "WebUI 仍在运行"
     running_labels = sorted({r.label() for r in list(self._runners.values()) if r.running()})
@@ -4940,7 +4940,7 @@ def _api_launcher_restart(self):
     if busy:
         return {"ok": False, "error": "、".join(busy) + " 仍在运行，请先停止再重启启动器"}
     try:
-        bat = os.path.join(APP_DIR, "start一键启动.bat")
+        bat = os.path.join(APP_DIR, "启动WWY启动器.bat")
         if os.name == "nt" and os.path.exists(bat):
             os.startfile(bat)  # noqa: S606 - 拉起本启动器自己的 bat
         else:

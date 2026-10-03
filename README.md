@@ -4,7 +4,7 @@
 一个启动器同时管理 **ComfyUI** 和 **Forge WebUI**（Neo / Classic），支持多实例同时运行；只用一个的话界面和以前一样简单。
 界面用 HTML/CSS/JS 实现（WebView2 渲染），可切换界面风格（默认"终末地 · 工业终端"，另有"极简"）。
 
-> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `start一键启动.bat` (or place `启动WWY启动器.bat` next to the folder and use that), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
+> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `启动WWY启动器.bat` (works both inside the folder and next to it), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
 
 ---
 
@@ -69,7 +69,7 @@ D:\forge-launcher\
 └─ 启动WWY启动器.bat         ← 把压缩包里的这个 bat 移到文件夹旁边，以后双击它
 ```
 
-`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `forge-webui-launcher` 文件夹），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的 `start一键启动.bat` 效果完全一样。
+`启动WWY启动器.bat` 是唯一的启动入口：放在文件夹**旁边**也能用（它会自动转交文件夹里的本体），普通用户永远不需要打开启动器文件夹。首次双击还会自动在桌面生成一个带图标的快捷方式，以后点桌面图标即可。
 
 ### 二、第一次双击 bat
 
@@ -205,8 +205,11 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 | 终末地 · 工业终端（默认） | 浅灰工业纸面 + 柠檬黄高亮，带开屏动画 |
 | 极简 · 浅色 / 极简 · 深色 | 细线小圆角、无装饰、靛蓝点缀，无开屏动画 |
 | 液态玻璃 · 浅色 / 液态玻璃 · 深色 | 仿 iOS 26 / macOS 26 Liquid Glass：侧栏、顶部标题胶囊、提示条是透明玻璃，边缘真的会折射背后的画面（带轻微色散）；内容卡片是接近不透明的分组材质；缓慢流动的绸带壁纸；大标题滚动时缩进顶部胶囊；苹果系统配色，随附 Inter + 思源黑体子集字体（SIL OFL）；带自己的开屏动画 |
+| 矢量突破 · 青色拟生态 | 致敬明日方舟 × 塞壬唱片「矢量突破」PV 的视觉语言（非官方，不含官方标志）：侧栏、页头、卡片、弹窗都是毛玻璃，透出后面虚化的立体场景（浅青方块和软球，远 / 中 / 近三层，翻页时视差滑动）；大圆角、柔和投影，按钮像有厚度的胶囊；页头是瑞士风紧排大字（标签列 + 两行咬合的大字 + “06” 引号编号，中文页名压在下面）。开屏和背景都是**预渲染**的（开屏是 60fps 视频，背景是三张透明图层），运行时不做实时 3D 渲染，核显也不卡；视频播不了时自动退回实时版。随附 TeX Gyre Heros 拉丁子集（改名 WWY Grotesk，GUST Font License） |
 
 新风格做成 `web/themes/xxx.css` 加注册表一条即可（见 `web/js/themes.js` 开头注释），开屏动画也变体化。液态玻璃复用极简的结构规则（`base: "minimal"`，选择器写 `[data-ui-base="minimal"]`），只叠一层材质与动效（`themes/liquid.css` + `js/liquid.js`，字体在 `web/fonts/`）。
+
+矢量突破的开屏视频和背景图层由 `tools/render_vector_splash.py`、`tools/render_vector_backdrop.py` 离线生成（Playwright 逐帧截图 + ffmpeg 编码，假时钟驱动，每帧精确 1/60 秒），改了开屏 / 背景的 CSS 后重新跑一遍即可；只改了叠加层位置可以加 `--meta-only` 秒出。
 
 ---
 
@@ -332,8 +335,7 @@ Forge 默认 `output\txt2img-images\` / `output\img2img-images\`（Classic 分�
 
 ```
 forge-webui-launcher/
-├─ 启动WWY启动器.bat    ← 可移到文件夹旁边当入口（双引用法见上文）
-├─ start一键启动.bat     ← 文件夹内的启动入口（自动准备 Python + 依赖）
+├─ 启动WWY启动器.bat    ← 唯一启动入口（自动准备 Python + 依赖；拿到文件夹旁边也能用）
 ├─ .venv/               ← 启动器自己的运行环境（首次自动创建，删了自动重建）
 ├─ python/              ← 自动下载的便携 Python 3.13（没有才建）
 ├─ launcher_data/       ← 运行期数据：输出索引、缩略图、下载缓存、移动记录（更新时保留）

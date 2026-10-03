@@ -24,7 +24,7 @@ import config_manager as cm
 from webview_api import LauncherApi
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
-ICON_PATH = os.path.join(APP_DIR, "wwy_launcher_icon.ico")
+ICON_PATH = os.path.join(APP_DIR, "assets", "wwy_launcher_icon.ico")
 
 
 def _patch_http_server_backlog():

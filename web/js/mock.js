@@ -23,7 +23,7 @@
       setTimeout(() => {
         if (window.pywebview) return;
         showBanner("未能连接到启动器后端（pywebview 桥接未建立）。请关闭本窗口，" +
-                   "通过 start一键启动.bat 重新打开；反复出现请检查 WebView2 运行时是否正常。");
+                   "通过 启动WWY启动器.bat 重新打开；反复出现请检查 WebView2 运行时是否正常。");
       }, 2000);
     });
     return;

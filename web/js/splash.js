@@ -10,6 +10,7 @@
  * 撤场：页面就绪且至少播到 MIN_MS 后，黑条 + 黄条从左擦入盖住，再从右退出露出主界面。
  * 进度条跟真实启动走：就绪前最多涨到 ~90%，就绪后冲到 100% 再撤场；就绪后点击可跳过。
  * core.js 的 boot() 完成时调用 window.Splash.ready()（接口与旧版一致）。
+ * 其它变体：liquidSplash（液态玻璃）、vectorSplash（矢量突破），都在本文件末尾。
  */
 (function () {
   var el = document.getElementById("splash");
@@ -29,6 +30,14 @@
   var variant = (window.WWYThemes && window.WWYThemes.current().splash) || "terminal";
   if (variant === "liquid") {
     liquidSplash(el);
+    return;
+  }
+  if (variant === "vector") {
+    // 默认播放预渲染的视频（media/vector-splash.mp4，tools/render_vector_splash.py 生成）；
+    // 视频缺失 / 解码失败 / 用户开了「减少动态效果」/ 渲染工具自己在录制时（?splash=live），走实时版
+    var live = /[?&]splash=live\b/.test(location.search) || !window.VB_SPLASH ||
+      (window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches);
+    if (live) vectorSplash(el); else vectorVideoSplash(el);
     return;
   }
   if (variant === "none") {
@@ -211,5 +220,328 @@
     host.addEventListener("click", function () { if (ready) leave(); });
     window.Splash = { ready: function () { ready = true; } };
     setTimeout(function () { ready = true; leave(); }, MAX);
+  }
+
+  /* ---------- 矢量突破开屏 · 视频版（默认） ----------
+   * 画面是离线逐帧渲染好的视频（实时版 vectorSplash 的同一套编排，60fps），
+   * 这里只负责：播放、叠加不进视频的内容（版本号）、等待后端、撤场。
+   * 撤场 / 叠加层都只动 transform / opacity，整个开屏只有「一个视频图层」在动，不会卡。
+   *   视频播完 + 后端就绪 → 撤场；后端还没好 → 停在最后一帧，日志卡里 SYNC-03 那格盖上「WAITING」；
+   *   就绪后点击可跳过；1.5 秒内播不起来（缺文件 / 解码失败）→ 换成实时版 */
+  function vectorVideoSplash(host) {
+    var M = window.VB_SPLASH;
+    var root = document.documentElement;
+    var MAX = 9000, start = performance.now();
+    var ready = false, ended = false, leaving = false, done = false, fellBack = false, playing = false;
+    root.classList.add("vb-splash");
+
+    function pos(r, extra) {
+      return "left:" + (r.x * 100).toFixed(3) + "%;top:" + (r.y * 100).toFixed(3) + "%;width:" + (r.w * 100).toFixed(3) +
+        "%;height:" + (r.h * 100).toFixed(3) + "%;" + (extra || "");
+    }
+    host.className = "sp-vector-video";
+    host.innerHTML =
+      '<div class="vv-box" style="--ar:' + M.aspect + ';--big:' + (M.bigFont * 100).toFixed(3) + 'cqw;--small:' + (M.underFont * 100).toFixed(3) + 'cqw">' +
+        '<img class="vv-poster" src="media/vector-splash-first.jpg" alt="">' +
+        '<video class="vv-video" muted playsinline preload="auto">' +
+          '<source src="media/vector-splash.mp4" type="video/mp4"><source src="media/vector-splash.webm" type="video/webm"></video>' +
+        (M.num ? '<div class="vv-num" style="' + pos(M.num) + '"><b>-</b></div>' : '') +
+        (M.ver ? '<div class="vv-ver" style="' + pos(M.ver, "width:auto;") + '"> · V<b>-.-.-</b></div>' : '') +
+        (M.bridge ? '<div class="vv-bridge" style="' + pos(M.bridge) + '"><i></i>WAITING</div>' : '') +
+        '<div class="vv-skip">CLICK TO SKIP</div>' +
+      '</div>' +
+      '<div class="vv-veil"></div>';
+    var video = host.querySelector(".vv-video");
+    var numB = host.querySelector(".vv-num b"), verB = host.querySelector(".vv-ver b");
+
+    // 版本号：拿到就填（引号里是主版本号 V3 → “3”）
+    var vT = setInterval(function () {
+      var v = "";
+      try { v = (window.App && App.state && App.state.launcher && App.state.launcher.version) || ""; } catch (e) {}
+      if (!v) return;
+      clearInterval(vT);
+      v = String(v).replace(/^v/i, "");
+      if (numB) numB.textContent = v.split(".")[0] || "-";
+      if (verB) verB.textContent = v;
+    }, 60);
+
+    // 叠加层按视频时间出场（与视频里大字逐字升起同一时刻、同一缓动）
+    function tick() {
+      if (done || fellBack) return;
+      var t = video.currentTime || 0;
+      if (t >= M.numAt) host.classList.add("vv-num-in");
+      if (t >= M.verAt) host.classList.add("vv-ver-in");
+      if (!ended) requestAnimationFrame(tick);
+    }
+
+    function fallback() {
+      if (fellBack || playing || leaving) return;
+      fellBack = true;
+      clearInterval(vT);
+      root.classList.remove("vb-splash");
+      vectorSplash(host);
+      if (ready && window.Splash) window.Splash.ready();
+    }
+    video.addEventListener("playing", function () {
+      playing = true;
+      host.classList.add("vv-playing");
+      requestAnimationFrame(tick);
+    });
+    video.addEventListener("ended", function () {
+      ended = true;
+      host.classList.add("vv-num-in", "vv-ver-in", "vv-ended");
+      if (!ready) host.classList.add("vv-waiting");
+      leave();
+    });
+    video.addEventListener("error", fallback);
+    var srcs = host.querySelectorAll(".vv-video source");
+    if (srcs.length) srcs[srcs.length - 1].addEventListener("error", fallback);   // 所有格式都放不了
+    var p = video.play();
+    if (p && p.catch) p.catch(fallback);
+    setTimeout(fallback, 1500);
+
+    function leave(force) {
+      if (leaving || fellBack || !ready) return;
+      if (!force && !ended) return;
+      leaving = true;
+      clearInterval(vT);
+      host.classList.remove("vv-waiting");
+      host.classList.add("vv-num-in", "vv-ver-in", "vv-out0");     // 预备：轻轻吸一口气
+      setTimeout(function () {
+        host.classList.add("vv-out1");                              // 推近 + 白光
+        root.classList.remove("vb-splash");                         // 主界面的场景这时开始飘入
+        setTimeout(function () {
+          host.classList.add("vv-out2");                            // 整体淡出
+          setTimeout(function () { done = true; try { video.pause(); } catch (e) {} host.remove(); }, 420);
+        }, 480);
+      }, 170);
+    }
+    host.addEventListener("click", function () { if (ready && !fellBack) leave(true); });
+    window.Splash = {
+      ready: function () {
+        if (ready) return;
+        ready = true;
+        host.classList.add("vv-ready");
+        leave();
+      },
+    };
+    setTimeout(function () {
+      if (fellBack) return;
+      if (!ready) window.Splash.ready();
+      leave(true);
+    }, MAX);
+  }
+
+  /* ---------- 矢量突破开屏 ----------
+   * 性能原则（上一版卡顿的原因：SVG 湍流 / 粘滞 / 投影滤镜每帧重算、字距动画每帧重排）：
+   *   所有运动只动 transform / opacity，交给合成器在 GPU 上跑，主线程忙着初始化也不掉帧；
+   *   带滤镜的东西（等高环、景深模糊、光晕）内容保持静止，只栅格化一次；
+   *   进度弧只在整数百分比变化时才重画。
+   *
+   * 编排（ms；相位 class 加在 #splash 上，样式见 splash.css 末尾）——快进慢出、有先后、有回弹。
+   * 前 200ms 只做静态淡入：这段时间页面在解析脚本、首次排版，主线程最忙，不安排要紧的动作。
+   *   0     vs-1  纸面网点、四角准星旋入；镜头从 1.07 倍缓慢拉远（整段持续，制造「呼吸」）
+   *   200   vs-2  等高环由小放大浮现，两道波纹扩散；立体方块 / 软球分层飘入（远的慢、近的快）
+   *   440   vs-3  三条青色光条从左侧「射」进来后急刹（expo-out），折返箭头描出、箭头头弹出
+   *   700   vs-4  软球簇一颗颗弹出（带过冲回弹），之后各自轻轻浮动
+   *   840   vs-5  立体唱片带旋转从右侧滑入减速停稳，正弦波描出，光晕呼吸；外圈青弧 = 真实进度
+   *   1060  vs-6  大字逐字从下方升起（错峰 22ms），整行同时从略宽收紧到紧排
+   *   1380  vs-7  玻璃日志卡浮起，同步日志逐行出现
+   * 撤场：先轻轻「吸气」缩一下（预备动作），再整体推近 + 泛起白光淡出，露出主界面；
+   *       主界面的立体场景在这一刻才开始飘入，衔接成一个连续镜头。
+   * 进度规则与终末地开屏一致：就绪前最多涨到 ~90%，就绪后冲到 100% 再撤场；就绪后点击可跳过。 */
+  function vectorSplash(host) {
+    var reduceV = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var KV = reduceV ? 0.35 : 1;
+    var MIN = 2700 * KV, MAX = 9000, start = performance.now();
+    var ready = false, leaving = false, done = false, tms = [];
+    function at(fn, ms) { tms.push(setTimeout(fn, ms * KV)); }
+    var root = document.documentElement;
+    root.classList.add("vb-splash");          // 主界面的场景先按住不动，等撤场时再飘入
+
+    // 大字拆成单字，逐字升起
+    function chars(text, from) {
+      var o = "";
+      for (var j = 0; j < text.length; j++) {
+        var c = text[j] === " " ? " " : text[j];
+        o += '<span class="ch" style="--i:' + (from + j) + '">' + c + '</span>';
+      }
+      return o;
+    }
+
+    var rings = "", i;
+    for (i = 1; i <= 20; i++) {
+      rings += '<circle cx="400" cy="400" r="' + (24 + i * 18) + '"' + (i % 5 === 0 ? ' class="mj"' : '') + '/>';
+    }
+    // 软球簇：[x%, y%, 直径(vh)]，相对簇容器
+    var BL = [[50, 50, 9.5], [36, 38, 6], [62, 34, 5.4], [66, 60, 7], [40, 64, 5.8], [26, 54, 3.6],
+              [51, 22, 4], [78, 48, 3.4], [18, 30, 2.4], [84, 72, 2.4], [14, 72, 1.8], [88, 18, 1.8]];
+    var balls = "";
+    BL.forEach(function (b, k) {
+      balls += '<i class="vs-ball" style="left:' + b[0] + '%;top:' + b[1] + '%;--s:' + b[2] + 'vh;--d:' + (k * 0.04).toFixed(2) +
+        's;--bp:' + (3.6 + (k % 4) * .7).toFixed(1) + 's;--by:' + (-4 - (k % 3) * 2) + 'px"><b></b></i>';
+    });
+    var arc = 2 * Math.PI * 214;     // 进度弧周长
+    var ticks = "";
+    for (i = 0; i < 72; i++) ticks += '<line x1="250" y1="14" x2="250" y2="' + (i % 6 ? 22 : 30) + '" transform="rotate(' + i * 5 + ' 250 250)"/>';
+
+    host.className = "sp-vector";
+    host.innerHTML =
+      '<div class="vs-dots"></div>' +
+      '<div class="vs-stage">' +
+        '<div class="vs-far">' +
+          '<div class="vs-rings-wrap"><svg class="vs-rings" viewBox="0 0 800 800" aria-hidden="true"><defs>' +
+            '<filter id="vs-wob" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.006" numOctaves="2" seed="9" result="n"/>' +
+            '<feDisplacementMap in="SourceGraphic" in2="n" scale="70" xChannelSelector="R" yChannelSelector="G"/></filter></defs>' +
+            '<g filter="url(#vs-wob)">' + rings + '</g></svg>' +
+            '<i class="vs-ripple r1"></i><i class="vs-ripple r2"></i></div>' +
+        '</div>' +
+        '<div class="vs-mid">' +
+          '<i class="vs-arrows vs-arrows-l"></i><i class="vs-arrows vs-arrows-r"></i>' +
+          '<div class="vs-bars"><i class="vs-bar b1"></i><i class="vs-bar b2"></i><i class="vs-bar b3"></i></div>' +
+          '<svg class="vs-bend" viewBox="0 0 320 120" aria-hidden="true">' +
+            '<path pathLength="1" d="M-40 14 H226 Q248 14 236 36 L206 84 Q196 100 218 90 L262 64"/>' +
+            '<path class="hd" d="M256 54 L286 54 L270 80z"/></svg>' +
+          '<div class="vs-balls">' + balls + '</div>' +
+        '</div>' +
+        '<div class="vs-disc">' +
+          '<div class="vs-disc-shadow"></div>' +
+          '<svg class="vs-disc-body" viewBox="0 0 500 500" aria-hidden="true"><defs>' +
+            '<radialGradient id="vs-dk" cx=".36" cy=".28" r=".85"><stop offset="0" stop-color="#465456"/>' +
+            '<stop offset=".5" stop-color="#1b2426"/><stop offset="1" stop-color="#0b1112"/></radialGradient>' +
+            '<radialGradient id="vs-in" cx=".42" cy=".36" r=".8"><stop offset="0" stop-color="#20292b"/><stop offset="1" stop-color="#0e1415"/></radialGradient>' +
+            '<linearGradient id="vs-sheen" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".3"/>' +
+            '<stop offset=".42" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>' +
+            '<circle cx="250" cy="250" r="246" fill="url(#vs-dk)"/>' +
+            '<circle cx="250" cy="250" r="214" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="20"/>' +
+            '<circle cx="250" cy="250" r="128" fill="url(#vs-in)" stroke="rgba(255,255,255,.14)" stroke-width="1.5"/>' +
+            '<circle cx="250" cy="250" r="244" fill="url(#vs-sheen)"/></svg>' +
+          '<svg class="vs-ticks" viewBox="0 0 500 500" aria-hidden="true"><g>' + ticks + '</g></svg>' +
+          '<svg class="vs-arcsvg" viewBox="0 0 500 500" aria-hidden="true"><circle class="arc" cx="250" cy="250" r="214" style="stroke-dasharray:' +
+            arc.toFixed(1) + ';stroke-dashoffset:' + arc.toFixed(1) + '"/></svg>' +
+          '<div class="vs-glow"></div>' +
+          '<svg class="vs-wave" viewBox="0 0 500 500" aria-hidden="true">' +
+            '<path pathLength="1" d="M128 300 C168 300 178 160 218 160 S268 340 308 340 S350 210 370 190"/>' +
+            '<circle class="hub" cx="250" cy="250" r="9"/><circle class="hub2" cx="250" cy="250" r="15"/></svg>' +
+          '<div class="vs-pct"><span>LOAD</span><b>000</b></div>' +
+        '</div>' +
+        /* 左上角大字排版（结构照 PV：标签列 | 两行紧排咬合大字 + 引号编号 | 标签 | 大字 + 压在下面的小字） */
+        '<div class="vs-type">' +
+          '<div class="vs-node"><i></i>NODE01</div>' +
+          '<span class="vs-lab r1">Terminal</span><div class="vs-big r1"><span class="vs-line">' + chars("WWY", 0) + '</span></div>' +
+          '<span class="vs-lab r2">Numbers</span><div class="vs-big r2"><span class="vs-line">' + chars("LAUNCHER", 3) +
+            '<span class="ch vs-q" style="--i:11">“<b class="vs-num">-</b>”</span></span></div>' +
+          '<span class="vs-lab r3">Trial from</span><div class="vs-big r3"><span class="vs-line">' + chars("LOCAL", 12) + '</span></div>' +
+          '<div class="vs-under">COMFYUI · WEBUI<span class="vs-verw"> · V<b class="vs-ver">-.-.-</b></span></div>' +
+          '<div class="vs-cn">启动器</div>' +
+        '</div>' +
+        '<div class="vs-log">' +
+          '<div class="row"><span>SYNC-01</span>UI.MODULES<i></i><em>CONNECTED</em></div>' +
+          '<div class="row"><span>SYNC-02</span>WEBVIEW2 RUNTIME<i></i><em>CONNECTED</em></div>' +
+          '<div class="row vs-bridge"><span>SYNC-03</span>PYTHON BRIDGE<i></i><em>WAITING</em></div>' +
+          '<div class="vs-note"><i></i><span>THE CURRENT TERMINAL RECORD HAS BEEN SYNCHRONIZED,<br>AND ALL DATA WILL BE ARCHIVED LOCALLY.<br>PLEASE STAND BY WHILE THE BRIDGE IS ESTABLISHED.</span></div>' +
+        '</div>' +
+      '</div>' +
+      '<i class="vs-cross x1"></i><i class="vs-cross x2"></i><i class="vs-cross x3"></i><i class="vs-cross x4"></i>' +
+      '<div class="vs-skip">CLICK TO SKIP</div>' +
+      '<div class="vs-veil"></div>';
+
+    function $v(s) { return host.querySelector(s); }
+    // 立体方块 + 软球（与主界面同一套，见 js/vector-scene.js；live = 开屏里持续漂浮）
+    if (window.VBScene) {
+      var sc = VBScene.build(VBScene.SPLASH, { stagger: .11, cls: "vs-scene", live: true });
+      sc.classList.add("vs-hold");
+      $v(".vs-far").appendChild(sc);
+      at(function () { sc.classList.remove("vs-hold"); }, 200);
+    }
+    [[0, "vs-1"], [200, "vs-2"], [440, "vs-3"], [700, "vs-4"], [840, "vs-5"], [1060, "vs-6"], [1380, "vs-7"]].forEach(function (p) {
+      at(function () { host.classList.add(p[1]); }, p[0]);
+    });
+    host.querySelectorAll(".vs-log .row").forEach(function (row, k) {
+      at(function () { row.classList.add("show"); }, 1500 + k * 140);
+    });
+
+    // 乱码解码（只改小字的文字，不碰大字排版）
+    var GL = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789#<>/";
+    function scr(node, text, dur) {
+      var t1 = performance.now();
+      (function tk(now) {
+        if (done) return;
+        var p = Math.min(1, (now - t1) / dur), o = "";
+        for (var j = 0; j < text.length; j++) {
+          o += ((j + 1) / text.length <= p || text[j] === ".") ? text[j] : GL[(Math.random() * GL.length) | 0];
+        }
+        node.textContent = o;
+        if (p < 1) requestAnimationFrame(tk);
+      })(t1);
+    }
+
+    // 版本号：拿到后解码锁定；引号里显示主版本号（V3 → “3”）
+    var verN = $v(".vs-ver"), numN = $v(".vs-num"), vLocked = false;
+    var vT = setInterval(function () {
+      if (vLocked) return;
+      var v = "";
+      try { v = (window.App && App.state && App.state.launcher && App.state.launcher.version) || ""; } catch (e) {}
+      if (v) {
+        vLocked = true; clearInterval(vT);
+        if (verN) scr(verN, String(v).replace(/^v/i, ""), 360);
+        if (numN) numN.textContent = String(v).replace(/^v/i, "").split(".")[0] || "-";
+        return;
+      }
+      if (numN) numN.textContent = String((Math.random() * 10) | 0);
+      if (verN) verN.textContent = ((Math.random() * 10) | 0) + "." + ((Math.random() * 10) | 0) + "." + ((Math.random() * 10) | 0);
+    }, 90);
+
+    // 进度：唱片外圈的青色弧（只在整数百分比变化时重画）
+    var arcEl = $v(".arc"), pctEl = $v(".vs-pct b"), pct = 0, shown = -1, INFO = 840 * KV;
+    function frame(now) {
+      if (done) return;
+      var e = now - start;
+      var ramp = Math.max(0, (e - INFO) / (1100 * KV)) * 100;
+      var cap = ready ? 100 : 90 * (1 - Math.exp(-Math.max(0, e - INFO) / 800));
+      var target = Math.max(0, Math.min(ramp, cap));
+      pct += (target - pct) * 0.2;
+      if (ready && target >= 100 && 100 - pct < 0.5) pct = 100;
+      var n = Math.floor(pct);
+      if (n !== shown) {
+        shown = n;
+        if (arcEl) arcEl.style.strokeDashoffset = (arc * (1 - pct / 100)).toFixed(1);
+        if (pctEl) pctEl.textContent = (n < 10 ? "00" : n < 100 ? "0" : "") + n;
+      }
+      if (pct >= 100) leave();
+      if (!leaving) requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    function leave(force) {
+      if (leaving || !ready) return;
+      if (!force && (pct < 100 || performance.now() - start < MIN)) return;
+      leaving = true;
+      tms.forEach(clearTimeout);
+      ["vs-1", "vs-2", "vs-3", "vs-4", "vs-5", "vs-6", "vs-7"].forEach(function (c) { host.classList.add(c); });
+      host.querySelectorAll(".vs-log .row").forEach(function (r) { r.classList.add("show"); });
+      if (arcEl) arcEl.style.strokeDashoffset = "0";
+      if (pctEl) pctEl.textContent = "100";
+      host.classList.add("vs-out0");                       // 预备：轻轻吸一口气
+      setTimeout(function () {
+        host.classList.add("vs-out1");                     // 推近 + 白光
+        root.classList.remove("vb-splash");                // 主界面的场景这时开始飘入
+        setTimeout(function () {
+          host.classList.add("vs-out2");                   // 整体淡出
+          setTimeout(function () { done = true; clearInterval(vT); host.remove(); }, reduceV ? 150 : 420);
+        }, reduceV ? 150 : 480);
+      }, reduceV ? 60 : 170);
+    }
+    host.addEventListener("click", function () { if (ready) leave(true); });
+    window.Splash = {
+      ready: function () {
+        if (ready) return;
+        ready = true;
+        var b = $v(".vs-bridge");
+        if (b) { b.classList.add("ok"); var em = b.querySelector("em"); if (em) em.textContent = "CONNECTED"; }
+        host.classList.add("vs-ready");
+      },
+    };
+    setTimeout(function () { if (!ready) window.Splash.ready(); leave(true); }, MAX);
   }
 })();

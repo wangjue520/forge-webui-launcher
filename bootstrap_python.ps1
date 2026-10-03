@@ -1,7 +1,7 @@
 ﻿#Requires -Version 3.0
 # Forge WebUI 启动器 - 便携 Python 自动引导脚本
 #
-# 用途：start一键启动.bat 在系统里找不到任何可用 Python 时调用本脚本，
+# 用途：启动WWY启动器.bat 在系统里找不到任何可用 Python 时调用本脚本，
 # 自动下载 python-build-standalone 的 CPython 3.13 便携构建（uv 同款官方
 # 构建，完整标准库 + pip + venv，免安装、可重定位），解压到启动器目录的
 # python\ 子目录，之后 bat 用它启动 webview_main.py。
