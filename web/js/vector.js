@@ -252,7 +252,7 @@
   }
 
   // 开屏期间 <html> 带 vb-splash（主界面场景按住不飘）；万一开屏被别的途径移除，兜底解除
-  setTimeout(function () { if (!$("splash")) root.classList.remove("vb-splash"); }, 10000);
+  setTimeout(function () { if (!$("splash")) root.classList.remove("vb-splash", "vb-splash-hide"); }, 10000);
 
   function sync() {
     if (isVector()) { if (!built || !built.deco.isConnected) { teardown(); build(); } }

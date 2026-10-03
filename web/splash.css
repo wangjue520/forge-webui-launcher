@@ -443,14 +443,15 @@
   background: radial-gradient(rgba(16, 26, 27, .09) .9px, transparent 1.1px) 0 0 / 12px 12px; }
 .vs-1 .vs-dots { opacity: 1; }
 
-/* 镜头：整段从 1.07 倍缓慢拉远，远景层再额外横移一点 —— 画面始终在「呼吸」 */
+/* 镜头：开场从 1.07 倍拉远、远景层额外横移一点，约 1.7 秒内减速停稳
+   （不做持续的慢速推拉：每帧零点几像素的慢动作在视频里会被取整成来回抖动） */
 .vs-stage { position: absolute; inset: 0; will-change: transform, opacity; transform: scale(1.07); }
-.vs-1 .vs-stage { transform: scale(1); transition: transform 3.6s cubic-bezier(.22, .61, .36, 1); }
+.vs-1 .vs-stage { transform: scale(1); transition: transform 1.7s cubic-bezier(.16, 1, .3, 1); }
 .vs-far, .vs-mid { position: absolute; inset: 0; will-change: transform; }
 .vs-far { transform: translate3d(3vw, 0, 0); }
-.vs-1 .vs-far { transform: none; transition: transform 3.2s cubic-bezier(.22, .61, .36, 1); }
+.vs-1 .vs-far { transform: none; transition: transform 1.9s cubic-bezier(.16, 1, .3, 1); }
 .vs-mid { transform: translate3d(-1.5vw, 0, 0); }
-.vs-1 .vs-mid { transform: none; transition: transform 2.6s cubic-bezier(.22, .61, .36, 1); }
+.vs-1 .vs-mid { transform: none; transition: transform 1.6s cubic-bezier(.16, 1, .3, 1); }
 /* 撤场：先轻轻缩一下（预备），再加速推近、淡出 */
 .vs-out0 .vs-stage { transform: scale(.985); transition: transform .17s cubic-bezier(.3, 0, .2, 1); }
 .vs-out1 .vs-stage { transform: scale(1.14); opacity: 0;
@@ -640,6 +641,7 @@
    会变的内容（版本号、跳过提示）不进视频，播放时由 HTML 叠加 */
 :root.vs-render .vs-num, :root.vs-render .vs-verw, :root.vs-render .vs-skip { visibility: hidden; }
 :root.vs-render .vs-log .vs-bridge em { animation: none !important; }
+:root.vs-render #splash * { will-change: auto !important; }
 
 /* ============================================================
    矢量突破开屏 · 视频版（js/splash.js 的 vectorVideoSplash，默认）
@@ -650,6 +652,8 @@
   --vv-cy: #1ec8cc;
   --vv-grot: "WWY Grotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
   background: #e9eeee; overflow: hidden;
+  /* 撤场整层淡出：提前提层，淡出第一帧不用临时做大层提升 */
+  will-change: opacity;
   transition: opacity .42s ease;
 }
 #splash.sp-vector-video.vv-out2 { opacity: 0; }
@@ -681,7 +685,7 @@
 
 /* 视频播完但后端还没就绪：盖住日志卡里 SYNC-03 的 CONNECTED，改显示闪烁的 WAITING */
 .vv-bridge { position: absolute; display: flex; align-items: center; justify-content: center; gap: .5em;
-  margin: -3px -8px -3px -5px; padding: 3px 8px 3px 5px; border-radius: 99px; white-space: nowrap;
+  margin: -3px -11px -3px -5px; padding: 3px 11px 3px 5px; border-radius: 99px; white-space: nowrap;
   font: 400 calc(var(--small) * .56)/1 var(--vv-grot); letter-spacing: -.01em; color: #6f7f82;
   background: #f4f8f8; box-shadow: 0 0 0 1px rgba(16, 26, 27, .08);
   opacity: 0; transition: opacity .3s ease; }
@@ -702,3 +706,6 @@
   transform: scale(.6); will-change: transform, opacity; }
 .vv-out1 .vv-veil { opacity: 1; transform: scale(1.4); transition: opacity .3s ease, transform .7s cubic-bezier(.16, 1, .3, 1); }
 .vv-out2 .vv-veil { opacity: 0; transition: opacity .42s ease; }
+
+/* 视频开屏播放期间，主界面只排版不绘制（视频底下不抢显卡）；视频结束时才露出来 */
+:root.vb-splash-hide #layout, :root.vb-splash-hide #vb-deco, :root.vb-splash-hide #vb-front { visibility: hidden; }

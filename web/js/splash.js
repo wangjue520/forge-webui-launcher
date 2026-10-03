@@ -227,13 +227,34 @@
    * 这里只负责：播放、叠加不进视频的内容（版本号）、等待后端、撤场。
    * 撤场 / 叠加层都只动 transform / opacity，整个开屏只有「一个视频图层」在动，不会卡。
    *   视频播完 + 后端就绪 → 撤场；后端还没好 → 停在最后一帧，日志卡里 SYNC-03 那格盖上「WAITING」；
-   *   就绪后点击可跳过；1.5 秒内播不起来（缺文件 / 解码失败）→ 换成实时版 */
+   *   就绪后点击可跳过；2.6 秒内播不起来（缺文件 / 解码失败）→ 换成实时版 */
   function vectorVideoSplash(host) {
     var M = window.VB_SPLASH;
     var root = document.documentElement;
     var MAX = 9000, start = performance.now();
     var ready = false, ended = false, leaving = false, done = false, fellBack = false, playing = false;
     root.classList.add("vb-splash");
+    // 播放期间主界面不绘制（只排版）：视频底下不再有一整页毛玻璃 / 大图在栅格化，抢显卡和主线程
+    root.classList.add("vb-splash-hide");
+
+    /* 撤场丝滑的关键：主界面要用的资源全部趁视频播放时提前备齐。
+       不提前的话，reveal 那一帧要同时做「整页毛玻璃栅格化 + 三张背景图解码 +
+       大字字体下载排版」，再强的机器也要卡一下——卡顿全攒在撤场开头。
+       字体不预热还会在白光散开后看到一次大字换字体的闪烁（font-display: swap）。 */
+    var fontReady = [];
+    try {
+      if (document.fonts && document.fonts.load) {
+        fontReady = [
+          document.fonts.load('400 100px "WWY Grotesk"'),
+          document.fonts.load('700 100px "WWY Grotesk"'),
+          document.fonts.load('400 32px "WWY Sans SC"'),
+          document.fonts.load('700 32px "WWY Sans SC"'),
+        ];
+      }
+    } catch (e) {}
+    ["far", "mid", "front"].forEach(function (n) {
+      var im = new Image(); im.src = "media/vector-bg-" + n + ".webp";   // 只图进缓存，不上屏
+    });
 
     function pos(r, extra) {
       return "left:" + (r.x * 100).toFixed(3) + "%;top:" + (r.y * 100).toFixed(3) + "%;width:" + (r.w * 100).toFixed(3) +
@@ -278,7 +299,7 @@
       if (fellBack || playing || leaving) return;
       fellBack = true;
       clearInterval(vT);
-      root.classList.remove("vb-splash");
+      root.classList.remove("vb-splash", "vb-splash-hide");
       vectorSplash(host);
       if (ready && window.Splash) window.Splash.ready();
     }
@@ -289,6 +310,7 @@
     });
     video.addEventListener("ended", function () {
       ended = true;
+      revealUI();
       host.classList.add("vv-num-in", "vv-ver-in", "vv-ended");
       if (!ready) host.classList.add("vv-waiting");
       leave();
@@ -296,20 +318,70 @@
     video.addEventListener("error", fallback);
     var srcs = host.querySelectorAll(".vv-video source");
     if (srcs.length) srcs[srcs.length - 1].addEventListener("error", fallback);   // 所有格式都放不了
-    var p = video.play();
-    if (p && p.catch) p.catch(fallback);
-    setTimeout(fallback, 1500);
+    /* 起播时机：页面刚打开那几百毫秒主线程在解析脚本、排版主界面，这时开播最容易掉开头几帧。
+       所以先停在海报（= 视频第一帧，画面完全一样），等「页面 load 完 + 视频缓冲够 + 再空两帧」
+       再开播；最多等 700ms。 */
+    var started = false;
+    function startPlay() {
+      if (started || fellBack) return;
+      started = true;
+      var p = video.play();
+      if (p && p.catch) p.catch(fallback);
+    }
+    function settle(cb) { requestAnimationFrame(function () { requestAnimationFrame(cb); }); }
+    var loaded = document.readyState === "complete", buffered = false;
+    function maybeStart() { if (loaded && buffered) settle(startPlay); }
+    if (!loaded) window.addEventListener("load", function () { loaded = true; maybeStart(); });
+    video.addEventListener("canplaythrough", function () { buffered = true; maybeStart(); });
+    if (video.readyState >= 4) buffered = true;
+    maybeStart();
+    setTimeout(startPlay, 700);
+    setTimeout(fallback, 2600);
+
+    // 主界面在视频结束时才恢复绘制：整页毛玻璃 + 大图的首次栅格化这一下重活，
+    // 藏在静止的最后一帧后面（静止画面上多停一帧察觉不到）；字体 / 图片在开播前
+    // 已预热，这口气比不预热小得多。leave 会等资源就绪 + 画出两帧后才撤场，
+    // 栅格化再慢也只会推迟撤场，不会卡进撤场动画里。
+    var revealed = false;
+    var assetsReady = null;   // 背景图解码 + 字体就绪的 Promise（leave 时等它）
+    function revealUI() {
+      if (revealed) return;
+      revealed = true;
+      root.classList.remove("vb-splash-hide");
+      var jobs = fontReady.slice();
+      try {
+        document.querySelectorAll("#vb-deco img").forEach(function (im) {
+          if (im.decode) jobs.push(im.decode().catch(function () {}));
+        });
+      } catch (e) {}
+      // 兜底 600ms：个别资源慢也不拖住撤场，只是回到原来的体验
+      assetsReady = Promise.race([
+        Promise.all(jobs).catch(function () {}),
+        new Promise(function (res) { setTimeout(res, 600); }),
+      ]);
+    }
 
     function leave(force) {
       if (leaving || fellBack || !ready) return;
       if (!force && !ended) return;
       leaving = true;
+      if (!revealed) { revealUI(); }
+      // 等「资源备齐 + 主界面画出两帧」再撤场：撤场动画不和栅格化 / 解码 / 换字体抢时间
+      assetsReady.then(function () { settle(exit); });
+    }
+    function exit() {
       clearInterval(vT);
+      // 点击跳过进来的：视频还在播。冻在当前帧再撤场——撤场期间少一路视频解码
+      // 抢资源，而且定格推近的观感比「画面还在动就放大」更稳
+      if (!ended) { try { video.pause(); } catch (e) {} }
       host.classList.remove("vv-waiting");
       host.classList.add("vv-num-in", "vv-ver-in", "vv-out0");     // 预备：轻轻吸一口气
+      // 主界面场景在 out0 就开始飘入：此刻开屏还完全不透明地盖着，入场动画的
+      // 启动开销（几十个小球 / 方块同时开跑）被这一百多毫秒吸收掉；白光掀开时
+      // 场景已经在动，不会在「掀帘子」的同一帧才扎堆启动
+      root.classList.remove("vb-splash", "vb-splash-hide");
       setTimeout(function () {
         host.classList.add("vv-out1");                              // 推近 + 白光
-        root.classList.remove("vb-splash");                         // 主界面的场景这时开始飘入
         setTimeout(function () {
           host.classList.add("vv-out2");                            // 整体淡出
           setTimeout(function () { done = true; try { video.pause(); } catch (e) {} host.remove(); }, 420);
@@ -340,7 +412,7 @@
    *
    * 编排（ms；相位 class 加在 #splash 上，样式见 splash.css 末尾）——快进慢出、有先后、有回弹。
    * 前 200ms 只做静态淡入：这段时间页面在解析脚本、首次排版，主线程最忙，不安排要紧的动作。
-   *   0     vs-1  纸面网点、四角准星旋入；镜头从 1.07 倍缓慢拉远（整段持续，制造「呼吸」）
+   *   0     vs-1  纸面网点、四角准星旋入；镜头从 1.07 倍拉远，约 1.7 秒减速停稳
    *   200   vs-2  等高环由小放大浮现，两道波纹扩散；立体方块 / 软球分层飘入（远的慢、近的快）
    *   440   vs-3  三条青色光条从左侧「射」进来后急刹（expo-out），折返箭头描出、箭头头弹出
    *   700   vs-4  软球簇一颗颗弹出（带过冲回弹），之后各自轻轻浮动

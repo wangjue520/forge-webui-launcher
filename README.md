@@ -4,7 +4,7 @@
 一个启动器同时管理 **ComfyUI** 和 **Forge WebUI**（Neo / Classic），支持多实例同时运行；只用一个的话界面和以前一样简单。
 界面用 HTML/CSS/JS 实现（WebView2 渲染），可切换界面风格（默认"终末地 · 工业终端"，另有"极简"）。
 
-> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `启动WWY启动器.bat` (works both inside the folder and next to it), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
+> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `start一键启动.bat` (or place `启动WWY启动器.bat` next to the folder and use that), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
 
 ---
 
@@ -69,7 +69,7 @@ D:\forge-launcher\
 └─ 启动WWY启动器.bat         ← 把压缩包里的这个 bat 移到文件夹旁边，以后双击它
 ```
 
-`启动WWY启动器.bat` 是唯一的启动入口：放在文件夹**旁边**也能用（它会自动转交文件夹里的本体），普通用户永远不需要打开启动器文件夹。首次双击还会自动在桌面生成一个带图标的快捷方式，以后点桌面图标即可。
+`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `forge-webui-launcher` 文件夹），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的 `start一键启动.bat` 效果完全一样。
 
 ### 二、第一次双击 bat
 
@@ -335,7 +335,8 @@ Forge 默认 `output\txt2img-images\` / `output\img2img-images\`（Classic 分�
 
 ```
 forge-webui-launcher/
-├─ 启动WWY启动器.bat    ← 唯一启动入口（自动准备 Python + 依赖；拿到文件夹旁边也能用）
+├─ 启动WWY启动器.bat    ← 可移到文件夹旁边当入口（双引用法见上文）
+├─ start一键启动.bat     ← 文件夹内的启动入口（自动准备 Python + 依赖）
 ├─ .venv/               ← 启动器自己的运行环境（首次自动创建，删了自动重建）
 ├─ python/              ← 自动下载的便携 Python 3.13（没有才建）
 ├─ launcher_data/       ← 运行期数据：输出索引、缩略图、下载缓存、移动记录（更新时保留）

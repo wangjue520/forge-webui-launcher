@@ -9,7 +9,8 @@
      接管 performance.now / Date.now / setTimeout / setInterval / requestAnimationFrame，
      并把页面上所有 CSS 动画 / 过渡暂停，每一帧手动把它们的 currentTime 设到假时钟的时刻。
      这样每一帧都是精确的 1/60 秒，和电脑快慢无关，画面完全确定。
-  2. 逐帧截图（设备像素比 1.5，按 1180×820 的默认窗口排版，输出 1770×1230）。
+  2. 逐帧截图：按 1180×820 的默认窗口排版，以 1.5×SS 倍超采样渲染、每帧取 SUB 张子帧平均
+     （动态模糊），再缩成 1770×1230（150% 缩放的屏幕上也清晰）。
   3. 用 ffmpeg 编码成 H.264 mp4 + VP9 webm（WebView2 都支持硬件解码）。
   4. 导出 web/media/vector-splash.json / .js：视频时长、叠加层（版本号等不进视频的内容）
      在画面里的位置和出现时刻，供 js/splash.js 播放时对齐。
@@ -35,6 +36,12 @@ WEB = ROOT / "web"
 OUT_DIR = WEB / "media"
 W, H, DPR = 1180, 820, 1.5          # 启动器默认窗口尺寸；1.5 倍 = 150% 缩放的屏幕上也清晰
 FPS = 60
+# 画质（上一版开屏「抖」的原因就在这两项）：
+#   SS  超采样：按 DPR×SS 渲染再缩回 —— 慢速移动 / 缩放不再被取整到整像素而左右跳
+#   SUB 每帧子帧数：一帧内按时间均匀取 SUB 张再平均 —— 快速动作带真实的动态模糊
+SS = float(os.environ.get("SS", "1.5"))
+SUB = int(os.environ.get("SUB", "3"))
+WORKERS = int(os.environ.get("WORKERS", "2"))    # 并行渲染的页面数（按 CPU 核数调）
 DURATION = 2.65                     # 秒：入场全部完成后停在最后一帧（撤场由 CSS 在视频图层上做）
 
 FAKE_CLOCK = r"""
@@ -109,34 +116,62 @@ def ffmpeg_exe():
         return exe
 
 
+async def _open_page(browser, url, dpr):
+    page = await browser.new_page(viewport={"width": W, "height": H}, device_scale_factor=dpr)
+    await page.add_init_script("window.WWY_THEME_ID = 'vector';")
+    await page.add_init_script(FAKE_CLOCK)
+    await page.goto(url)
+    await page.add_style_tag(content=HIDE_CHROME)
+    await page.evaluate("document.documentElement.classList.add('vs-render')")   # 版本号等不进视频
+    await page.evaluate("document.fonts.ready.then(() => 1)")
+    await page.wait_for_timeout(800)            # 真实时间：等字体、图片解码；假时钟此时停在 0
+    return page
+
+
+async def _worker(browser, url, frames_dir, first, last, n):
+    """渲染第 first..last-1 帧：先把假时钟快进到 first 帧的时刻，再逐帧（每帧 SUB 张子帧）截图"""
+    import io
+    import numpy as np
+    from PIL import Image
+    page = await _open_page(browser, url, DPR * SS)
+    step = 1000 / (FPS * SUB)
+    for _ in range(first * SUB):
+        await page.evaluate(f"__clock.advance({step})")
+    out_size = (round(W * DPR), round(H * DPR))
+    at_start = True                 # 时钟已经停在 (first, 0) 子帧的时刻
+    for i in range(first, last):
+        acc = None
+        for k in range(SUB):        # 子帧 (i, k) 的时刻 = (i·SUB + k) / (FPS·SUB)
+            if not at_start:
+                await page.evaluate(f"__clock.advance({step})")
+            at_start = False
+            png = await page.screenshot()
+            a = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"), dtype=np.float32)
+            acc = a if acc is None else acc + a
+        img = Image.fromarray(np.clip(acc / SUB + .5, 0, 255).astype(np.uint8))
+        img.resize(out_size, Image.LANCZOS).save(frames_dir / f"f{i:04d}.png")
+        if (i - first) % 20 == 0:
+            print(f"  frame {i}/{n}")
+    await page.close()
+
+
 async def render(frames_dir, meta_only=False):
     from playwright.async_api import async_playwright
     srv = serve(WEB)
     url = f"http://127.0.0.1:{srv.server_address[1]}/index.html?mock=1&splash=live"
-    meta = {}
+    n = int(round(DURATION * FPS))
     async with async_playwright() as p:
         kw = {}
         if os.environ.get("CHROME"):
             kw["executable_path"] = os.environ["CHROME"]
         browser = await p.chromium.launch(**kw)
-        page = await browser.new_page(viewport={"width": W, "height": H}, device_scale_factor=DPR)
-        await page.add_init_script("window.WWY_THEME_ID = 'vector';")
-        await page.add_init_script(FAKE_CLOCK)
-        await page.goto(url)
-        await page.add_style_tag(content=HIDE_CHROME)
-        await page.evaluate("document.documentElement.classList.add('vs-render')")   # 版本号等不进视频
-        await page.evaluate("document.fonts.ready.then(() => 1)")
-        await page.wait_for_timeout(800)            # 真实时间：等字体、图片解码；假时钟此时停在 0
-        n = int(round(DURATION * FPS))
-        for i in range(n):
-            if i:
-                await page.evaluate(f"__clock.advance({1000 / FPS})")
-            if meta_only:
-                continue
-            await page.screenshot(path=str(frames_dir / f"f{i:04d}.png"))
-            if i % 30 == 0:
-                print(f"  frame {i}/{n}")
-        # 叠加层位置（按 1180×820 的比例存百分比；播放时盒子按视频比例铺满窗口）
+        if not meta_only:
+            cut = [round(n * j / WORKERS) for j in range(WORKERS + 1)]
+            await asyncio.gather(*[_worker(browser, url, frames_dir, cut[j], cut[j + 1], n) for j in range(WORKERS)])
+        # 叠加层位置：单独开一页快进到最后一帧再量（按 1180×820 的比例存百分比）
+        page = await _open_page(browser, url, DPR)
+        for _ in range(n - 1):
+            await page.evaluate(f"__clock.advance({1000 / FPS})")
         meta = await page.evaluate("""() => {
           const r = (sel) => { const e = document.querySelector(sel); if (!e) return null;
             const b = e.getBoundingClientRect();
