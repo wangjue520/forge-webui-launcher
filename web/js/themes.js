@@ -23,8 +23,9 @@
     // 液态玻璃：结构沿用极简（base），再叠一层玻璃材质 + 流动背景（js/liquid.js）
     { id: "liquid-light", label: "液态玻璃 · 浅色", css: ["themes/minimal.css", "themes/liquid.css"], base: "minimal", splash: "liquid" },
     { id: "liquid-dark", label: "液态玻璃 · 深色", css: ["themes/minimal.css", "themes/liquid.css"], base: "minimal", splash: "liquid" },
-    // 矢量突破：结构沿用终末地（不设 base），换成浅灰 + 青色 + 黑；背景装饰见 js/vector.js
-    { id: "vector", label: "矢量突破 · 青色拟生态", css: "themes/vector.css", splash: "vector" },
+    // 矢量突破：【废案】不再更新维护，仅保留备查——新功能（如侧栏性能监控）不会适配它，
+    // themes/vector.css 和 js/vector.js 不要再改（js/vector-scene.js 与开屏动画共用，不在此列）
+    { id: "vector", label: "矢量突破 · 青色拟生态（废案）", css: "themes/vector.css", splash: "vector" },
   ];
   var KEY = "ui-theme";
   // 旧版本只叫 "minimal"，自动归到浅色
