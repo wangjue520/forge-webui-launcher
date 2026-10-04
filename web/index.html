@@ -691,7 +691,7 @@
             </div>
             <div class="card">
               <div class="card-title">缺失模型检测<span class="card-title-hint">从图片元数据里的哈希反查 Civitai，一键补齐本地没有的模型</span></div>
-              <div class="hint">A1111/Forge 格式的元数据带哈希（文件内容的指纹），能精确匹配自动下载；ComfyUI 工作流通常不存哈希，缺失的模型会显示「按名字搜索」——这条路径不保证精确匹配（Civitai 上同名模型不少见），需要你从候选里手动选一个确认，不会替你自动下载。</div>
+              <div class="hint">A1111/Forge 格式的元数据带哈希（文件内容的指纹），能精确匹配自动下载；ComfyUI 工作流通常不存哈希，缺失的模型会显示「按名字搜索」——哈希在 Civitai 上查不到的（未公开/已删除/地区专属模型）同样会显示。这条路径不保证精确匹配（Civitai 上同名模型不少见），需要你从候选里手动选一个确认，不会替你自动下载。</div>
               <div class="row">
                 <button class="btn" id="meta-scan" disabled>检测缺失模型</button>
                 <button class="btn btn-accent" id="meta-download" disabled>下载勾选项</button>

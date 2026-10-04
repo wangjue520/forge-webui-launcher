@@ -337,7 +337,7 @@
       // 挤出可视区（容器横向滚动），用户根本看不到这个入口
       const chk = canDl
         ? `<input type="checkbox" data-idx="${r.idx}" ${r.checked ? "checked" : ""} ${(r.state === "downloading" || r.state === "done") ? "disabled" : ""}>`
-        : (r.state === "no_hash"
+        : (r.state === "no_hash" || r.state === "not_found"
           ? `<button class="btn btn-xs" data-search="${r.idx}">按名字搜索</button>` : "");
       return `<tr data-idx="${r.idx}"><td>${chk}</td><td class="dim">${App.esc(r.role)}</td>
         <td>${App.esc(r.name)}</td><td>${stateHtml(r)}</td></tr>`;
@@ -360,12 +360,13 @@
   async function nameSearch(idx) {
     const row = missingRows.find((r) => r.idx === idx);
     if (!row) return;
+    row._prevState = row.state;   // 记住来路（no_hash / not_found），失败或取消时还原
     row.state = "querying";
     renderMissing();
     try {
       const r = await App.api.meta_name_search(idx);
-      if (r && r.ok === false) { row.state = "no_hash"; renderMissing(); App.toast(r.error || "搜索失败", "error"); }
-    } catch (e) { row.state = "no_hash"; renderMissing(); App.toast("搜索失败：" + e.message, "error"); }
+      if (r && r.ok === false) { row.state = row._prevState || "no_hash"; renderMissing(); App.toast(r.error || "搜索失败", "error"); }
+    } catch (e) { row.state = row._prevState || "no_hash"; renderMissing(); App.toast("搜索失败：" + e.message, "error"); }
   }
 
   /* ================= 入口绑定 ================= */
@@ -455,7 +456,7 @@
         const row = missingRows.find((r) => r.idx === e.idx);
         if (!row) return;
         if (!e.ok || !(e.candidates || []).length) {
-          row.state = "no_hash"; renderMissing();
+          row.state = row._prevState || "no_hash"; renderMissing();
           App.toast(e.error || "Civitai 上没有搜到同名模型", "error");
           return;
         }
@@ -470,12 +471,12 @@
               body.querySelectorAll(".choice-item").forEach((el) =>
                 el.addEventListener("click", () => finish("pick:" + el.dataset.i)));
             } });
-        if (!v || v.indexOf("pick:") !== 0) { row.state = "no_hash"; renderMissing(); return; }
+        if (!v || v.indexOf("pick:") !== 0) { row.state = row._prevState || "no_hash"; renderMissing(); return; }
         try {
           const r = await App.api.meta_choose_candidate(e.idx, +v.slice(5));
           if (r && r.ok) Object.assign(row, { state: "found", file_name: r.file_name, size_mb: r.size_mb, checked: true });
-          else { row.state = "no_hash"; App.toast((r && r.error) || "选择失败", "error"); }
-        } catch (err) { row.state = "no_hash"; App.toast("选择失败：" + err.message, "error"); }
+          else { row.state = row._prevState || "no_hash"; App.toast((r && r.error) || "选择失败", "error"); }
+        } catch (err) { row.state = row._prevState || "no_hash"; App.toast("选择失败：" + err.message, "error"); }
         renderMissing();
       });
       App.on("meta", "dl_progress", (e) => {
