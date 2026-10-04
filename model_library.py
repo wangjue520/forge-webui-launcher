@@ -302,17 +302,25 @@ JOURNAL_DIR = os.path.join(DATA_DIR, "moves")
 TRASH_DIR = os.path.join(DATA_DIR, "trash")
 
 # 模型库分类：(键, 显示名, 是否 LoRA, WebUI 下的候选目录, ComfyUI 下的目录, WebUI 参数)
-# WebUI 候选目录按顺序取第一个存在的（Forge Neo 把 embeddings 挪进了 models/）
+# 注意同一种模型在两边内部的目录名不一样（共享库目录名沿用 ComfyUI 风格）：
+#   WebUI/Neo 用 models/Stable-diffusion、models/Lora、models/VAE、models/ESRGAN、
+#   models/hypernetworks、models/text_encoder 这种各有各的写法；
+#   ComfyUI 统一用 models/checkpoints、models/loras、models/vae、
+#   models/upscale_models、models/hypernetworks、models/text_encoders 全小写复数。
+# WebUI 候选目录按顺序取第一个存在的（Forge Neo 把 embeddings 挪进了 models/）；
+# WebUI 参数会被 forge_library_args 按目标实际支持的参数过滤（Neo 删了
+# --hypernetwork-dir 之类的老参数），写在这里不代表一定会传。
 LIBRARY_CATEGORIES = [
-    ("checkpoints", "Checkpoint 大模型", False, ("models/Stable-diffusion",), "models/checkpoints", "--ckpt-dir"),
+    ("checkpoints", "Checkpoint 大模型", False, ("models/Stable-diffusion", "models/checkpoints"), "models/checkpoints", "--ckpt-dir"),
     ("loras", "LoRA", True, ("models/Lora",), "models/loras", "--lora-dir"),
     ("vae", "VAE", False, ("models/VAE",), "models/vae", "--vae-dir"),
     ("embeddings", "Embedding 嵌入", False, ("models/embeddings", "embeddings"), "models/embeddings", "--embeddings-dir"),
     ("controlnet", "ControlNet", False, ("models/ControlNet",), "models/controlnet", "--controlnet-dir"),
     ("upscale_models", "放大模型", False, ("models/ESRGAN",), "models/upscale_models", "--esrgan-models-path"),
-    ("hypernetworks", "Hypernetwork", False, ("models/hypernetwork",), "models/hypernetworks", "--hypernetwork-dir"),
-    ("diffusion_models", "扩散模型 (UNet / DiT)", False, (), "models/diffusion_models", None),
-    ("text_encoders", "文本编码器", False, ("models/text_encoder",), "models/text_encoders", None),
+    ("hypernetworks", "Hypernetwork", False, ("models/hypernetworks",), "models/hypernetworks", "--hypernetwork-dir"),
+    ("diffusion_models", "扩散模型 (UNet / DiT)", False, ("models/diffusion_models",), "models/diffusion_models", None),
+    # Neo 支持 --text-encoder-dirs（Classic 没有，扫描时会被自动跳过）
+    ("text_encoders", "文本编码器", False, ("models/text_encoder",), "models/text_encoders", "--text-encoder-dirs"),
     ("clip_vision", "CLIP Vision", False, (), "models/clip_vision", None),
 ]
 
@@ -364,13 +372,43 @@ def comfy_yaml_text(lib_path):
     return "\n".join(lines) + "\n"
 
 
-def forge_library_args(lib_path):
-    """WebUI 用的模型目录参数"""
-    args = []
+_FLAG_CACHE = {}
+
+
+def _scan_supported_flags(webui_root):
+    """从目标 WebUI 源码里收集 launch.py 实际支持的命令行参数（--xxx 形式）。
+    读不到源码返回 None（调用方按全支持处理，保持旧行为）。按 webui_root 缓存。"""
+    if webui_root in _FLAG_CACHE:
+        return _FLAG_CACHE[webui_root]
+    import re
+    text_parts = []
+    for rel in ("modules/cmd_args.py", "launch.py"):
+        try:
+            with open(os.path.join(webui_root, rel), "r", encoding="utf-8", errors="replace") as f:
+                text_parts.append(f.read())
+        except OSError:
+            continue
+    flags = set(re.findall(r"""["'](--[a-z0-9-]+)["']""", "\n".join(text_parts))) if text_parts else None
+    _FLAG_CACHE[webui_root] = flags
+    return flags
+
+
+def forge_library_args(lib_path, webui_root=""):
+    """WebUI 用的模型目录参数，返回 (参数字符串, 被跳过的参数列表)。
+
+    webui_root 传入时会先扫描目标 WebUI 的参数定义，只传它真正支持的参数：
+    Neo 2.29 起删掉了 --hypernetwork-dir 等老参数，照传会被 argparse 直接
+    拒绝启动（unrecognized arguments），整个 WebUI 起不来。"""
+    supported = _scan_supported_flags(webui_root) if webui_root else None
+    args, skipped = [], []
     for k, _l, _i, _f, _c, flag in LIBRARY_CATEGORIES:
-        if flag:
-            args.append(f'{flag} "{os.path.join(lib_path, k)}"')
-    return " ".join(args)
+        if not flag:
+            continue
+        if supported is not None and flag not in supported:
+            skipped.append(flag)
+            continue
+        args.append(f'{flag} "{os.path.join(lib_path, k)}"')
+    return " ".join(args), skipped
 
 
 def quick_hash(path):
