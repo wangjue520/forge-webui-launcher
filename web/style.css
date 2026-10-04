@@ -1093,3 +1093,43 @@ textarea.ta-prompt {
 :root:not([data-ui-base]) .toast { font-weight: 500; letter-spacing: .02em; }
 :root:not([data-ui-base]) .toast.error { color: #ffd9d6; border-left-color: #e0473d; }
 :root:not([data-ui-base]) .nav-item.active .nav-tag { color: var(--ink); }
+
+/* ============================================================
+   侧栏性能监控（js/perfmon.js，所有主题通用的基础样式）
+   #perf-mon 占满导航与状态栏之间的空白（flex-basis 0），内容贴底；
+   放不下时 JS 会减行，少于 2 行加 .pm-collapsed 整体隐藏
+   ============================================================ */
+#sidebar #nav { flex: 0 0 auto; }
+.perf-mon {
+  flex: 1 1 0; min-height: 0; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: flex-end;
+  padding: 10px 14px 10px;
+  /* 默认（终末地，黑色侧栏）配色；各主题覆盖这些变量 */
+  --pm-line: var(--yel); --pm-fill: rgba(255, 242, 0, .12); --pm-grid: rgba(255, 255, 255, .09);
+  --pm-hot: #ff5a4e; --pm-text: #8e9095; --pm-val: #f1f2ee; --pm-bg: rgba(255, 255, 255, .03); --pm-dot: square;
+}
+.perf-mon.pm-collapsed .pm-box, .perf-mon.pm-off .pm-box { display: none; }
+.pm-box { flex: none; display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, .08); }
+.pm-title { display: flex; align-items: center; gap: 6px; font: 9.5px var(--mono); letter-spacing: .2em; color: var(--pm-text); white-space: nowrap; }
+.pm-t b { font-weight: normal; color: var(--pm-line); }
+.pm-live { width: 6px; height: 6px; margin-left: auto; flex: none; background: var(--pm-line); animation: pulse 2s steps(1) infinite; }
+.pm-box.stale .pm-live { animation: none; opacity: .25; }
+.pm-row { flex: none; min-width: 0; }
+.pm-head { display: flex; align-items: baseline; justify-content: space-between; gap: 6px; font-size: 11px; line-height: 1.35; color: var(--pm-text); }
+.pm-label { white-space: nowrap; }
+.pm-val { font: 11px var(--mono); font-weight: normal; color: var(--pm-val); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pm-row.na .pm-val { color: var(--pm-text); opacity: .8; }
+.pm-row.hot .pm-val { color: var(--pm-hot); }
+.pm-spark { display: block; width: 100%; height: 20px; margin-top: 3px; background: var(--pm-bg); }
+
+/* 极简 / 液态玻璃（data-ui-base="minimal"）：跟随它们的配色变量 */
+[data-ui-base="minimal"] .perf-mon {
+  --pm-line: var(--m-accent); --pm-fill: var(--m-accent-soft); --pm-grid: var(--m-border);
+  --pm-hot: var(--m-bad); --pm-text: var(--m-text-3); --pm-val: var(--m-text); --pm-bg: var(--m-fill); --pm-dot: round;
+}
+[data-ui-base="minimal"] .pm-box { border-top-color: var(--m-border-2); }
+[data-ui-base="minimal"] .pm-title { font-family: inherit; letter-spacing: .04em; }
+[data-ui-base="minimal"] .pm-live { border-radius: 50%; }
+[data-ui-base="minimal"] .pm-spark { border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) { .pm-live { animation: none !important; } }

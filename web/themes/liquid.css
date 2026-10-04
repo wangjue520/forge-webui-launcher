@@ -463,3 +463,8 @@
 [data-ui-theme^="liquid"] .data-table tbody tr.selected { box-shadow: none; }
 [data-ui-theme^="liquid"] .cat-item { border-radius: 10px; }
 [data-ui-theme^="liquid"] .cat-item.active { box-shadow: none; font-weight: 500; }
+
+/* ---------- 侧栏性能监控：玻璃侧栏里的一块圆角填充 ---------- */
+[data-ui-theme^="liquid"] .perf-mon { padding: 8px 14px 6px; }
+[data-ui-theme^="liquid"] .pm-box { border-top: 0; padding: 10px 12px; border-radius: 16px; background: var(--m-fill); }
+[data-ui-theme^="liquid"] .pm-spark { border-radius: 6px; }

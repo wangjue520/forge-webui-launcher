@@ -1,4 +1,4 @@
-﻿#Requires -Version 3.0
+#Requires -Version 3.0
 # Forge WebUI 启动器 - 便携 Python 自动引导脚本
 #
 # 用途：启动WWY启动器.bat 在系统里找不到任何可用 Python 时调用本脚本，
@@ -102,10 +102,58 @@ function Download-File([string]$url, [string]$dest) {
     if (-not (Test-Path $dest)) { throw '下载失败：目标文件不存在' }
 }
 
+function Get-TextWithFallback([string]$url, [bool]$useProxy) {
+    # 与 Get-JsonWithFallback 同一套候选策略，但返回纯文本（SHA256SUMS 用）
+    $candidates = @($url)
+    if ($useProxy) {
+        $candidates = @()
+        foreach ($p in $proxyPrefixes) { $candidates += ($p + $url) }
+        $candidates += $url
+    }
+    else {
+        foreach ($p in $proxyPrefixes) { $candidates += ($p + $url) }
+    }
+    $lastErr = $null
+    foreach ($u in $candidates) {
+        try {
+            return (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 60).Content
+        }
+        catch {
+            $lastErr = $_
+            Write-Host ("[bootstrap] 请求失败，换下一个地址: " + $u)
+        }
+    }
+    throw $lastErr
+}
+
 function Resolve-PythonAsset([bool]$useProxy) {
     $tag = (Get-JsonWithFallback $tagUrl $useProxy).tag
     if (-not $tag) { throw '无法获取 python-build-standalone 最新版本号' }
     Write-Host ("[bootstrap] python-build-standalone 最新版本: " + $tag)
+    # 优先走可预测的 SHA256SUMS 直链：releases/download 不吃
+    # api.github.com 的 60 次/小时未认证限额（共享出口 IP 极易超限），
+    # 而且文件名清单就在清单内容里，连列资产的 API 调用都省了
+    $sumsUrl = 'https://github.com/astral-sh/python-build-standalone/releases/download/' + $tag + '/SHA256SUMS'
+    try {
+        $sumsText = Get-TextWithFallback $sumsUrl $useProxy
+        foreach ($line in ($sumsText -split "`n")) {
+            $parts = $line.Trim() -split '\s+'
+            if ($parts.Count -eq 2 -and $parts[1] -match $assetNamePattern) {
+                Write-Host ("[bootstrap] 选中构建: " + $parts[1])
+                return @{
+                    Tag     = $tag
+                    Name    = $parts[1]
+                    Url     = 'https://github.com/astral-sh/python-build-standalone/releases/download/' + $tag + '/' + $parts[1]
+                    Digest  = ''
+                    SumsUrl = $sumsUrl
+                }
+            }
+        }
+        throw 'SHA256SUMS 里没有匹配 Windows x86_64 的 Python 3.13 便携构建'
+    }
+    catch {
+        Write-Host ('[bootstrap] SHA256SUMS 直链不可用（' + $_.Exception.Message + '），退回 GitHub API 查询 ...')
+    }
     $release = Get-JsonWithFallback ($releaseApi + $tag) $useProxy
     $asset = $null
     foreach ($a in $release.assets) {

@@ -16,8 +16,12 @@ Python 来源：astral-sh/python-build-standalone
 Git 来源：git-for-windows 官方发布的 PortableGit（自解压 7z 包），
     这是 Git for Windows 项目自己提供的便携版本，不是第三方转包的。
 
-两者都通过 GitHub Releases API 实时查询最新版本和下载链接，不写死某个
-具体版本号/文件名（那样过一段时间必然失效）。
+两者都实时查询最新版本下载，不写死某个具体版本号/文件名（那样过一段
+时间必然失效）。Python 一侧刻意避开 api.github.com（未认证限额
+60 次/小时/IP，公司/校园网/共享代理出口极易超限）：版本号走
+raw.githubusercontent.com，文件名清单与哈希基准走 release 附带的
+SHA256SUMS 直链（releases/download 不吃 API 限额）；Git 一侧因为
+sha256 只写在发布正文里必须走 API，限流时自动追加加速代理重试。
 """
 import hashlib
 import os
@@ -78,6 +82,12 @@ def _github_candidates(url, cfg=None, log_cb=None):
     return urls
 
 
+def _is_rate_limited(err):
+    """GitHub API 未认证限额 60 次/小时/IP 触发时的报错特征"""
+    s = str(err).lower()
+    return "rate limit" in s
+
+
 def _get_json(url, cfg=None, log_cb=None, timeout=30):
     """
     带镜像兜底的 JSON GET。踩过的坑：这两个 GitHub 查询接口
@@ -86,9 +96,16 @@ def _get_json(url, cfg=None, log_cb=None, timeout=30):
     「下文件能走镜像、查版本号却裸连」，国内把 GitHub 墙了的网络环境里，
     部署直接死在第一步「查询最新版本」，跟没做镜像加速一样。
     现在查询和下载走同一套候选地址策略，全部失败才报错。
+
+    另一个坑：api.github.com 未认证限额 60 次/小时/IP，公司/校园网/
+    共享代理出口 IP 极易超限——此时检测结果是"可直连"（确实能连，只是
+    被限流），候选列表里只有原站一个地址。限流不是"网络不通"，所以
+    命中限流特征时无条件追加一轮加速代理再试（用户显式设置"总是用
+    原站"时尊重其选择，不追加）。
     """
     urls = _github_candidates(url, cfg, log_cb)
     last_error = None
+    tried = 0
     for i, u in enumerate(urls):
         try:
             if log_cb and i > 0:
@@ -97,9 +114,31 @@ def _get_json(url, cfg=None, log_cb=None, timeout=30):
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
+            tried += 1
             last_error = e
             continue
-    raise PortableEnvError(f"查询失败（已尝试 {len(urls)} 个地址）: {last_error}")
+    if _is_rate_limited(last_error) and cfg is not None \
+            and cfg.get("mirror_mode") != "never":
+        try:
+            import mirror_manager as mm
+            extra = [u for u in (mm.github_url(url, True, i)
+                                 for i in range(len(mm.GITHUB_PROXIES)))
+                     if u not in urls]
+        except Exception:
+            extra = []
+        if extra:
+            if log_cb:
+                log_cb("[网络] GitHub API 触发限流（共享出口 IP 常见），改用加速代理重试 ...")
+            for u in extra:
+                try:
+                    resp = requests.get(u, headers=_GH_HEADERS, timeout=timeout)
+                    resp.raise_for_status()
+                    return resp.json()
+                except Exception as e:
+                    tried += 1
+                    last_error = e
+                    continue
+    raise PortableEnvError(f"查询失败（已尝试 {tried} 个地址）: {last_error}")
 
 
 def get_latest_pbs_tag(cfg=None, log_cb=None):
@@ -134,23 +173,17 @@ def list_release_assets_with_meta(repo, tag=None, cfg=None, log_cb=None):
     return assets, (data.get("body") or "")
 
 
-def fetch_pbs_sha256sums(tag, cfg=None, log_cb=None):
-    """
-    下载并解析 python-build-standalone 每个 release 都附带的 SHA256SUMS，
-    返回 {文件名: sha256}。这是防篡改的校验基准：加速代理是第三方中间人，
-    有能力替换下载内容，但它要同时篡改清单和文件才能通过校验。
+def pbs_download_url(tag, name):
+    """python-build-standalone 资产的下载直链，可预测、不需要 API"""
+    return f"https://github.com/{PBS_REPO}/releases/download/{tag}/{name}"
 
-    拿不到清单视为失败（fail-closed）——宁可部署不了，也不装来源不可证的
-    解释器。
-    """
-    assets = list_release_assets(PBS_REPO, tag, cfg, log_cb)
-    sums = next((a for a in assets if a["name"] == "SHA256SUMS"), None)
-    if not sums:
-        raise PortableEnvError("release 中没有 SHA256SUMS 清单文件，无法校验下载内容，已中止")
-    urls = _github_candidates(sums["url"], cfg, log_cb)
-    last_error = None
-    for u in urls:
+
+def _download_sums(urls, log_cb=None):
+    """从候选地址下载并解析 SHA256SUMS，返回 {文件名: sha256}；全失败返回 None"""
+    for i, u in enumerate(urls):
         try:
+            if log_cb and i > 0:
+                log_cb(f"[网络] 上一个地址失败，改用: {u.split('/')[2]}")
             resp = requests.get(u, timeout=60)
             resp.raise_for_status()
             result = {}
@@ -160,13 +193,49 @@ def fetch_pbs_sha256sums(tag, cfg=None, log_cb=None):
                     result[parts[1]] = parts[0].lower()
             if result:
                 return result
-            last_error = PortableEnvError("SHA256SUMS 内容为空或无法解析")
-        except PortableEnvError as e:
-            raise
-        except Exception as e:
-            last_error = e
+        except Exception:
             continue
-    raise PortableEnvError(f"无法获取 SHA256SUMS（已尝试 {len(urls)} 个地址）: {last_error}")
+    return None
+
+
+def fetch_pbs_sha256sums(tag, cfg=None, log_cb=None):
+    """
+    下载并解析 python-build-standalone 每个 release 都附带的 SHA256SUMS，
+    返回 {文件名: sha256}。这是防篡改的校验基准：加速代理是第三方中间人，
+    有能力替换下载内容，但它要同时篡改清单和文件才能通过校验。
+
+    拿不到清单视为失败（fail-closed）——宁可部署不了，也不装来源不可证的
+    解释器。
+
+    踩过的坑：清单地址是可预测的（releases/download/<tag>/SHA256SUMS），
+    以前却先调 api.github.com 列资产拿 URL——那个接口未认证限额
+    60 次/小时/IP，共享出口 IP 极易超限，部署直接死在拿清单这一步。
+    直链不吃 API 限额，先走直链；官方哪天改了文件名再退回 API 列举。
+    """
+    result = _download_sums(
+        _github_candidates(pbs_download_url(tag, "SHA256SUMS"), cfg, log_cb), log_cb)
+    if result:
+        return result
+    if log_cb:
+        log_cb("[网络] SHA256SUMS 直链不可用，退回 GitHub API 查询资产地址 ...")
+    assets = list_release_assets(PBS_REPO, tag, cfg, log_cb)
+    sums = next((a for a in assets if a["name"] == "SHA256SUMS"), None)
+    if not sums:
+        raise PortableEnvError("release 中没有 SHA256SUMS 清单文件，无法校验下载内容，已中止")
+    result = _download_sums(_github_candidates(sums["url"], cfg, log_cb), log_cb)
+    if result:
+        return result
+    raise PortableEnvError("无法获取 SHA256SUMS（所有候选地址都失败或内容为空）")
+
+
+def pick_python_asset_from_sums(sha_map, version_prefix, tag):
+    """
+    不查 API，直接从 SHA256SUMS 的文件名清单里挑 Python 构建并拼出下载直链。
+    SHA256SUMS 本身就是完整资产清单，筛选规则和 pick_python_asset 一致。
+    """
+    assets = [{"name": name, "url": pbs_download_url(tag, name), "digest": ""}
+              for name in sha_map]
+    return pick_python_asset(assets, version_prefix)
 
 
 def pick_git_asset_sha256(body, asset_name):

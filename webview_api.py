@@ -18,6 +18,7 @@ _emit() -> window.App.onEvent({scope, type, ...}) 推送给前端。
 杀进程树沿用 taskkill /F /T（QProcess.kill 杀不到孙进程的老坑不变）。
 """
 import base64
+import collections
 import json
 import os
 import queue
@@ -511,6 +512,12 @@ class LauncherApi:
         self._meta_dl_thread = None
         self._meta_dl_cancel = False
 
+        # 性能监控：前端就绪后调 perf_start() 才起采样线程（daemon，随进程退出）
+        self._perf_thread = None
+        self._perf_stop = threading.Event()
+        self._perf_lock = threading.Lock()
+        self._perf_hist = collections.deque(maxlen=PERF_HISTORY)
+
     # ---------------------------------------------------------- 基础设施 ----
 
     def _set_window(self, window):
@@ -831,6 +838,7 @@ class LauncherApi:
 
     def exit_app(self, kill_webui=True):
         if kill_webui:
+            self._perf_stop.set()
             self._kill_all_runners()
             if self._window:
                 self._window.destroy()
@@ -1396,8 +1404,10 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
             # 下载完必须校验通过才会解压/执行（加速代理是第三方中间人）。
             log("[便携环境] 获取官方校验清单 SHA256SUMS ...\n")
             sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self._deploy_cfg, log_cb=net_log)
-            assets = pe.list_release_assets(pe.PBS_REPO, tag, cfg=self._deploy_cfg, log_cb=net_log)
-            asset = pe.pick_python_asset(assets, version_prefix)
+            # 文件名清单就在 SHA256SUMS 里，直接挑资产并拼下载直链，不调
+            # api.github.com 列资产（未认证限额 60 次/小时/IP，共享出口 IP
+            # 极易超限；releases/download 直链不吃这个限额）
+            asset = pe.pick_python_asset_from_sums(sha_map, version_prefix, tag)
             if not asset:
                 raise pe.PortableEnvError(
                     f"没有找到匹配 Python {version_prefix}.x / Windows x86_64 的构建，可能需要手动安装")
@@ -1405,14 +1415,6 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
             if not expected:
                 raise pe.PortableEnvError(
                     f"官方 SHA256SUMS 中没有 {asset['name']} 的哈希记录，无法验证下载内容，已中止")
-            # 交叉核对：GitHub API 的资产摘要应当与官方清单一致，不一致说明
-            # 元数据链路也可能被代理篡改，直接中止
-            api_digest = (asset.get("digest") or "")
-            if api_digest.startswith("sha256:"):
-                api_digest = api_digest[len("sha256:"):].lower()
-                if api_digest != expected:
-                    raise pe.PortableEnvError(
-                        "GitHub API 摘要与官方 SHA256SUMS 不一致，元数据可能被篡改，已中止")
             log(f"[便携环境] 下载 {asset['name']} ...\n")
             archive_path = os.path.join(tmp, asset["name"])
             if not _cached_archive_ok(archive_path, expected, log):
@@ -4955,6 +4957,156 @@ def _api_launcher_restart(self):
 
 
 # ============================================================
+# 性能监控（侧栏 sparkline：GPU 温度/占用、显存温度/占用、系统内存）
+# ============================================================
+PERF_INTERVAL = 1.0      # 采样间隔（秒）
+PERF_HISTORY = 60        # 后端保留的历史条数：页面刷新/切主题后前端能一次补齐曲线
+_NVSMI_FIELDS = "temperature.gpu,temperature.memory,utilization.gpu,memory.used,memory.total"
+_MEMSTAT_CLS = None
+
+
+def _find_nvidia_smi():
+    """定位 nvidia-smi：找法同 deploy_preflight.detect_nvidia()"""
+    p = shutil.which("nvidia-smi")
+    if p:
+        return p
+    cands = [r"C:\Windows\System32\nvidia-smi.exe"]
+    sysroot = os.environ.get("SystemRoot")
+    if sysroot:
+        cands.insert(0, os.path.join(sysroot, "System32", "nvidia-smi.exe"))
+    for c in cands:
+        if os.path.isfile(c):
+            return c
+    return None
+
+
+def _nvsmi_num(s):
+    """nvidia-smi 的数值字段；[N/A]、[Not Supported] 这类一律返回 None"""
+    s = (s or "").strip().strip("[]").strip()
+    try:
+        return round(float(s), 1)
+    except ValueError:
+        return None
+
+
+def _query_gpu(exe):
+    """查一次第一块 NVIDIA 显卡；失败返回 None"""
+    r = subprocess.run(
+        [exe, "--query-gpu=" + _NVSMI_FIELDS, "--format=csv,noheader,nounits"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=4, creationflags=_NO_WINDOW)
+    if r.returncode != 0:
+        return None
+    for line in (r.stdout or "").splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 5:
+            continue
+        v = [_nvsmi_num(p) for p in parts[:5]]
+        return {"gpu_temp": v[0], "mem_temp": v[1], "gpu_util": v[2],
+                "vram_used": v[3], "vram_total": v[4]}
+    return None
+
+
+def _query_ram():
+    """系统内存 (已用 MiB, 总量 MiB)；拿不到返回 (None, None)"""
+    global _MEMSTAT_CLS
+    if os.name == "nt":
+        import ctypes
+        if _MEMSTAT_CLS is None:
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            _MEMSTAT_CLS = _MEMORYSTATUSEX
+        st = _MEMSTAT_CLS()
+        st.dwLength = ctypes.sizeof(st)
+        if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+            return None, None
+        total = st.ullTotalPhys / 1048576.0
+        return round(total - st.ullAvailPhys / 1048576.0, 1), round(total, 1)
+    # 非 Windows（开发调试用）：读 /proc/meminfo
+    try:
+        info = {}
+        with open("/proc/meminfo", "r") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                info[k] = float(rest.split()[0]) / 1024.0
+        total = info["MemTotal"]
+        return round(total - info.get("MemAvailable", info.get("MemFree", 0)), 1), round(total, 1)
+    except (OSError, KeyError, ValueError, IndexError):
+        return None, None
+
+
+def _perf_loop(self):
+    """采样线程：约 1 秒一次，存历史并推给前端。任何异常都只跳过本轮，线程不会死"""
+    exe = _find_nvidia_smi()
+    next_find = time.monotonic() + 60
+    gpu_fails = 0
+    gpu_retry_at = 0.0
+    while not self._perf_stop.is_set():
+        t0 = time.monotonic()
+        try:
+            # 没找到 nvidia-smi 时每分钟再找一次（装完驱动不用重启启动器）
+            if exe is None and t0 >= next_find:
+                exe = _find_nvidia_smi()
+                next_find = t0 + 60
+            gpu = None
+            if exe and t0 >= gpu_retry_at:
+                try:
+                    gpu = _query_gpu(exe)
+                except (OSError, subprocess.SubprocessError, ValueError):
+                    gpu = None
+                if gpu is None:
+                    # 连续失败就退避，别每秒都去拉一个必然失败的进程
+                    gpu_fails += 1
+                    if gpu_fails >= 3:
+                        gpu_retry_at = t0 + 15
+                else:
+                    gpu_fails = 0
+            try:
+                ram_used, ram_total = _query_ram()
+            except Exception:
+                ram_used = ram_total = None
+            g = gpu or {}
+            sample = {
+                "ts": time.time(), "gpu": bool(gpu),
+                "gpu_temp": g.get("gpu_temp"), "mem_temp": g.get("mem_temp"),
+                "gpu_util": g.get("gpu_util"),
+                "vram_used": g.get("vram_used"), "vram_total": g.get("vram_total"),
+                "ram_used": ram_used, "ram_total": ram_total,
+            }
+            with self._perf_lock:
+                self._perf_hist.append(sample)
+            # 发送队列积压时（渲染侧忙）直接丢掉这一帧，不和部署日志抢道，
+            # 也绝不因 put 阻塞采样线程；窗口未注入时 _emit 自己会直接返回
+            if self._emit_q.qsize() < 50:
+                self._emit("perf", "sample", sample=sample)
+        except Exception:
+            pass
+        self._perf_stop.wait(max(0.2, PERF_INTERVAL - (time.monotonic() - t0)))
+
+
+def _api_perf_start(self):
+    """前端就绪后调用：启动采样线程（幂等），并返回已有的历史采样"""
+    with self._perf_lock:
+        if self._perf_thread is None or not self._perf_thread.is_alive():
+            self._perf_stop.clear()
+            self._perf_thread = threading.Thread(target=self._perf_loop, daemon=True,
+                                                 name="perf-sampler")
+            self._perf_thread.start()
+        hist = list(self._perf_hist)
+    return {"ok": True, "interval": PERF_INTERVAL, "history": hist}
+
+
+# ============================================================
 # 把分节写的函数挂到 LauncherApi 上
 # ============================================================
 
@@ -5051,5 +5203,7 @@ for _name, _fn in {
     "instance_config_update": _api_instance_config_update,
     "set_multi_ui": _api_set_multi_ui,
     "set_hidden_pages": _api_set_hidden_pages,
+    "perf_start": _api_perf_start,
+    "_perf_loop": _perf_loop,
 }.items():
     setattr(LauncherApi, _name, _fn)

@@ -304,7 +304,13 @@
 @keyframes vbRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 
-:root[data-ui-theme="vector"] #content { padding-right: 50px; padding-top: 22px; }
+/* 顶栏浮在内容上方（同 liquid 的做法）：内容从毛玻璃顶栏下面滚过去，
+   顶栏收起/展开不改变布局，不会和滚动位置互相打架；--vb-top-h 由 vector.js 实测写入 */
+:root[data-ui-theme="vector"] #content {
+  padding-right: 50px;
+  padding-top: calc(var(--vb-top-h, 104px) + 22px);
+  scroll-padding-top: calc(var(--vb-top-h, 104px) + 10px);
+}
 
 /* 页头变高了：两个按视口高度算的布局跟着减掉多出来的 30px */
 :root[data-ui-theme="vector"] .models-layout { height: calc(100vh - 306px); }
@@ -710,3 +716,236 @@
   :root[data-ui-theme="vector"] .vbm-title small { display: none; }
   :root[data-ui-theme="vector"] #vb-mast { gap: 20px; }
 }
+
+/* ============ 顶栏随滚动收起 → 居中的「灵动岛」小胶囊 ============
+   两个元素两种性格：大的顶栏柔顺（只做从上往下的渐变抹除，不弹），小的胶囊灵动（过冲回弹）。
+   vector.js 带滞后判定：下滚超过 40px 收起，回到 8px 以下展开，切换后锁定到动画结束才允许反转。
+   vector.js 在切换瞬间给 #main 挂 vb-anim-collapse / vb-anim-expand 重触发动画，锁定时长到点后摘掉；
+   每个 keyframes 的终点 = 对应静止态，摘类不会跳。
+   时间轴（锁定：收起 1020ms / 展开 780ms，必须 ≥ 下面每条的 delay + 时长，含 vector.js 的分段计时）：
+     收起  0s     顶栏底边辉光线先淡掉                                            → .10s
+           .10s   顶栏被一道柔和的渐变遮罩从上往下抹掉（mask-position 位移）        → .50s
+           .06s   一个较长的空胶囊（无文字）从扁椭圆弹出：过冲 → 多段回弹落定        → .68s
+           .36s   vector.js 写入实测宽度：胶囊回弹着缩短到页名所需宽度（width .6s）  → .96s
+           .60s   vector.js 摘掉 vbi-intro：文字由虚到实、带过冲浮现               → 1.00s
+           .64s   落定信号：胶囊内描边闪一下 + 底边辉光线拉长一次                    → .98s
+     展开  0s     文字快速消隐                                                      → .14s
+           .04s   胶囊先横向压扁、下沉（预备），再加速被「吸」回顶部中央            → .44s
+           .06s   顶栏反向柔顺地显现：遮罩从下往上退开                              → .56s
+           .50s   遮罩撤掉后，底边辉光线柔和淡入                                    → .76s
+   遮罩会裁掉盒子外面的东西（底边辉光线伸出盒子的部分），所以静止展开态不挂遮罩：
+   挂上 / 撤掉遮罩由 keyframes 里 mask-image 的离散切换完成，辉光线先淡出 / 后淡入，切换瞬间看不出来。
+   注意：运行中的 transition 在层叠里会压过 animation，所以胶囊的 transform、opacity
+   不做 transition，只有宽度、描边、阴影还走过渡。
+   胶囊宽度过渡只在收起态生效：展开态改宽度瞬间到位，不和形变打架 */
+:root[data-ui-theme="vector"] #main {
+  --vbi-out: cubic-bezier(.4, 0, .2, 1);           /* 标准缓动 */
+  --vbi-width: cubic-bezier(.34, 1.56, .5, 1);     /* 换页伸缩 / 入场缩短：明显回弹 */
+  /* 抹除遮罩：上段透明、下段不透明、中间一段柔和过渡；遮罩高 300%，
+     position 0 100% = 只露出不透明段（完全可见），0 0 = 只露出透明段（完全消失） */
+  --vb-wipe: linear-gradient(180deg, transparent 0%, transparent 38%, #000 62%, #000 100%);
+}
+:root[data-ui-theme="vector"] #topbar {
+  position: absolute; left: 0; right: 0; top: 0; z-index: 5;
+  transition: none;                                /* 显隐全部交给 keyframes */
+  -webkit-mask-size: 100% 300%; mask-size: 100% 300%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: 0 100%; mask-position: 0 100%;
+  will-change: opacity;
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #topbar {
+  -webkit-mask-image: var(--vb-wipe); mask-image: var(--vb-wipe);
+  -webkit-mask-position: 0 0; mask-position: 0 0;
+  opacity: 0; pointer-events: none;
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #topbar::after { opacity: 0; }
+:root[data-ui-theme="vector"] #main.vb-anim-collapse #topbar { animation: vbBarWipeOut .5s both; }
+:root[data-ui-theme="vector"] #main.vb-anim-collapse #topbar::after { animation: vbBarGlowOut .1s ease-out both; }
+:root[data-ui-theme="vector"] #main.vb-anim-expand #topbar { animation: vbBarWipeIn .5s .06s both; }
+:root[data-ui-theme="vector"] #main.vb-anim-expand #topbar::after { animation: vbBarGlowIn .26s ease-out .5s both; }
+/* 抹除：前 20% 等辉光线淡掉，然后挂上遮罩（此刻遮罩完全不透明，看不出变化），
+   透明带从顶部平滑地往下推；整栏透明度只在最后、几乎抹完时才收尾 */
+@keyframes vbBarWipeOut {
+  0% { -webkit-mask-image: none; mask-image: none; -webkit-mask-position: 0 100%; mask-position: 0 100%; opacity: 1; }
+  19.9% { -webkit-mask-image: none; mask-image: none; }
+  20% { -webkit-mask-image: var(--vb-wipe); mask-image: var(--vb-wipe); -webkit-mask-position: 0 100%; mask-position: 0 100%; opacity: 1;
+        animation-timing-function: cubic-bezier(.45, 0, .25, 1); }
+  80% { opacity: 1; }
+  100% { -webkit-mask-image: var(--vb-wipe); mask-image: var(--vb-wipe); -webkit-mask-position: 0 0; mask-position: 0 0; opacity: 0; }
+}
+/* 显现：反向播放 —— 遮罩从下往上平滑退开，退完（完全不透明）后撤掉遮罩 = 静止展开态 */
+@keyframes vbBarWipeIn {
+  0% { -webkit-mask-image: var(--vb-wipe); mask-image: var(--vb-wipe); -webkit-mask-position: 0 0; mask-position: 0 0; opacity: 0;
+       animation-timing-function: cubic-bezier(.45, 0, .25, 1); }
+  14% { opacity: 1; }
+  88% { -webkit-mask-image: var(--vb-wipe); mask-image: var(--vb-wipe); -webkit-mask-position: 0 100%; mask-position: 0 100%; }
+  88.1% { -webkit-mask-image: none; mask-image: none; }
+  100% { -webkit-mask-image: none; mask-image: none; -webkit-mask-position: 0 100%; mask-position: 0 100%; opacity: 1; }
+}
+/* 辉光线：只写一端，另一端取静止值（收起态 0 / 展开态原样） */
+@keyframes vbBarGlowOut { to { opacity: 0; } }
+@keyframes vbBarGlowIn { from { opacity: 0; } }
+
+/* 灵动岛本体：墨色玻璃胶囊 + 白色描边高光 + 青色辉光（与 vector 的 toast / 日志面板同材质） */
+#vb-island { display: none; }
+:root[data-ui-theme="vector"] #vb-island {
+  display: flex; align-items: center; justify-content: center;
+  position: absolute; top: 12px; left: 50%; z-index: 6;
+  box-sizing: border-box; height: 36px; min-width: 36px; margin: 0; padding: 0; overflow: hidden;
+  border-radius: 99px; border: 1px solid rgba(255, 255, 255, .14);
+  font: inherit; color: #eef6f6; cursor: pointer; -webkit-appearance: none; appearance: none;
+  background: linear-gradient(180deg, rgba(38, 54, 57, .9), rgba(16, 26, 28, .93));
+  -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .14) inset, 0 -1px 0 rgba(0, 0, 0, .3) inset,
+              0 14px 32px -14px rgba(8, 30, 32, .75), 0 0 22px -8px rgba(30, 200, 204, .45);
+  /* 默认（展开态）：缩成顶部中央一颗压扁的小椭圆并隐藏（= vbiSuck 的终点） */
+  transform: translate3d(-50%, -14px, 0) scale(.3, .24); opacity: 0; pointer-events: none;
+  /* transform / opacity 交给 keyframes；width 不过渡 —— 隐藏状态下改宽度瞬间到位 */
+  transition: width 0s, border-color .3s, box-shadow .3s var(--vb-ease);
+  will-change: transform, opacity;
+}
+/* 落定信号：内描边 + 内辉光，平时透明，弹出落定的瞬间闪一下 */
+:root[data-ui-theme="vector"] #vb-island::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0;
+  box-shadow: inset 0 0 0 1px rgba(111, 224, 226, .85), inset 0 0 14px rgba(30, 200, 204, .4);
+}
+/* 底边一道青色辉光线 */
+:root[data-ui-theme="vector"] #vb-island::after {
+  content: ""; position: absolute; left: 28%; right: 28%; bottom: 0; height: 1.5px; border-radius: 2px;
+  background: linear-gradient(90deg, transparent, var(--vb-cy), transparent);
+  box-shadow: 0 0 8px rgba(30, 200, 204, .8); opacity: .85; pointer-events: none;
+  transform-origin: 50% 50%;
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #vb-island {
+  transform: translate3d(-50%, 0, 0) scale(1); opacity: 1; pointer-events: auto;
+  /* 换页伸缩：带回弹 */
+  transition: width .6s var(--vbi-width), border-color .3s, box-shadow .3s var(--vb-ease);
+}
+/* 入场三段式：空的长胶囊鼓出（这里）→ 缩短（vector.js 写宽度，走上面的 width 回弹过渡）→ 文字浮现（摘 vbi-intro） */
+:root[data-ui-theme="vector"] #main.vb-anim-collapse #vb-island { animation: vbiPop .62s .06s both; }
+:root[data-ui-theme="vector"] #main.vb-anim-collapse #vb-island::before { animation: vbiFlash .34s ease-out .64s both; }
+:root[data-ui-theme="vector"] #main.vb-anim-collapse #vb-island::after { animation: vbiLine .34s .64s both; }
+:root[data-ui-theme="vector"] #main.vb-anim-expand #vb-island { animation: vbiSuck .4s .04s both; }
+/* 弹出：快出冲到过冲顶点（纵向比横向更鼓），往复回弹两次，最后一次 .975 是「落定」的确认感 */
+@keyframes vbiPop {
+  0% { transform: translate3d(-50%, -12px, 0) scale(.42, .3); opacity: 0; animation-timing-function: cubic-bezier(.16, .84, .3, 1); }
+  14% { opacity: 1; }
+  40% { transform: translate3d(-50%, 2px, 0) scale(1.09, 1.12); animation-timing-function: cubic-bezier(.45, 0, .55, 1); }
+  58% { transform: translate3d(-50%, -1px, 0) scale(.96, .95); animation-timing-function: cubic-bezier(.45, 0, .55, 1); }
+  72% { transform: translate3d(-50%, 0, 0) scale(1.02, 1.015); animation-timing-function: cubic-bezier(.45, 0, .55, 1); }
+  86% { transform: translate3d(-50%, 0, 0) scale(.975); animation-timing-function: cubic-bezier(.3, 0, .3, 1); }
+  100% { transform: translate3d(-50%, 0, 0) scale(1); opacity: 1; }
+}
+/* 吸走：先横向压扁、略下沉（预备），再慢出快入地被吸回顶部中央，透明度只在最后三成下降 */
+@keyframes vbiSuck {
+  0% { transform: translate3d(-50%, 0, 0) scale(1); opacity: 1; animation-timing-function: cubic-bezier(.3, 0, .5, 1); }
+  24% { transform: translate3d(-50%, 2px, 0) scale(1.06, .86); animation-timing-function: cubic-bezier(.6, 0, .86, .32); }
+  70% { opacity: 1; }
+  100% { transform: translate3d(-50%, -14px, 0) scale(.3, .24); opacity: 0; }
+}
+@keyframes vbiFlash { 0% { opacity: 0; } 28% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes vbiLine {
+  0% { transform: none; }
+  30% { transform: scaleX(1.7); opacity: 1; box-shadow: 0 0 12px rgba(30, 200, 204, 1); }
+  100% { transform: none; }
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #vb-island:hover {
+  border-color: rgba(30, 200, 204, .55);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .16) inset, 0 -1px 0 rgba(0, 0, 0, .3) inset,
+              0 18px 36px -14px rgba(8, 30, 32, .8), 0 0 28px -6px rgba(30, 200, 204, .7);
+}
+:root[data-ui-theme="vector"] #vb-island:focus-visible { outline: 2px solid var(--vb-cy-2); outline-offset: 3px; }
+
+/* 内容层：宽度 = max-content，由 vector.js 实测后写到胶囊 width 上 */
+:root[data-ui-theme="vector"] #vb-island .vbi-in {
+  flex: none; display: inline-flex; align-items: center; gap: 9px;
+  padding: 0 18px 0 14px; white-space: nowrap;
+  position: relative; z-index: 1;                  /* 压在落定闪光的 ::before 上面 */
+  /* 隐藏态：下沉、缩小、模糊 —— 消隐时三者都用加速曲线快速收走（展开时最先离场） */
+  opacity: 0; transform: translate3d(0, 4px, 0) scale(.9); filter: blur(4px);
+  transition: opacity .1s cubic-bezier(.4, 0, 1, 1), transform .14s cubic-bezier(.4, 0, 1, 1), filter .1s ease-in;
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #vb-island .vbi-in {
+  opacity: 1; transform: none; filter: none;
+  /* 浮现时机由 vector.js 摘掉 vbi-intro 决定（胶囊缩短之后），这里不再加延迟；
+     位移带明显过冲，透明度快到位，模糊慢慢收干净 —— 三条曲线错开 */
+  transition: opacity .26s cubic-bezier(0, 0, .2, 1),
+              transform .4s cubic-bezier(.34, 1.7, .5, 1),
+              filter .3s cubic-bezier(.2, .6, .3, 1);
+}
+:root[data-ui-theme="vector"] #main.vb-collapsed #vb-island:active .vbi-in { transform: scale(.96); transition: transform .16s var(--vbi-out); }
+/* 入场前两段（鼓出、缩短）：内层文字保持隐藏 → 空胶囊 */
+:root[data-ui-theme="vector"] #main.vb-collapsed #vb-island.vbi-intro .vbi-in {
+  opacity: 0; transform: translate3d(0, 5px, 0) scale(.92); filter: blur(4px); transition: none;
+}
+/* 左侧会呼吸的青色小球 */
+:root[data-ui-theme="vector"] #vb-island .vbi-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: radial-gradient(circle at 35% 30%, #fff, #8fe6e8 40%, var(--vb-cy) 80%);
+  box-shadow: 0 0 8px rgba(30, 200, 204, .9);
+  animation: vbPulse 1.8s ease-in-out infinite;
+}
+/* 中文页名：过长省略 */
+:root[data-ui-theme="vector"] #vb-island .vbi-title {
+  display: inline-block; max-width: 40vw; overflow: hidden; text-overflow: ellipsis;
+  font: 800 13.5px/36px "WWY Sans SC", "Microsoft YaHei UI", sans-serif; letter-spacing: .04em; color: #eef6f6;
+}
+/* 收起态下换页：页名自下而上、由虚到实地换进来（和宽度伸缩同时进行，节奏略快于宽度） */
+:root[data-ui-theme="vector"] #vb-island .vbi-title.vbi-swap { animation: vbiSwap .46s both; }
+/* 换字：快出冲过头一点再落回，和宽度回弹同拍 */
+@keyframes vbiSwap {
+  0% { opacity: 0; transform: translate3d(0, 8px, 0); filter: blur(3px); animation-timing-function: cubic-bezier(.16, .84, .3, 1); }
+  55% { opacity: 1; transform: translate3d(0, -1.5px, 0); filter: none; animation-timing-function: cubic-bezier(.45, 0, .55, 1); }
+  100% { opacity: 1; transform: none; filter: none; }
+}
+
+/* 减弱动效：不挂 keyframes（vector.js 也不会加动画类），只做简单淡入淡出 */
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ui-theme="vector"] #topbar,
+  :root[data-ui-theme="vector"] #main.vb-collapsed #topbar,
+  :root[data-ui-theme="vector"] #vb-island,
+  :root[data-ui-theme="vector"] #main.vb-collapsed #vb-island,
+  :root[data-ui-theme="vector"] #vb-island .vbi-in,
+  :root[data-ui-theme="vector"] #main.vb-collapsed #vb-island .vbi-in,
+  :root[data-ui-theme="vector"] #main.vb-collapsed #vb-island:active .vbi-in { transition: opacity .2s ease; }
+  /* 减弱动效：不用遮罩抹除，只做整栏简单淡出 */
+  :root[data-ui-theme="vector"] #main.vb-collapsed #topbar { transform: none; -webkit-mask-image: none; mask-image: none; }
+  :root[data-ui-theme="vector"] #vb-island { transform: translate3d(-50%, 0, 0); }
+  :root[data-ui-theme="vector"] #vb-island .vbi-in,
+  :root[data-ui-theme="vector"] #main.vb-collapsed #vb-island:active .vbi-in { transform: none; filter: none; }
+  :root[data-ui-theme="vector"] #main #topbar,
+  :root[data-ui-theme="vector"] #main #topbar::after,
+  :root[data-ui-theme="vector"] #main #vb-island,
+  :root[data-ui-theme="vector"] #main #vb-island::before,
+  :root[data-ui-theme="vector"] #main #vb-island::after,
+  :root[data-ui-theme="vector"] #vb-island .vbi-dot,
+  :root[data-ui-theme="vector"] #vb-island .vbi-title.vbi-swap { animation: none !important; }
+}
+
+/* ============ 侧栏性能监控：与侧栏毛玻璃同材质的小卡 ============ */
+:root[data-ui-theme="vector"] .perf-mon {
+  padding: 10px 12px 8px;
+  --pm-line: #14b3b7; --pm-fill: rgba(30, 200, 204, .16); --pm-grid: rgba(20, 40, 42, .1);
+  --pm-hot: #d0453c; --pm-text: #56666a; --pm-val: var(--ink); --pm-bg: rgba(255, 255, 255, .5); --pm-dot: round;
+}
+:root[data-ui-theme="vector"] .pm-box {
+  position: relative; gap: 5px; padding: 12px 12px 10px;
+  border: 1px solid var(--vb-rim); border-radius: 14px;
+  background: linear-gradient(150deg, rgba(255, 255, 255, .62), rgba(255, 255, 255, .3));
+  box-shadow: 0 1px 0 #fff inset, 0 10px 24px -16px rgba(10, 70, 74, .45);
+}
+:root[data-ui-theme="vector"] .pm-box::after {   /* 右上「+」准星，和卡片一致 */
+  content: ""; position: absolute; right: 10px; top: 10px; width: 9px; height: 9px; opacity: .7;
+  background:
+    linear-gradient(var(--vb-cy-2), var(--vb-cy-2)) center / 100% 1px no-repeat,
+    linear-gradient(var(--vb-cy-2), var(--vb-cy-2)) center / 1px 100% no-repeat;
+}
+:root[data-ui-theme="vector"] .pm-title { font: 400 9px/1 var(--vb-grot); letter-spacing: -.01em; text-transform: uppercase; color: var(--vb-cy-deep); padding-right: 16px; }
+:root[data-ui-theme="vector"] .pm-t b { color: var(--vb-cy); }
+:root[data-ui-theme="vector"] .pm-live { border-radius: 50%; background: var(--vb-cy); box-shadow: 0 0 6px rgba(30, 200, 204, .8); animation: vbPulse 1.6s ease-in-out infinite; }
+:root[data-ui-theme="vector"] .pm-label { font-weight: 600; color: var(--text-dim); }
+:root[data-ui-theme="vector"] .pm-val { font: 400 12.5px/1 var(--vb-grot); letter-spacing: -.04em; color: var(--ink); }
+:root[data-ui-theme="vector"] .pm-row.na .pm-val { color: var(--text-faint); }
+:root[data-ui-theme="vector"] .pm-row.hot .pm-val { color: #c0392b; }
+:root[data-ui-theme="vector"] .pm-row + .pm-row { border-top: 1px dashed rgba(20, 179, 183, .3); padding-top: 5px; }
+:root[data-ui-theme="vector"] .pm-spark { border-radius: 5px; box-shadow: inset 0 1px 2px rgba(10, 60, 62, .08); }

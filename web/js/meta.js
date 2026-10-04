@@ -325,9 +325,7 @@
     } else if (row.error) {
       extra = `<div class="dim" style="font-size:11px">${App.esc(row.error)}</div>`;
     }
-    const action = row.state === "no_hash"
-      ? ` <button class="btn btn-xs" data-search="${row.idx}">按名字搜索</button>` : "";
-    return `<span${s.cls ? ` style="color:var(--${s.cls})"` : ""}>${s.text}</span>${action}${extra}`;
+    return `<span${s.cls ? ` style="color:var(--${s.cls})"` : ""}>${s.text}</span>${extra}`;
   }
 
   function renderMissing() {
@@ -335,9 +333,12 @@
     if (!missingRows.length) { tb.innerHTML = ""; updateDownloadBtn(); return; }
     tb.innerHTML = missingRows.map((r) => {
       const canDl = ["found", "downloading", "done", "failed"].indexOf(r.state) >= 0;
+      // 「按名字搜索」按钮放第一列：之前放在状态列里，行内容一宽状态列就被
+      // 挤出可视区（容器横向滚动），用户根本看不到这个入口
       const chk = canDl
         ? `<input type="checkbox" data-idx="${r.idx}" ${r.checked ? "checked" : ""} ${(r.state === "downloading" || r.state === "done") ? "disabled" : ""}>`
-        : "";
+        : (r.state === "no_hash"
+          ? `<button class="btn btn-xs" data-search="${r.idx}">按名字搜索</button>` : "");
       return `<tr data-idx="${r.idx}"><td>${chk}</td><td class="dim">${App.esc(r.role)}</td>
         <td>${App.esc(r.name)}</td><td>${stateHtml(r)}</td></tr>`;
     }).join("");

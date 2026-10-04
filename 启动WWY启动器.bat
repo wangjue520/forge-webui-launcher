@@ -9,6 +9,15 @@ title WWY 启动器
 rem 不开 enabledelayedexpansion：路径里如果带 ! 会被吞掉，这个脚本也用不到它
 setlocal
 
+rem ---------- 环境自愈：带病机器也要能部署 ----------
+rem 1) 有些机器 PATH 被改坏（缺 System32），where/tar/timeout/findstr/reg
+rem    全会报"不是内部或外部命令"，自动部署连环失败。把系统目录补回最前面。
+set "PATH=%SystemRoot%\System32;%SystemRoot%\System32\Wbem;%SystemRoot%\System32\WindowsPowerShell1.0;%PATH%"
+rem 2) 极少数机器 TEMP 未定义或指向已删除的目录，pip/解压会直接崩，兜到启动器目录
+if not defined TEMP set "TEMP=%~dp0launcher_data"
+if not exist "%TEMP%\" set "TEMP=%~dp0launcher_data"
+if not exist "%TEMP%\" mkdir "%TEMP%" >nul 2>nul
+
 rem 兼容老习惯：这个 bat 被拿到启动器文件夹【旁边】时，自动转交文件夹里的本体
 if not exist "%~dp0webview_main.py" (
     for /d %%d in ("%~dp0forge-webui-launcher*") do (
@@ -23,6 +32,20 @@ if not exist "%~dp0webview_main.py" (
     exit /b 1
 )
 
+rem ---------- cmd AutoRun 残留检测（只提示，不影响流程） ----------
+rem 有的机器 cmd 配了 AutoRun（典型：卸载 Anaconda/clink 后残留），表现为
+rem 每个 cmd 窗口一打开就先打印"系统找不到指定的路径"。这行字出现在本 bat
+rem 执行之前，bat 无法阻止，只能检测到残留后主动说明，免得误判成部署失败。
+set "AUTORUN_BAD="
+for /f "skip=2 tokens=2,*" %%a in ('reg query "HKCU\Software\Microsoft\Command Processor" /v AutoRun 2^>nul') do call :check_autorun "%%b"
+for /f "skip=2 tokens=2,*" %%a in ('reg query "HKLM\Software\Microsoft\Command Processor" /v AutoRun 2^>nul') do call :check_autorun "%%b"
+if defined AUTORUN_BAD (
+    echo.
+    echo   [i] 提示：此电脑的 cmd 残留了失效的 AutoRun 命令（%AUTORUN_BAD%）。
+    echo       如果窗口最上方有"系统找不到指定的路径"，就是它产生的，
+    echo       与本启动器无关，不影响下面部署，忽略即可。
+)
+
 rem ---------- 首次运行：在桌面放一个带图标的快捷方式 ----------
 rem bat 本身不能带图标（Windows 只认 .lnk/.exe 的图标），所以用脚本生成一个
 rem 指向入口 bat 的桌面快捷方式，图标就是 assets\wwy_launcher_icon.ico。
@@ -32,6 +55,9 @@ if not exist "%~dp0launcher_data\desktop_shortcut.flag" (
     if exist "%~dp0create_shortcuts.ps1" (
         powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0create_shortcuts.ps1" -DesktopOnly >nul 2>nul
     )
+    rem launcher_data/ 被 gitignore 了，从 GitHub 下载的 zip 里没有这个文件夹，
+    rem 直接写 flag 会报"系统找不到指定的路径"，先确保目录存在
+    if not exist "%~dp0launcher_data\" mkdir "%~dp0launcher_data" >nul 2>nul
     echo done>"%~dp0launcher_data\desktop_shortcut.flag" 2>nul
 )
 
@@ -323,6 +349,17 @@ findstr /i /c:"externally-managed-environment" /c:"No module named pip" /c:"Perm
 if not errorlevel 1 exit /b 2
 echo   %~2 没成功，换下一个源重试 ...
 exit /b 1
+
+rem ===================================================================
+rem  :check_autorun "命令行" —— AutoRun 值指向的文件已不存在才记录
+rem  Anaconda 新式写法是 if exist ...（自带判断、静默），直接跳过
+rem ===================================================================
+:check_autorun
+set "AR=%~1"
+if not defined AR exit /b 0
+if /i "%AR:~0,3%"=="if " exit /b 0
+if not exist "%AR:"=%" set "AUTORUN_BAD=%~1"
+exit /b 0
 
 rem ===================================================================
 rem  自动下载便携版 Python（bootstrap_python.ps1 干重活，这里只做调度和报错）

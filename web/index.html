@@ -122,6 +122,8 @@
       <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>WD14 反推</span></button>
       <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
     </nav>
+    <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
+    <section class="perf-mon" id="perf-mon" aria-label="性能监控"></section>
     <div class="sidebar-footer">
       <div id="global-status" class="status-pill" data-state="idle">
         <span class="dot"></span><span id="global-status-text">未启动</span>
@@ -696,7 +698,7 @@
               </div>
               <div class="table-wrap table-wrap-sm">
                 <table class="data-table" id="meta-missing">
-                  <thead><tr><th style="width:56px">下载</th><th style="width:90px">类型</th><th>名称</th><th>状态</th></tr></thead>
+                  <thead><tr><th style="width:108px">下载</th><th style="width:90px">类型</th><th>名称</th><th>状态</th></tr></thead>
                   <tbody></tbody>
                 </table>
               </div>
@@ -884,6 +886,7 @@
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
 <script src="js/outputs.js"></script>
+<script src="js/perfmon.js"></script>
 <script src="js/liquid.js"></script>
 <script src="js/vector.js"></script>
 <script src="js/deco.js"></script>
