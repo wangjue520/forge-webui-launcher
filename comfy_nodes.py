@@ -33,7 +33,10 @@ CATALOG = [
     # ---------- 推荐 ----------
     {"id": MANAGER_ID, "name": "ComfyUI-Manager（节点管理器）", "group": "core", "default": True,
      "desc": "在 ComfyUI 网页里搜索 / 安装 / 更新其它节点，打开别人的工作流时一键补装缺失节点。"
-             "现已内置进 ComfyUI，这里装好依赖后启动器会自动加 --enable-manager 启用。",
+             "现已内置进 ComfyUI，这里装好依赖后启动器会自动加 --enable-manager 启用。"
+             "新版界面的入口：左侧栏「节点」面板就是节点管理器（老版那个 Manager 按钮没了），"
+             "也可以在命令面板里搜 Manager（拼图图标）；装了以后记得刷新一下网页。"
+             "想要老版 Manager 界面的话，在高级选项的额外参数里加 --enable-manager-legacy-ui 重启即可。",
      "url": "", "folder": ""},
     {"id": "rgthree-comfy", "name": "rgthree-comfy", "group": "core", "default": True,
      "desc": "工作流整理神器：多 LoRA 堆叠加载、分组一键开关、种子控制、显示中间值，大工作流必备。",
