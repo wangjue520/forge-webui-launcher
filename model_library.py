@@ -328,9 +328,34 @@ LIBRARY_CATEGORIES = [
 ]
 
 
+def library_dir_variants(lib_path, key):
+    """
+    模型库里某个分类在磁盘上实际存在的文件夹（名字不区分大小写匹配），完全同名的排最前。
+
+    库里 WebUI 和 ComfyUI 两套目录名并存时，VAE 是唯一撞名的：WebUI 叫 VAE、ComfyUI 叫 vae，
+    最后磁盘上只有一个大写的 VAE。普通 NTFS 不区分大小写无所谓，但目录开了「区分大小写」
+    （WSL 建的目录、NAS/SMB 共享盘等）时，按小写 vae 去找就找不到，ComfyUI 里 VAE 全部消失。
+    所以凡是指向模型库分类的地方，一律按磁盘上的真实名字来。
+    """
+    want = key.lower()
+    try:
+        names = [n for n in os.listdir(lib_path)
+                 if n.lower() == want and os.path.isdir(os.path.join(lib_path, n))]
+    except OSError:
+        names = []
+    names.sort(key=lambda n: (n != key, n))
+    return [os.path.join(lib_path, n) for n in names]
+
+
+def library_dir(lib_path, key):
+    """分类的主目录：磁盘上已有的（大小写按实际）优先，都没有就用标准名（之后由上传/下载创建）"""
+    found = library_dir_variants(lib_path, key)
+    return found[0] if found else os.path.join(lib_path, key)
+
+
 def library_categories(lib_path):
     """模型库的分类列表（模型管理页用），目录不存在也列出来（上传时会自动建）"""
-    return [{"key": k, "label": label, "is_lora": is_lora, "path": os.path.join(lib_path, k)}
+    return [{"key": k, "label": label, "is_lora": is_lora, "path": library_dir(lib_path, k)}
             for k, label, is_lora, _f, _c, _a in LIBRARY_CATEGORIES]
 
 
@@ -393,10 +418,19 @@ def comfy_yaml_text(lib_path):
              "wwy_launcher_library:",
              f'    base_path: "{base}"',
              "    is_default: true"]
+    def entry(comfy_key, cat_key):
+        # 按磁盘上的真实文件夹名写（VAE / vae 都认）；大小写敏感目录里两种写法并存时全部挂上
+        names = [os.path.basename(d) for d in library_dir_variants(lib_path, cat_key)] or [cat_key]
+        if len(names) == 1:
+            lines.append(f'    {comfy_key}: "{names[0]}"')
+        else:
+            lines.append(f"    {comfy_key}: |")
+            lines.extend(f"        {n}" for n in names)
+
     for k, *_ in LIBRARY_CATEGORIES:
-        lines.append(f"    {k}: {k}")
-    lines.append("    unet: diffusion_models")
-    lines.append("    clip: text_encoders")
+        entry(k, k)
+    entry("unet", "diffusion_models")
+    entry("clip", "text_encoders")
     return "\n".join(lines) + "\n"
 
 
@@ -455,7 +489,7 @@ def forge_library_args(lib_path, webui_root=""):
         if flag is None:
             skipped.append(k)
             continue
-        args.append(f'{flag} "{os.path.join(lib_path, k)}"')
+        args.append(f'{flag} "{library_dir(lib_path, k)}"')
     return " ".join(args), skipped
 
 
@@ -498,7 +532,7 @@ def plan_merge(instances, lib_path, comfy_layout):
     lib_norm = os.path.normcase(os.path.abspath(lib_path))
     # 模型库里已有的文件先登记，用来判重
     for k, *_ in LIBRARY_CATEGORIES:
-        d = os.path.join(lib_path, k)
+        d = library_dir(lib_path, k)
         if os.path.isdir(d):
             for p in _walk_models(d):
                 try:
@@ -530,7 +564,7 @@ def plan_merge(instances, lib_path, comfy_layout):
                                   "cat": k, "dup": True})
                     dup_bytes += size
                     continue
-                dst = os.path.join(lib_path, k, rel)
+                dst = os.path.join(library_dir(lib_path, k), rel)
                 if os.path.exists(dst) or os.path.normcase(dst) in planned_dst:
                     dst = _free_name(dst, planned_dst)
                 planned_dst.add(os.path.normcase(dst))

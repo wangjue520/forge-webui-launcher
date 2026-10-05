@@ -3392,7 +3392,8 @@ def _download_dest(self, folder):
     if lib:
         key = ml.library_key_for_folder(folder)
         if key:
-            return os.path.join(lib, key), f"共享模型库/{key}"
+            d = ml.library_dir(lib, key)
+            return d, f"共享模型库/{os.path.basename(d)}"
     root = (self.cfg.get("webui_root") or "").strip()
     return (os.path.join(root, *folder.split("/")) if root else folder), folder
 
@@ -3546,7 +3547,7 @@ def _lora_root(self):
     """当前要整理的 LoRA 根目录：开了模型库就是库里的 loras，否则是当前实例的 LoRA 目录"""
     lib = _library_path(self)
     if lib:
-        return os.path.join(lib, "loras")
+        return ml.library_dir(lib, "loras")
     dirs = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
     return dirs.get("loras", "")
 
@@ -3561,7 +3562,7 @@ def _workflow_dirs_for(self, lora_root):
         comfy_dir = cm.comfy_layout(c.get("webui_root") or "")[0]
         if not comfy_dir:
             continue
-        uses = (lib and _same_path(lora_root, os.path.join(lib, "loras"))) or \
+        uses = (lib and _same_path(lora_root, ml.library_dir(lib, "loras"))) or \
             _same_path(ml.instance_model_dirs(c, cm.comfy_layout).get("loras", ""), lora_root)
         if uses:
             out += ml.comfy_workflow_dirs(comfy_dir)
@@ -4506,7 +4507,7 @@ def _api_meta_scan_missing(self):
         lib_key = ml.ROLE_TO_LIBRARY_KEY.get(ref["role"]) if lib else None
         local_path = imc.find_local_model_file(
             root, ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
-            extra_dirs=[os.path.join(lib, lib_key)] if lib_key else ())
+            extra_dirs=ml.library_dir_variants(lib, lib_key) if lib_key else ())
         if local_path:
             row["state"] = "local"
         elif not ref.get("hash"):
