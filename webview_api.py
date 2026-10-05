@@ -3398,8 +3398,9 @@ def _library_launch_extras(self, iid, cfg, log):
     else:
         args, skipped = ml.forge_library_args(lib, cfg.get("webui_root") or "")
         if skipped:
-            log(f"[启动器] 目标 WebUI 不支持参数 {' '.join(skipped)}，已自动跳过"
-                "（对应分类仍用实例自带目录）\n")
+            names = {k: label for k, label, *_ in ml.LIBRARY_CATEGORIES}
+            log(f"[启动器] 目标 WebUI 不支持挂载 {'、'.join(names.get(k, k) for k in skipped)}"
+                " 分类，已自动跳过（这些分类仍用实例自带目录）\n")
         cfg["extra_args"] = ((cfg.get("extra_args") or "") + " " + args).strip()
         log(f"[启动器] 已挂载共享模型库: {lib}\n")
 
