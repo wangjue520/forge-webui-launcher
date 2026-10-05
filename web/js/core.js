@@ -461,6 +461,19 @@
     });
     bindFileDrop();
 
+    App.on("app", "shortcuts_created", () =>
+      App.toast("已在桌面和启动器文件夹里创建「WWY 启动器」快捷方式，以后双击它就能打开", "ok", 6000));
+
+    // 根目录为空/失效（新用户、启动器从别的电脑复制过来）时后端会自动找本机的安装并选上
+    App.on("app", "installs_detected", (e) => {
+      const more = e.count > 1 ? `（一共找到 ${e.count} 个，可在启动页切换）` : "";
+      App.toast(`已自动选择这台电脑上的 ${e.label}：${e.picked}${more}`, "ok", 8000);
+      setTimeout(() => {
+        try { sessionStorage.setItem("skip-splash", "1"); sessionStorage.setItem("return-page", App.currentPage || "launch"); } catch (err) {}
+        location.reload();
+      }, 1500);
+    });
+
     App.on("app", "confirm_exit", async (e) => {
       // 后端会带上正在运行的实例名单；没有（旧后端）就从本地状态算
       let names = (e && e.names) || [];
@@ -504,6 +517,12 @@
       return;
     }
     App.cfg = App.state.config || {};
+    if (App.state.new_machine) {
+      let shown = false;
+      try { shown = sessionStorage.getItem("new-machine-toast") === "1"; sessionStorage.setItem("new-machine-toast", "1"); } catch (e) {}
+      if (!shown) App.toast("检测到启动器是从别的电脑复制过来的：已清除原电脑上的目录、模型库和 Civitai/liblib 登录信息，"
+        + "界面设置保留。正在这台电脑上查找 WebUI / ComfyUI …", "ok", 10000);
+    }
     App.refreshConfigControls();
     App.refreshCmdPreview(App.state.cmd_args);
     // 界面风格：后端配置为准，同步进 localStorage（开屏动画下次启动读它）

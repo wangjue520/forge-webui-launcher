@@ -41,6 +41,47 @@
     } catch (e) { console.error(e); }
   }
 
+  // 这台电脑上找到的其他 WebUI / ComfyUI 安装：点一下就把根目录换过去。
+  // 只在「有别的选项」时显示；当前根目录无效时提示得更醒目一点
+  async function renderInstalls(refresh) {
+    const box = $("#launch-installs");
+    if (!box || !App.api.detect_installs) return;
+    let r;
+    try { r = await App.api.detect_installs(!!refresh); } catch (e) { return; }
+    const items = ((r && r.installs) || []).filter((i) => !i.current);
+    const rootOk = ((r && r.installs) || []).some((i) => i.current);
+    if (!items.length) {
+      box.hidden = rootOk && !refresh;
+      if (!box.hidden) {
+        box.innerHTML = (rootOk ? `<span>没找到其他安装</span>`
+          : `<span>在这台电脑上没找到 WebUI / ComfyUI，可以点「浏览…」手动选择，或去「环境部署」页新装一个</span>`) +
+          `<button class="ip-rescan" type="button">重新查找</button>`;
+        box.querySelector(".ip-rescan").addEventListener("click", () => renderInstalls(true));
+      }
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<span>${rootOk ? "这台电脑上还找到：" : "在这台电脑上找到："}</span>`;
+    items.forEach((i) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "chip";
+      b.title = i.path;
+      b.innerHTML = `<b>${App.esc(i.label)}</b>${App.esc(i.path)}`;
+      b.addEventListener("click", () => {
+        $("#launch-root").value = i.path;
+        $("#launch-root").dispatchEvent(new Event("change"));
+      });
+      box.appendChild(b);
+    });
+    const re = document.createElement("button");
+    re.type = "button";
+    re.className = "ip-rescan";
+    re.textContent = "重新查找";
+    re.addEventListener("click", () => renderInstalls(true));
+    box.appendChild(re);
+  }
+
   async function onStart() {
     return startInstance(null, ($("#launch-root").value || "").trim());
   }
@@ -169,7 +210,7 @@
         if (launchUrl) App.api.open_url(launchUrl);
       });
       $("#launch-root").addEventListener("change", async () => {
-        refreshEnvHint(); refreshOutputButtons();
+        refreshEnvHint(); refreshOutputButtons(); setTimeout(() => renderInstalls(false), 300);
         // 换了目录：如果从 WebUI 换成了 ComfyUI（或反过来），实例类型跟着变，整页按新类型重载
         const id = App.instances && App.instances.active;
         if (!id || !App.api.instance_update) return;
@@ -192,6 +233,7 @@
       setStatus(ls.state || "idle", ls.text || "尚未启动");
       setRunningUI(!!ls.running);
       if (App.cfg.webui_root) { refreshEnvHint(); refreshOutputButtons(); }
+      renderInstalls(false);
 
       // 运行日志：多实例时所有实例的日志都进日志框（从卡片上启动别的实例，
       // 日志不再凭空消失），日志流换实例时插一行分隔标题

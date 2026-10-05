@@ -930,6 +930,12 @@ textarea.ta-prompt {
 }
 .chip:hover { border-color: var(--ink); color: var(--ink); }
 .chip.on { background: var(--ink); color: var(--yel); border-color: var(--ink); }
+
+/* 启动页：这台电脑上找到的安装 */
+.install-picks { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--text-faint, #888); }
+.install-picks .chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.install-picks .chip b { font-weight: 600; margin-right: 6px; }
+.install-picks .ip-rescan { background: none; border: 0; padding: 0 4px; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 .facet-list { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border: 1px solid var(--line-2); background: var(--input-bg); }
 .facet {
   display: flex; align-items: center; gap: 6px; border: 0; border-bottom: 1px solid var(--line-2);

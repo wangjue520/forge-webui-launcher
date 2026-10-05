@@ -7,6 +7,8 @@
 # 启动器只有一个启动 bat：启动WWY启动器.bat（放在文件夹旁边也能用，会自动
 # 转交本体）。图标文件在 assets\wwy_launcher_icon.ico。
 #
+# 由 shortcuts.py 在首次运行时调用（按电脑+用户+位置只建一次）。
+#
 # 用法：
 #   powershell -File create_shortcuts.ps1              # bat 旁边 + 桌面都建
 #   powershell -File create_shortcuts.ps1 -DesktopOnly # 只在桌面建一个
@@ -42,7 +44,7 @@ if (-not $DesktopOnly) {
     New-LauncherShortcut (Join-Path $LauncherDir "启动WWY启动器.lnk")
 }
 
-# 桌面：双击 bat 首次运行时会自动建一个（bat 里控制只建一次）
+# 桌面
 $Desktop = [Environment]::GetFolderPath("Desktop")
 New-LauncherShortcut (Join-Path $Desktop "WWY 启动器.lnk")
 

@@ -176,7 +176,15 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
         new_tag = cc.supported_tag(tag)
         if new_tag != tag:
             cand = [f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"] + [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
-            specs, _base = cc.resolve_specs(specs, new_tag, cand)
+            venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
+            portable_py = os.path.join(root_dir, "python", "python.exe")
+            pytag = cc.python_tag(venv_py if os.path.exists(venv_py) else portable_py)
+            new_specs, _base = cc.resolve_specs(specs, new_tag, cand, pytag)
+            if not new_specs:
+                _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，这个 WebUI 需要的 torch "
+                          "没有驱动能用的版本，请把显卡驱动升级到 580 以上；跳过预下载")
+                return False
+            specs = new_specs
             _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，"
                       f"改为预装 {'、'.join(f'{n}=={v}' for n, v in specs)}")
             tag = new_tag

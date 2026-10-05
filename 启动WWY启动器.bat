@@ -46,20 +46,9 @@ if defined AUTORUN_BAD (
     echo       与本启动器无关，不影响下面部署，忽略即可。
 )
 
-rem ---------- 首次运行：在桌面放一个带图标的快捷方式 ----------
-rem bat 本身不能带图标（Windows 只认 .lnk/.exe 的图标），所以用脚本生成一个
-rem 指向入口 bat 的桌面快捷方式，图标就是 assets\wwy_launcher_icon.ico。
-rem 只建一次（flag 文件标记）；用户手动删掉桌面图标后不会再自动重建。
-rem 任何一步失败都静默跳过，绝不影响正常启动。
-if not exist "%~dp0launcher_data\desktop_shortcut.flag" (
-    if exist "%~dp0create_shortcuts.ps1" (
-        powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0create_shortcuts.ps1" -DesktopOnly >nul 2>nul
-    )
-    rem launcher_data/ 被 gitignore 了，从 GitHub 下载的 zip 里没有这个文件夹，
-    rem 直接写 flag 会报"系统找不到指定的路径"，先确保目录存在
-    if not exist "%~dp0launcher_data\" mkdir "%~dp0launcher_data" >nul 2>nul
-    echo done>"%~dp0launcher_data\desktop_shortcut.flag" 2>nul
-)
+rem ---------- 快捷方式 ----------
+rem 桌面 / 启动器文件夹里的带图标快捷方式由启动器自己在首次运行时创建
+rem （shortcuts.py，按电脑+用户+位置记录，打包发给别人后在对方电脑上也会自动建）。
 
 rem ===================================================================
 rem  启动入口：自己把环境准备好，用户只需要双击这一个文件。

@@ -437,6 +437,7 @@ class LauncherApi:
     def __init__(self):
         self._window = None
         self.cfg = cm.load_config()
+        self._installs_cache = None
         self._ask_seq = 0
         self._asks = {}            # ask_id -> {"event": Event, "value": ...}
         self._threads_lock = threading.Lock()
@@ -714,6 +715,11 @@ class LauncherApi:
     # ---------------------------------------------------------- 配置 ----
 
     def get_state(self):
+        # 第一次拿状态 = 前端已就绪：根目录为空/失效（新用户、换了电脑）就在后台找一下本机的安装
+        if not getattr(self, "_auto_pick_started", False):
+            self._auto_pick_started = True
+            self._spawn(lambda: _auto_pick_install(self), name="auto-pick-install")
+            self._spawn(lambda: _ensure_shortcuts(self), name="shortcuts")
         local_ver = updater.get_local_info(self.cfg)
         deploy_branches = [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS]
         # 当前活动实例是 ComfyUI 时把 ComfyUI 排到第一位（Forge 用户顺序不变）：
@@ -734,6 +740,7 @@ class LauncherApi:
             "settings_schema": self._settings_schema(),
             "deploy_branches": deploy_branches,
             "settings_branches": [{"label": l, "key": k} for l, k in SETTINGS_BRANCH_OPTIONS],
+            "new_machine": bool(self.cfg.get("_new_machine")),
         }
 
     def update_config(self, changes):
@@ -1888,17 +1895,59 @@ def _api_outputs_collection_export(self, cid, dest):
 # ============================================================
 
 def _guess_forge_branch(root):
-    """从 .git/config 的远程地址猜 Forge 分支：Haoming02 的仓库 = Neo，否则 Classic"""
-    try:
-        with open(os.path.join(root, ".git", "config"), "r", encoding="utf-8", errors="replace") as f:
-            txt = f.read().lower()
-        if "sd-webui-forge-classic" in txt:
-            return "neo2"
-        if "stable-diffusion-webui-forge" in txt:
-            return "classic"
-    except OSError:
-        pass
-    return "neo2"
+    """Forge 分支：git 远程地址优先，整合包（没有 .git）看源码特征，见 install_finder"""
+    import install_finder
+    return install_finder.guess_forge_branch(root)
+
+
+# ---------------------------------------------------------- 自动找安装 ----
+
+def _api_detect_installs(self, refresh=False):
+    """这台电脑上找到的 WebUI / ComfyUI 安装（扫描一次后缓存，refresh=True 重扫）"""
+    import install_finder
+    if refresh or self._installs_cache is None:
+        try:
+            self._installs_cache = install_finder.find_installs()
+        except Exception:
+            self._installs_cache = []
+    cur = (self.cfg.get("webui_root") or "").strip()
+    items = [dict(i, current=bool(cur) and _same_path(i["path"], cur)) for i in self._installs_cache]
+    return {"ok": True, "installs": items, "new_machine": bool(self.cfg.get("_new_machine"))}
+
+
+def _ensure_shortcuts(self):
+    """首次在这台电脑（这个位置）运行时，桌面和启动器文件夹里各建一个带图标的快捷方式"""
+    import shortcuts
+    made = shortcuts.ensure_shortcuts()
+    if made:
+        self._emit("app", "shortcuts_created", paths=made)
+
+
+def _auto_pick_install(self):
+    """
+    换了电脑 / 根目录为空或已失效时：自动扫描，找到就把当前实例指过去（选第一个），
+    然后通知前端刷新。用户之后随时可以在启动页换成别的。
+    """
+    root = (self.cfg.get("webui_root") or "").strip()
+    if root and cm.detect_kind(root):
+        return
+    res = _api_detect_installs(self, refresh=True)
+    found = res["installs"]
+    if not found:
+        return
+    pick = found[0]
+    iid = self.cfg.get("active_instance")
+    inst = cm.find_instance(self.cfg, iid)
+    if not inst or self._runner(iid).running():
+        return
+    cm.absorb_active(self.cfg)
+    inst["webui_root"] = pick["path"]
+    inst["webui_branch"] = pick["branch"]
+    inst["name"] = pick["label"]
+    cm.project_active(self.cfg)
+    cm.save_config(self.cfg)
+    self._emit("app", "installs_detected", picked=pick["path"], label=pick["label"],
+               count=len(found), new_machine=bool(self.cfg.get("_new_machine")))
 
 
 def _instances_payload(self):
@@ -5314,6 +5363,7 @@ for _name, _fn in {
     "_deploy_run_webui_until_ready": _deploy_run_webui_until_ready,
     "civitai_fetch": _api_civitai_fetch,
     "civitai_download": _api_civitai_download,
+    "detect_installs": _api_detect_installs,
     "_fetch_liblib": _fetch_liblib,
     "_liblib_download_start": _liblib_download_start,
     "settings_verify_liblib_token": _api_settings_verify_liblib_token,

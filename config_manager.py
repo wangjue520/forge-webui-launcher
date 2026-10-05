@@ -400,7 +400,89 @@ def load_config():
             except OSError:
                 pass
     project_active(cfg)
+    adapt_to_machine(cfg, loaded)
     return cfg
+
+
+# ============================================================
+# 换电脑（分发给别人）
+# ============================================================
+# 启动器经常是整个文件夹打包发给别人的，launcher_config.json 也跟着过去了：
+# 里面全是原主人电脑上的路径（WebUI 根目录、Python、模型库……）和原主人的
+# Civitai API Key / liblib 登录凭证。配置里记一个本机指纹，读到别的电脑写的
+# 配置就把这些「本机专属」的东西清掉，界面偏好（主题、镜像模式等）保留。
+
+# 顶层里属于「这台电脑」或「这个人」的键（实例里的路径另外处理）
+_MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "mirror_detected",
+                 "github_mirror_detected")
+_PATH_SUFFIXES = ("_dir", "_path", "_root", "_dirs")
+
+
+def machine_id():
+    """这台电脑的指纹（Windows 的 MachineGuid + 计算机名，取哈希）"""
+    import hashlib
+    import platform
+    parts = []
+    if os.name == "nt":
+        try:
+            import winreg
+            k = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography", 0,
+                               winreg.KEY_READ | winreg.KEY_WOW64_64KEY)
+            parts.append(str(winreg.QueryValueEx(k, "MachineGuid")[0]))
+        except OSError:
+            pass
+    parts.append(platform.node() or "")
+    return hashlib.sha1("|".join(parts).encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _reset_machine_specific(cfg):
+    # 实例：只留当前实例的设置（显存、精度等偏好），路径清空；其余实例是原主人的，丢掉
+    inst = active_instance(cfg) or make_instance(DEFAULT_CONFIG)
+    for k in ("webui_root", "custom_python_path", "custom_git_path", "port"):
+        inst[k] = DEFAULT_CONFIG.get(k, "")
+    inst["name"] = KIND_LABELS.get(inst.get("webui_branch"), "WebUI")
+    cfg["instances"] = [inst]
+    cfg["active_instance"] = inst["id"]
+    cfg["multi_instance_ui"] = False
+    for k in _MACHINE_KEYS:
+        cfg[k] = DEFAULT_CONFIG.get(k, "")
+    cfg["model_library_enabled"] = False
+    for k, v in list(cfg.items()):
+        if k in INSTANCE_KEYS or k.startswith("_") or not isinstance(v, (str, list)):
+            continue
+        if k.endswith(_PATH_SUFFIXES):
+            cfg[k] = DEFAULT_CONFIG.get(k, "" if isinstance(v, str) else [])
+    project_active(cfg)
+
+
+def adapt_to_machine(cfg, loaded):
+    """
+    读到别的电脑写的配置 → 清掉本机专属内容，并标记 cfg["_new_machine"]（不落盘）。
+    第一次运行 / 老版本配置（还没有指纹）→ 只记下本机指纹，什么都不动。
+    另外，填了但这台电脑上不存在的 Python / Git 路径一律清空（留空会自动检测）。
+    """
+    mid = machine_id()
+    saved = cfg.get("machine_id") or ""
+    changed = False
+    if loaded and saved and saved != mid:
+        _reset_machine_specific(cfg)
+        cfg["_new_machine"] = True
+        changed = True
+    if saved != mid:
+        cfg["machine_id"] = mid
+        changed = True
+    for inst in cfg.get("instances") or []:
+        for k in ("custom_python_path", "custom_git_path"):
+            v = (inst.get(k) or "").strip().strip('"')
+            if v and not os.path.exists(v):
+                inst[k] = ""
+                changed = True
+    if changed:
+        project_active(cfg)
+        try:
+            save_config(cfg)
+        except OSError:
+            pass
 
 
 def write_theme_file(cfg):
@@ -722,21 +804,33 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
     except Exception:
         use_mirror, official, mirrors = False, f"https://download.pytorch.org/whl/{new_tag}", []
     bases = mirrors + [official] if use_mirror else [official] + mirrors
-    new_specs, base = cc.resolve_specs(specs, new_tag, bases)
+    py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
+    venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
+    pytag = cc.python_tag(venv_py if os.path.isfile(venv_py) else py)
+    new_specs, base = cc.resolve_specs(specs, new_tag, bases, pytag)
+    if not new_specs:
+        # 这个 WebUI 要的 torch 在驱动支持的 CUDA 版本下没有构建：硬装老 torch 只会更糟
+        if notes is not None:
+            notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，而这个 WebUI 需要的 "
+                         f"{'、'.join(f'{n} {v}' for n, v in specs)} 没有驱动能用的版本，"
+                         "请把显卡驱动升级到 580 以上（NVIDIA 官网或 GeForce Experience / NVIDIA App 更新）")
+        return {}, False
     index = base or bases[0]
     out = {
         "TORCH_INDEX_URL": index,
         "TORCH_COMMAND": "pip install " + " ".join(f"{n}=={v}" for n, v in new_specs)
                          + f" --extra-index-url {index}",
     }
-    py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
     ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root_dir, py))
     need = cc.tag_cuda(itag) if itag else None
-    reinstall = bool(need and driver and need > driver)
+    target_torch = dict(new_specs).get("torch", "")
+    # 驱动带不动已装的 torch，或者已装的不是这次要的版本（比如之前装错的老版本）→ 重装
+    reinstall = bool(ver and ((need and driver and need[0] > driver[0])
+                              or (target_torch and f"{ver}+{itag}" != target_torch)))
     if notes is not None:
         target = "、".join(f"{n} {v}" for n, v in new_specs)
         notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
-                     f"（需要 CUDA {cc.fmt_cuda(cc.tag_cuda(tag))}），已自动改装兼容版本：{target}")
+                     f"（需要 CUDA {cc.tag_cuda(tag)[0]} 系驱动），已自动改装兼容版本：{target}")
         if reinstall:
             notes.append(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 驱动带不动，这次启动会自动重装"
                          "（几个 GB，需要一点时间）。想继续用新版 torch 的话，把显卡驱动升级到 580 以上即可")

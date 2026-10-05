@@ -39,6 +39,10 @@ _FATAL_HINTS = (
      "  · 启动器每次启动前会读取驱动版本并自动换装兼容的 torch；还看到这条说明没读到驱动信息"
      "（nvidia-smi 不可用），或者附加参数/系统环境变量里自己设了 TORCH_COMMAND\n"
      "  · 最省事的办法：把显卡驱动升级到 580 以上，然后再启动"),
+    (("couldn't install pytorch", "couldn't install torch"),
+     "[启动器] 启动失败：torch 下载/安装没成功。往上翻能看到 pip 的具体报错，常见原因：\n"
+     "  · 网络：国内直连 download.pytorch.org 很容易失败，到「设置」把网络加速改成「总是使用国内镜像」再启动\n"
+     "  · 版本：这个 torch 版本没有当前 Python 版本能用的安装包（日志里会有 No matching distribution）"),
     (("no kernel image is available",),
      "[启动器] 启动失败：环境里的 torch 不支持这张显卡的架构（常见于 GTX 9xx/10xx 等老卡配新版 torch），"
      "需要安装老卡专用的 torch 版本"),

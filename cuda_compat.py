@@ -27,8 +27,10 @@ import time
 
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
-# 由新到旧；cu118 之前的就不管了
-FALLBACK_TAGS = ("cu130", "cu129", "cu128", "cu126", "cu124", "cu121", "cu118")
+# 降级候选，由新到旧（cu129 只有个别版本有，不当候选）；cu118 之前的就不管了。
+# 同一个 CUDA 大版本内驱动是「小版本兼容」的：驱动显示 CUDA 12.2 照样能跑 cu128 的 torch，
+# 所以只按大版本降，12.x 驱动一律用 12 系最新的 cu128，不往更老的 tag 退。
+FALLBACK_TAGS = ("cu128", "cu126", "cu124", "cu121", "cu118")
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 _CACHE_PATH = os.path.join(APP_DIR, "launcher_data", "torch_compat_cache.json")
@@ -79,18 +81,44 @@ def fmt_cuda(v):
 
 def supported_tag(wanted_tag, driver=None):
     """
-    驱动带得动 wanted_tag 就原样返回；带不动返回驱动支持的最高候选 tag；
+    驱动带得动 wanted_tag 就原样返回；带不动返回驱动支持的大版本里最新的候选 tag；
     驱动信息未知 / wanted_tag 不是 cuXXX 时原样返回（不插手）。
+
+    只比大版本：CUDA 12.x 的程序在任何 12 系驱动上都能跑（小版本兼容），
+    真正跨不过去的只有 12 → 13 这种大版本。
     """
     need = tag_cuda(wanted_tag)
     driver = driver if driver is not None else driver_cuda_version()
-    if not need or not driver or driver >= need:
+    if not need or not driver or driver[0] >= need[0]:
         return wanted_tag
     for t in FALLBACK_TAGS:
         tv = tag_cuda(t)
-        if tv and tv <= driver and tv < need:
+        if tv and tv[0] <= driver[0] and tv < need:
             return t
     return wanted_tag
+
+
+_pytag_cache = {}
+
+
+def python_tag(python_exe):
+    """目标解释器的 wheel tag（cp313 等）；拿不到返回 None。按路径缓存。"""
+    exe = (python_exe or "").strip().strip('"')
+    if not exe or not os.path.isfile(exe):
+        return None
+    if exe in _pytag_cache:
+        return _pytag_cache[exe]
+    tag = None
+    try:
+        r = subprocess.run([exe, "-c", "import sys; print('cp%d%d' % sys.version_info[:2])"],
+                           capture_output=True, timeout=20, creationflags=_NO_WINDOW)
+        out = (r.stdout or b"").decode("utf-8", "replace").strip()
+        if re.match(r"^cp\d+$", out):
+            tag = out
+    except Exception:
+        tag = None
+    _pytag_cache[exe] = tag
+    return tag
 
 
 # ------------------------------------------------------------ 索引核对 ----
@@ -112,8 +140,9 @@ def _save_cache(data):
         pass
 
 
-def _index_versions(index_base, name, tag):
-    """索引页里 {name} 在该 tag 下有 Windows wheel 的版本号集合（不含 +tag）；失败返回 None"""
+def _index_versions(index_base, name, tag, pytag=None):
+    """索引页里 {name} 在该 tag 下有 Windows wheel 的版本号集合（不含 +tag）；失败返回 None。
+    给了 pytag 就只算该 Python 版本能装的（cp313 的环境装不了只有 cp312 的 wheel）"""
     import requests
     try:
         r = requests.get(f"{index_base}/{name}/", timeout=20)
@@ -121,7 +150,8 @@ def _index_versions(index_base, name, tag):
     except Exception:
         return None
     vers = set()
-    pat = re.compile(rf"{re.escape(name)}-([0-9][0-9a-z.]*)(?:\+|%2B){re.escape(tag)}-[^\"#]*win_amd64\.whl",
+    py = re.escape(pytag) + "-" if pytag else ""
+    pat = re.compile(rf"{re.escape(name)}-([0-9][0-9a-z.]*)(?:\+|%2B){re.escape(tag)}-{py}[^\"#]*win_amd64\.whl",
                      re.IGNORECASE)
     for m in pat.finditer(r.text):
         vers.add(m.group(1))
@@ -142,45 +172,54 @@ def _torchvision_for(torch_ver, tv_versions):
     return max(cands, key=_vkey) if cands else None
 
 
-def resolve_specs(specs, new_tag, index_bases, log=None):
+def resolve_specs(specs, new_tag, index_bases, pytag=None, log=None):
     """
-    把 [(torch, '2.13.0+cu130'), (torchvision, '0.28.0+cu130')] 换成 new_tag 下真实存在的版本。
-    优先同版本号；没有就挑该 tag 下最新的 torch + 配套 torchvision。
-    所有索引都联不上时退回「同版本号直接换 tag」（离线也不至于什么都不做）。
-    返回 (specs, 找到版本的索引地址或 None)。
+    把 [(torch, '2.13.0+cu130'), (torchvision, '0.28.0+cu130')] 换成 new_tag 下的同一版本。
+
+    只接受「同版本号」或「同一 x.y 系列里最新的补丁版」——WebUI 写死某个 torch 版本
+    是有原因的，退到老好几代的 torch（比如 2.13 → 2.5）不但跑不起来，新 Python 上
+    往往连 wheel 都没有。找不到合适版本时返回 (None, 索引地址)，调用方不改装、提示升级驱动。
+    所有索引都联不上时（离线）返回同版本号直接换 tag，(specs, None)。
     """
     base_ver = {n: v.split("+", 1)[0] for n, v in specs}
-    key = f"{new_tag}|" + ",".join(f"{n}=={v}" for n, v in sorted(base_ver.items()))
+    key = f"{new_tag}|{pytag or ''}|" + ",".join(f"{n}=={v}" for n, v in sorted(base_ver.items()))
     cache = _load_cache()
     hit = cache.get(key)
     if hit and time.time() - hit.get("t", 0) < _CACHE_TTL and hit.get("base") in index_bases:
-        return [tuple(x) for x in hit["specs"]], hit["base"]
+        sp = hit.get("specs")
+        return ([tuple(x) for x in sp] if sp else None), hit["base"]
 
-    result, used = None, None
+    def series(v):
+        return ".".join(v.split(".")[:2]) + "."
+
+    reached = None
     for base in index_bases:
-        tv = _index_versions(base, "torch", new_tag)
-        if not tv:
+        tv = _index_versions(base, "torch", new_tag, pytag)
+        if tv is None:
             continue
-        torch_v = base_ver.get("torch")
-        if torch_v not in tv:
-            torch_v = max(tv, key=_vkey)
-            if log:
-                log(f"[CUDA 兼容] {new_tag} 下没有 torch {base_ver.get('torch')}，改用该系列最新的 {torch_v}\n")
+        reached = base
+        want = base_ver.get("torch", "")
+        torch_v = want if want in tv else max((v for v in tv if v.startswith(series(want))),
+                                               key=_vkey, default=None)
+        if not torch_v:
+            continue
         out = [("torch", f"{torch_v}+{new_tag}")]
         if "torchvision" in base_ver:
-            tvv = _index_versions(base, "torchvision", new_tag) or set()
-            vis = base_ver["torchvision"] if torch_v == base_ver.get("torch") and base_ver["torchvision"] in tvv \
-                else _torchvision_for(torch_v, tvv)
+            tvv = _index_versions(base, "torchvision", new_tag, pytag) or set()
+            vis = base_ver["torchvision"] if base_ver["torchvision"] in tvv else _torchvision_for(torch_v, tvv)
             if not vis:
                 continue
             out.append(("torchvision", f"{vis}+{new_tag}"))
-        result, used = out, base
-        break
-    if result is None:
+        if torch_v != want and log:
+            log(f"[CUDA 兼容] {new_tag} 下没有 torch {want}，改用同系列的 {torch_v}\n")
+        cache[key] = {"t": time.time(), "specs": out, "base": base}
+        _save_cache(cache)
+        return out, base
+    if reached is None:
         return [(n, f"{v}+{new_tag}") for n, v in base_ver.items()], None
-    cache[key] = {"t": time.time(), "specs": result, "base": used}
+    cache[key] = {"t": time.time(), "specs": None, "base": reached}
     _save_cache(cache)
-    return result, used
+    return None, reached
 
 
 # ------------------------------------------------------------ 已装环境 ----
