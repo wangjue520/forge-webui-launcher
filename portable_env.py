@@ -49,11 +49,13 @@ GIT_REPO = "git-for-windows/git"
 # 目标包版本"找不到匹配的发行版"，表面上看像是网络或镜像问题，实际上
 # 是从一开始就选错了 Python 版本。
 # "neo" 这个旧 key 继续保留，兼容可能还存着旧配置的用户。
+# comfyui 用 3.13：官方 README 明说 3.13 支持度最好（官方便携包就是 3.13），
+# 个别节点依赖在 3.13 装不上时官方才建议退回 3.12。
 PYTHON_VERSION_BY_BRANCH = {
     "classic": "3.10",
     "neo": "3.13",
     "neo2": "3.13",
-    "comfyui": "3.12",
+    "comfyui": "3.13",
 }
 
 
