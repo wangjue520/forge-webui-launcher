@@ -168,6 +168,20 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
     if not specs:
         _log(log, "无法从 launch_utils.py 解析 torch 版本规格，跳过预下载")
         return False
+    # 驱动带不动 Forge 要的 CUDA 版本时，预下载驱动支持的那一版（和启动时注入的
+    # TORCH_COMMAND 一致，见 config_manager.torch_compat_overrides）
+    try:
+        import cuda_compat as cc
+        import mirror_manager as mm
+        new_tag = cc.supported_tag(tag)
+        if new_tag != tag:
+            cand = [f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"] + [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
+            specs, _base = cc.resolve_specs(specs, new_tag, cand)
+            _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，"
+                      f"改为预装 {'、'.join(f'{n}=={v}' for n, v in specs)}")
+            tag = new_tag
+    except Exception as e:
+        _log(log, f"驱动兼容检查失败（按默认版本继续）: {e}")
 
     # 目标解释器：venv 存在用 venv（继续/重建场景），否则便携 Python
     # （VENV_DIR=- 场景，依赖直接装进便携 Python）

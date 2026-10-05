@@ -1307,8 +1307,11 @@ def _deploy_flow(self, target, branch, use_portable):
             raise _DeployCancelled()
 
         # ---- 4. 运行一次 webui.bat，让 Forge 自己建 venv 装依赖 ----
-        env_overrides = cm.build_launch_env_overrides(self._deploy_cfg, target)
+        notes = []
+        env_overrides = cm.build_launch_env_overrides(self._deploy_cfg, target, notes)
         log("\n[部署] 首次运行 webui.bat（自动安装依赖，可能需要较长时间）\n")
+        for n in notes:
+            log(n.replace("[启动器]", "[部署]") + "\n")
         log(f"[部署] COMMANDLINE_ARGS = {env_overrides.get('COMMANDLINE_ARGS', '')}\n")
         for k, v in env_overrides.items():
             if k != "COMMANDLINE_ARGS":
@@ -2094,12 +2097,22 @@ def _nvidia_gpu_names():
 
 
 def _pick_comfy_torch_tag(log):
-    """按本机显卡选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）"""
+    """按本机显卡和驱动选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）"""
     names = _nvidia_gpu_names()
     if names and any(_LEGACY_GPU_RE.search(n) for n in names):
         log(f"[部署] 检测到老架构显卡（{'、'.join(names)}），CUDA 13 已不支持这些卡，"
             f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
         return COMFY_TORCH_TAG_LEGACY
+    try:
+        import cuda_compat as cc
+        driver = cc.driver_cuda_version()
+        tag = cc.supported_tag(COMFY_TORCH_TAG, driver)
+        if tag != COMFY_TORCH_TAG:
+            log(f"[部署] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，带不动 {COMFY_TORCH_TAG}，"
+                f"torch 改用 {tag} 系列（想用 {COMFY_TORCH_TAG} 需要把驱动升级到 580 以上）\n")
+            return tag
+    except Exception:
+        pass
     return COMFY_TORCH_TAG
 
 

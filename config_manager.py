@@ -598,7 +598,7 @@ def venv_is_definitely_broken(venv_dir):
     return os.path.isdir(venv_dir) and _venv_health(venv_dir) == "broken"
 
 
-def build_launch_env_overrides(cfg, root_dir):
+def build_launch_env_overrides(cfg, root_dir, notes=None):
     """
     生成要覆盖注入子进程环境变量的字典（只包含需要覆盖的项，值为空的不放进去，
     这样 webui.bat 内部 `if not defined XXX` 的判断才能按预期工作，
@@ -682,7 +682,65 @@ def build_launch_env_overrides(cfg, root_dir):
     except Exception:
         pass  # 加速是锦上添花，任何异常都不该影响正常启动
 
+    # 显卡驱动带不动 Forge 默认的 torch（Neo 现在是 cu130，要 580+ 驱动）：
+    # 换成驱动支持的 CUDA 版本；已经装了带不动的 torch 就让这次启动重装
+    try:
+        compat, reinstall = torch_compat_overrides(cfg, root_dir, notes)
+        overrides.update(compat)
+        if reinstall:
+            extra = " --reinstall-torch"
+            if "--xformers" in overrides.get("COMMANDLINE_ARGS", ""):
+                extra += " --reinstall-xformers"
+            overrides["COMMANDLINE_ARGS"] = (overrides.get("COMMANDLINE_ARGS", "") + extra).strip()
+    except Exception:
+        pass
+
     return overrides
+
+
+def torch_compat_overrides(cfg, root_dir, notes=None):
+    """
+    返回 (环境变量覆盖, 是否需要重装 torch)。驱动信息拿不到、目标不是 cuXXX、
+    用户自己设了 TORCH_COMMAND 时一律不插手。详见 cuda_compat.py。
+    """
+    if "TORCH_COMMAND" in os.environ:
+        return {}, False
+    import cuda_compat as cc
+    import torch_bootstrap as tb
+    specs, tag = tb._parse_torch_spec(root_dir)
+    if not specs:
+        return {}, False
+    driver = cc.driver_cuda_version()
+    new_tag = cc.supported_tag(tag, driver)
+    if new_tag == tag:
+        return {}, False
+    try:
+        import mirror_manager as mm
+        use_mirror = mm.resolve_mode(cfg)
+        official = f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"
+        mirrors = [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
+    except Exception:
+        use_mirror, official, mirrors = False, f"https://download.pytorch.org/whl/{new_tag}", []
+    bases = mirrors + [official] if use_mirror else [official] + mirrors
+    new_specs, base = cc.resolve_specs(specs, new_tag, bases)
+    index = base or bases[0]
+    out = {
+        "TORCH_INDEX_URL": index,
+        "TORCH_COMMAND": "pip install " + " ".join(f"{n}=={v}" for n, v in new_specs)
+                         + f" --extra-index-url {index}",
+    }
+    py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
+    ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root_dir, py))
+    need = cc.tag_cuda(itag) if itag else None
+    reinstall = bool(need and driver and need > driver)
+    if notes is not None:
+        target = "、".join(f"{n} {v}" for n, v in new_specs)
+        notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
+                     f"（需要 CUDA {cc.fmt_cuda(cc.tag_cuda(tag))}），已自动改装兼容版本：{target}")
+        if reinstall:
+            notes.append(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 驱动带不动，这次启动会自动重装"
+                         "（几个 GB，需要一点时间）。想继续用新版 torch 的话，把显卡驱动升级到 580 以上即可")
+    return out, reinstall
 
 
 # ============================================================

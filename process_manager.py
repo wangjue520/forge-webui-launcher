@@ -30,6 +30,30 @@ _URL_RE = re.compile(r"Running on local URL:\s*(http://\S+)")
 _COMFY_URL_RE = re.compile(r"To see the GUI go to:\s*(https?://\S+)")
 _BIND_ERROR_RE = re.compile(r"error while attempting to bind on address", re.IGNORECASE)
 
+
+# 启动阶段的致命错误 → 给用户的说明（按出现顺序匹配，命中第一个）
+_FATAL_HINTS = (
+    (("please update your gpu driver", "driver on your system is too old", "cuda driver version is insufficient"),
+     "[启动器] 启动失败：显卡驱动太旧，带不动环境里装的 torch（新版 Forge Neo / ComfyUI 默认装 CUDA 13 的 torch，"
+     "需要 580 以上的驱动）。\n"
+     "  · 启动器每次启动前会读取驱动版本并自动换装兼容的 torch；还看到这条说明没读到驱动信息"
+     "（nvidia-smi 不可用），或者附加参数/系统环境变量里自己设了 TORCH_COMMAND\n"
+     "  · 最省事的办法：把显卡驱动升级到 580 以上，然后再启动"),
+    (("no kernel image is available",),
+     "[启动器] 启动失败：环境里的 torch 不支持这张显卡的架构（常见于 GTX 9xx/10xx 等老卡配新版 torch），"
+     "需要安装老卡专用的 torch 版本"),
+    (("pytorch is not able to access any compute device", "torch is not able to use gpu"),
+     "[启动器] 启动失败：torch 找不到可用的显卡。请确认装了 NVIDIA 驱动；没有 N 卡的话需要在附加参数里加 --use-cpu all"),
+)
+
+
+def _fatal_hint_for(text):
+    low = (text or "").lower()
+    for keys, hint in _FATAL_HINTS:
+        if any(k in low for k in keys):
+            return hint
+    return ""
+
 # 第三方整合包（秋叶系等）会在 webui-user.bat 里写死 set PYTHON=/GIT=...
 _OVERRIDE_VAR_PATTERN = re.compile(
     r"^\s*set\s+(PYTHON|GIT|VENV_DIR|COMMANDLINE_ARGS)\s*=\s*(.*)$",
@@ -232,6 +256,7 @@ class InstanceRunner:
         self.status_text = "尚未启动"
         self.state = "idle"          # idle / starting / ready / stopped
         self.output_tail = ""
+        self.fatal_hint = ""         # 本轮输出里认出的致命错误（给出可操作的说明）
         # 就绪判定的并发保护（V2 踩过的两个坑，保留原注释要点）：
         #  1) 日志解析线程和端口探测线程会同时判定「就绪」，各开一次浏览器
         #  2) 点「停止」后正在被杀的进程还没释放端口，被端口探测当成「刚就绪」
@@ -552,6 +577,7 @@ class InstanceRunner:
             self.url = None
 
         self.output_tail = ""
+        self.fatal_hint = ""
         self.set_status("starting", f"启动中，等待 {self.label()} 输出监听地址...", url=None)
         self.emit("state", running=True)
         auto_open = self._auto_open(cfg)
@@ -616,7 +642,10 @@ class InstanceRunner:
                     f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
 
         args_str = cm.build_commandline_args(cfg)
-        env_overrides = cm.build_launch_env_overrides(cfg, root)
+        notes = []
+        env_overrides = cm.build_launch_env_overrides(cfg, root, notes)
+        for n in notes:
+            log(n + "\n")
         log(f"[启动器] 正在启动 {WEBUI_ENTRY_SCRIPT} ...\n")
         log(f"[启动器] COMMANDLINE_ARGS = {args_str}\n")
         for k, v in env_overrides.items():
@@ -684,6 +713,8 @@ class InstanceRunner:
 
                 combined = self.output_tail + text
                 self.output_tail = combined[-500:]
+                if not self.fatal_hint and not self.url:
+                    self.fatal_hint = _fatal_hint_for(combined)
 
                 if not comfy and _BIND_ERROR_RE.search(combined) and not self.url:
                     self.set_status("starting",
@@ -703,7 +734,12 @@ class InstanceRunner:
             # 退出码没有保证。注意这种重启后新 ComfyUI 进程可能已经脱管在后台
             # 继续跑着，提示里别说死「必须重启」。
             manager_restart = "restarting" in self.output_tail.lower()
+            # 还没就绪就退出、且输出里认出了致命错误：webui.bat 结尾有 pause，
+            # 按任意键后返回码是 0，不能凭返回码当成「正常退出」
+            failed_start = bool(self.fatal_hint) and not self.url
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
+            if failed_start:
+                self.log(self.fatal_hint + "\n")
             # 只收尾「自己这一代、自己这个进程」：gen 对不上，或 self.proc 已经
             # 换成新一轮启动的进程时，什么都不动——否则会把刚启动的进程状态清掉
             if self.gen_alive(gen) and self.proc is proc:
@@ -715,6 +751,8 @@ class InstanceRunner:
                              "不是崩溃。如果界面还能正常打开就不用管——新进程可能已在后台运行；"
                              "打不开的话再点一次「启动」。\n")
                     self.set_status("stopped", "已正常退出（自动重启）")
+                elif failed_start:
+                    self.set_status("stopped", "启动失败（原因见运行日志末尾）")
                 elif rc == 0:
                     self.set_status("stopped", "已正常退出")
                 else:
