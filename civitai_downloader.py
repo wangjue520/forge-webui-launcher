@@ -20,7 +20,7 @@ import re
 import json
 import hashlib
 import requests
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 
 DEFAULT_API_HOST = "civitai.com"
 API_BASE_TEMPLATE = "https://{host}/api/v1"
@@ -125,12 +125,51 @@ def _headers(api_key, url=None):
     return headers
 
 
-def _is_civitai_host(url):
+# Civitai 自己的域名族：主站 civitai.com，以及拆分出来的 civitai.red / civitai.green。
+# 它们共用同一套账号和 API Key——从 .red 链接获取信息时，API 返回的 downloadUrl
+# 也在 civitai.red 上；以前白名单只认 .com，Key 不会发过去，这类模型就会 401
+# 「需要登录」，看起来像偶发故障（其实取决于粘贴的是哪个域名的链接、模型在哪个站）。
+CIVITAI_DOMAINS = ("civitai.com", "civitai.red", "civitai.green")
+
+
+def _host_of(url):
     try:
         host = (url.split("//", 1)[1] if "//" in url else url).split("/", 1)[0].lower()
     except IndexError:
-        return False
-    return host == "civitai.com" or host.endswith(".civitai.com")
+        return ""
+    return host.rsplit("@", 1)[-1].split(":", 1)[0]
+
+
+def _is_civitai_host(url):
+    host = _host_of(url)
+    return any(host == d or host.endswith("." + d) for d in CIVITAI_DOMAINS)
+
+
+_REDIRECT_CODES = (301, 302, 303, 307, 308)
+
+
+def _get_civitai_stream(url, headers, api_key, max_hops=10):
+    """
+    手动跟随重定向，每一跳按目标主机重新决定带不带 API Key。
+
+    requests 自动跟随重定向时，只要主机名变了就会删掉 Authorization 头。
+    Civitai 的下载会在 civitai.com / civitai.red 之间互相跳转（视模型分级而定），
+    再跳到 CDN 签名地址——中间那一跳丢了 Key，服务器就当成未登录返回 401。
+    这里只给 Civitai 自家域名带 Key，跳到 CDN 等站外主机时不带（防泄露）。
+    """
+    base = {k: v for k, v in headers.items() if k.lower() != "authorization"}
+    for _ in range(max_hops):
+        h = dict(base)
+        if api_key and _is_civitai_host(url):
+            h["Authorization"] = f"Bearer {api_key}"
+        resp = requests.get(url, headers=h, stream=True, timeout=60, allow_redirects=False)
+        loc = resp.headers.get("location")
+        if resp.status_code in _REDIRECT_CODES and loc:
+            resp.close()
+            url = urljoin(url, loc)
+            continue
+        return resp
+    raise CivitaiError("下载地址重定向次数过多，请稍后重试")
 
 
 def fetch_version_info(parsed, api_key=None):
@@ -359,8 +398,11 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
             headers["Range"] = f"bytes={resume_from}-"
         else:
             headers.pop("Range", None)
-        resp_ctx = requests.get(url, headers=headers, stream=True, timeout=60,
-                                allow_redirects=True)
+        if _is_civitai_host(url):
+            resp_ctx = _get_civitai_stream(url, headers, api_key)
+        else:
+            resp_ctx = requests.get(url, headers=headers, stream=True, timeout=60,
+                                    allow_redirects=True)
         if resp_ctx.status_code == 416 and resume_from > 0:
             # 服务端认为范围无效（文件已变/不支持续传），删掉残块重新下
             resp_ctx.close()
@@ -373,10 +415,23 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
         break
 
     with resp_ctx as resp:
-        if resp.status_code == 401:
+        if resp.status_code in (401, 403):
             resp.close()
-            raise CivitaiError("下载被拒绝（401）。该文件可能需要登录 Civitai 账号获取的 API Key 才能下载")
+            where = _host_of(resp.url or url) or "服务器"
+            if api_key:
+                raise CivitaiError(
+                    f"下载被 {where} 拒绝（{resp.status_code}）。已带上 API Key 仍被拒，"
+                    "可能是 Key 已失效/被删除（去 Civitai 账号设置页重新生成一个），"
+                    "或该模型是抢先体验/仅限付费用户的版本")
+            raise CivitaiError(
+                f"下载被 {where} 拒绝（{resp.status_code}）。该文件需要登录才能下载，"
+                "请在下方「Civitai API Key」里填入 Key")
         resp.raise_for_status()
+        # 被重定向到登录页时是 200 + 网页，不拦就会把 HTML 当成模型写下去
+        if _is_civitai_host(resp.url or "") and "text/html" in (resp.headers.get("content-type") or "").lower():
+            resp.close()
+            raise CivitaiError("Civitai 返回了网页而不是模型文件（通常是跳到了登录页）。"
+                               "请检查 API Key 是否填写正确、是否已失效")
         # liblib 的下载端点出错时返回的是 200 + JSON 错误体（如"用户未登录"），
         # 不拦一下的话会把这段 JSON 当成模型文件写进 .part，最后变成莫名其妙的
         # 「哈希校验失败」。

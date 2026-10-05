@@ -2553,8 +2553,7 @@ def _api_civitai_fetch(self, text):
             self._civitai_version_info = info
             self._download_source = "civitai"
             folder = cd.guess_folder(info["model_type"], self.cfg.get("webui_branch", ""))
-            root = (self.cfg.get("webui_root") or "").strip()
-            dest = os.path.join(root, folder.replace("/", os.sep)) if root else folder
+            dest, folder = _download_dest(self, folder)
             subset = {
                 "source": "civitai",
                 "model_name": info["model_name"],
@@ -2586,8 +2585,7 @@ def _fetch_liblib(self, text, log):
     folder, type_label = lc.guess_folder_by_size(chosen["file_size"],
                                                  chosen["file_name"],
                                                  self.cfg.get("webui_branch", ""))
-    root = (self.cfg.get("webui_root") or "").strip()
-    dest = os.path.join(root, folder.replace("/", os.sep)) if root else folder
+    dest, folder = _download_dest(self, folder)
     subset = {
         "source": "liblib",
         "model_name": info["model_name"],
@@ -3382,6 +3380,21 @@ def _library_path(self):
         return ""
     p = (self.cfg.get("model_library_path") or "").strip()
     return p if p and os.path.isdir(p) else ""
+
+
+def _download_dest(self, folder):
+    """
+    模型下载的默认保存位置 → (绝对路径, 显示用的位置说明)。
+    开了共享模型库：放进库里对应分类（所有实例都能用）；
+    认不出的类型（Poses/Wildcards 等库里没有的分类）或没开库：照旧放当前实例目录。
+    """
+    lib = _library_path(self)
+    if lib:
+        key = ml.library_key_for_folder(folder)
+        if key:
+            return os.path.join(lib, key), f"共享模型库/{key}"
+    root = (self.cfg.get("webui_root") or "").strip()
+    return (os.path.join(root, *folder.split("/")) if root else folder), folder
 
 
 def _library_launch_extras(self, iid, cfg, log):
@@ -4481,7 +4494,8 @@ def _api_meta_scan_missing(self):
     if not self._meta_refs:
         return {"ok": False, "error": "当前图片没有可检测的模型引用"}
     root = (self.cfg.get("webui_root") or "").strip()
-    if not root:
+    lib = _library_path(self)
+    if not root and not lib:
         return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录，才能判断本地是否已有这些模型"}
 
     self._meta_lookup_result = {}
@@ -4489,8 +4503,10 @@ def _api_meta_scan_missing(self):
     lookups = []
     for idx, ref in enumerate(self._meta_refs):
         row = {"idx": idx, "role": ref["role"], "name": ref["name"]}
+        lib_key = ml.ROLE_TO_LIBRARY_KEY.get(ref["role"]) if lib else None
         local_path = imc.find_local_model_file(
-            root, ref["role"], ref["name"], self.cfg.get("webui_branch", ""))
+            root, ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
+            extra_dirs=[os.path.join(lib, lib_key)] if lib_key else ())
         if local_path:
             row["state"] = "local"
         elif not ref.get("hash"):
@@ -4578,7 +4594,7 @@ def _api_meta_download(self, indexes):
     if self._meta_dl_thread and self._meta_dl_thread.is_alive():
         return {"ok": False, "error": "已有下载任务在进行中"}
     root = (self.cfg.get("webui_root") or "").strip()
-    if not root:
+    if not root and not _library_path(self):
         return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录"}
 
     items = []
@@ -4589,7 +4605,9 @@ def _api_meta_download(self, indexes):
             continue
         ref = self._meta_refs[idx]
         folder = imc.role_folder(ref["role"], self.cfg.get("webui_branch", "")) or "models/Other"
-        dest_dir = os.path.join(root, *folder.split("/"))
+        dest_dir, _where = _download_dest(self, folder)
+        if not os.path.isabs(dest_dir):
+            continue   # 没开库、也没设根目录的类型：无处可放
         items.append((idx, result["version_info"], result["file_info"], dest_dir))
     if not items:
         return {"ok": False, "error": "请先在列表里勾选要下载的模型"}

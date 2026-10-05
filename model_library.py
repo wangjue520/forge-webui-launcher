@@ -334,6 +334,31 @@ def library_categories(lib_path):
             for k, label, is_lora, _f, _c, _a in LIBRARY_CATEGORIES]
 
 
+# image_meta_core / civitai_downloader 里的「角色」→ 模型库分类键
+ROLE_TO_LIBRARY_KEY = {
+    "Checkpoint": "checkpoints", "LoRA": "loras", "Embedding": "embeddings", "VAE": "vae",
+    "ControlNet": "controlnet", "Upscaler": "upscale_models", "TextEncoder": "text_encoders",
+    "Hypernetwork": "hypernetworks",
+}
+
+# LIBRARY_CATEGORIES 里没列出、但下载器会给出的旧式目录名
+_EXTRA_FOLDER_KEYS = {
+    "models/hypernetwork": "hypernetworks", "models/unet": "diffusion_models",
+    "models/clip": "text_encoders", "models/lycoris": "loras",
+}
+
+
+def library_key_for_folder(rel_folder):
+    """实例里的相对目录（任意分支写法：models/Lora、models/loras、embeddings…）→ 模型库分类键；认不出返回 None"""
+    r = str(rel_folder or "").replace("\\", "/").strip("/").lower()
+    if not r:
+        return None
+    for k, _l, _i, frels, crel, _a in LIBRARY_CATEGORIES:
+        if r == k or r == crel.lower() or r in (x.lower() for x in frels):
+            return k
+    return _EXTRA_FOLDER_KEYS.get(r)
+
+
 def instance_model_dirs(cfg, comfy_layout):
     """实例自己的模型目录 {分类键: 绝对路径}（只返回真实存在的）"""
     root = (cfg.get("webui_root") or "").strip()

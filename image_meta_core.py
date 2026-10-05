@@ -357,7 +357,7 @@ def extract_refs(m):
     return [r for r in refs if r["role"] in ROLE_TO_LOCAL_FOLDER]
 
 
-def find_local_model_file(webui_root, role, name, branch=""):
+def find_local_model_file(webui_root, role, name, branch="", extra_dirs=()):
     """
     在对应的模型文件夹里按文件名（不含扩展名，忽略大小写）递归查找。
     找到返回完整路径，否则 None。
@@ -369,8 +369,12 @@ def find_local_model_file(webui_root, role, name, branch=""):
     Neo 把它挪进了 models/，但从老版本升上来的人机器上两个目录可能都在，
     只认一个就会误判成"缺失"然后重复下载。
     """
+    # extra_dirs：额外要找的绝对目录（共享模型库里对应的分类）
+    extra_dirs = [d for d in (extra_dirs or ()) if d and os.path.isdir(d)]
     if not webui_root or not os.path.isdir(webui_root):
-        return None
+        webui_root = ""
+        if not extra_dirs:
+            return None
 
     folders = []
     f = role_folder(role, branch)
@@ -380,7 +384,7 @@ def find_local_model_file(webui_root, role, name, branch=""):
         for alt in ("embeddings", "models/embeddings"):
             if alt not in folders:
                 folders.append(alt)
-    if not folders:
+    if not folders and not extra_dirs:
         return None
 
     base_name = os.path.basename(str(name).replace("\\", "/"))
@@ -392,8 +396,8 @@ def find_local_model_file(webui_root, role, name, branch=""):
     if not target_stem:
         return None
 
-    for folder in folders:
-        target_dir = os.path.join(webui_root, *folder.split("/"))
+    dirs = [os.path.join(webui_root, *f.split("/")) for f in folders] if webui_root else []
+    for target_dir in extra_dirs + dirs:
         if not os.path.isdir(target_dir):
             continue
         for dirpath, _dirs, files in os.walk(target_dir):
