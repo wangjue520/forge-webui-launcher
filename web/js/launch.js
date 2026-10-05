@@ -128,6 +128,14 @@
         ]);
         if (v === "cancel") return;
         if (v === "fix") fixOverrides = true;
+      } else if (issue.id === "driver_outdated") {
+        const v = await App.modal("建议先升级显卡驱动", App.esc(issue.text), [
+          { id: "driver", label: "去下载驱动", kind: "primary" },
+          { id: "anyway", label: "这次先直接启动" },
+          { id: "cancel", label: "取消" },
+        ]);
+        if (v === "driver") { if (issue.url) App.api.open_url(issue.url); return; }
+        if (v !== "anyway") return;
       } else if (issue.id === "port_occupied") {
         const v = await App.modal("检测到残留进程", App.esc(issue.text), [
           { id: "kill", label: "结束并启动", kind: "danger" },
@@ -261,6 +269,14 @@
         $("#launch-open-browser").disabled = !launchUrl;
       });
       App.on("launch", "state", (e) => { if (mine(e)) setRunningUI(!!e.running); });
+      // 启动过程中才发现驱动带不动（启动前没检测出来的情况）：弹窗引导升级驱动
+      App.on("launch", "driver_outdated", async (e) => {
+        const v = await App.modal("显卡驱动需要升级", App.esc(e.text || ""), [
+          { id: "driver", label: "去下载驱动", kind: "primary" },
+          { id: "ok", label: "知道了" },
+        ]);
+        if (v === "driver" && e.url) App.api.open_url(e.url);
+      });
     },
 
     startInstance,

@@ -51,6 +51,37 @@ _FATAL_HINTS = (
 )
 
 
+def _driver_issue_forge(root, cfg):
+    """WebUI：已装的 torch，或者还没装时 WebUI 要装的 torch，驱动带不动 → 启动前提示升级驱动"""
+    try:
+        import cuda_compat as cc
+        import torch_bootstrap as tb
+        py = (cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root) or ""
+        _ver, tag = cc.installed_torch_tag(cc.forge_site_packages(root, py))
+        if not tag:
+            _specs, tag = tb._parse_torch_spec(root)
+        if not tag:
+            return None
+        auto = "TORCH_COMMAND" not in os.environ
+        return cc.driver_issue(tag, "这个 WebUI ", auto)
+    except Exception:
+        return None
+
+
+def _driver_issue_comfy(root, cfg, comfy_dir):
+    """ComfyUI：看它的 Python 环境里装的 torch"""
+    try:
+        import cuda_compat as cc
+        py = cm.comfy_python(cfg, root).strip('"')
+        cands = [os.path.join(os.path.dirname(py), "Lib", "site-packages")] if py else []
+        for v in ("venv", ".venv"):
+            cands.append(os.path.join(comfy_dir, v, "Lib", "site-packages"))
+        _ver, tag = cc.installed_torch_tag([c for c in cands if os.path.isdir(c)])
+        return cc.driver_issue(tag, "ComfyUI ", False) if tag else None
+    except Exception:
+        return None
+
+
 def _fatal_hint_for(text):
     low = (text or "").lower()
     for keys, hint in _FATAL_HINTS:
@@ -419,6 +450,9 @@ class InstanceRunner:
                                    "官方便携包选外层的 ComfyUI_windows_portable 也可以）"})
             return {"ok": False, "issues": issues}
         issues += _non_ascii_or_space_issues(root, "ComfyUI ")
+        drv = _driver_issue_comfy(root, cfg, comfy_dir)
+        if drv:
+            issues.append(drv)
         py = cm.comfy_python(cfg, root)
         if py:
             ok, why = _probe_executable([py.strip('"'), "--version"])
@@ -452,6 +486,9 @@ class InstanceRunner:
             return {"ok": False, "issues": issues}
 
         issues += _non_ascii_or_space_issues(root, "WebUI ")
+        drv = _driver_issue_forge(root, cfg)
+        if drv:
+            issues.append(drv)
 
         # 试运行 python / git：路径存在 ≠ 能执行（解压不完整、缺文件、被杀软拦截）
         py_exe = (cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root)
@@ -744,6 +781,13 @@ class InstanceRunner:
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
             if failed_start:
                 self.log(self.fatal_hint + "\n")
+                if "显卡驱动太旧" in self.fatal_hint:
+                    try:
+                        import cuda_compat as cc
+                        url = cc.DRIVER_URL
+                    except Exception:
+                        url = ""
+                    self.emit("driver_outdated", text=self.fatal_hint.replace("[启动器] ", ""), url=url)
             # 只收尾「自己这一代、自己这个进程」：gen 对不上，或 self.proc 已经
             # 换成新一轮启动的进程时，什么都不动——否则会把刚启动的进程状态清掉
             if self.gen_alive(gen) and self.proc is proc:

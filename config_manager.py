@@ -793,7 +793,7 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
     if not specs:
         return {}, False
     driver = cc.driver_cuda_version()
-    new_tag = cc.supported_tag(tag, driver)
+    new_tag = cc.effective_tag(tag, driver)
     if new_tag == tag:
         return {}, False
     try:
@@ -829,8 +829,13 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
                               or (target_torch and f"{ver}+{itag}" != target_torch)))
     if notes is not None:
         target = "、".join(f"{n} {v}" for n, v in new_specs)
-        notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
-                     f"（需要 CUDA {cc.tag_cuda(tag)[0]} 系驱动），已自动改装兼容版本：{target}")
+        if new_tag == cc.LEGACY_TAG and cc.is_legacy_gpu():
+            notes.append(f"[启动器] 显卡（{'、'.join(cc.gpu_names())}）架构较老，新版 torch 已不支持，"
+                         f"已自动改装老卡专用版本：{target}")
+        else:
+            notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
+                         f"（需要 {cc.DRIVER_MIN} 以上的驱动），已自动改装兼容版本：{target}。"
+                         "建议有空把显卡驱动升级一下，之后就能直接用新版")
         if reinstall:
             notes.append(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 驱动带不动，这次启动会自动重装"
                          "（几个 GB，需要一点时间）。想继续用新版 torch 的话，把显卡驱动升级到 580 以上即可")

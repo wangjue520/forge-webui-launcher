@@ -173,7 +173,7 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
     try:
         import cuda_compat as cc
         import mirror_manager as mm
-        new_tag = cc.supported_tag(tag)
+        new_tag = cc.effective_tag(tag)
         if new_tag != tag:
             cand = [f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"] + [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
             venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")

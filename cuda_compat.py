@@ -245,3 +245,79 @@ def forge_site_packages(root_dir, python_exe=""):
     if python_exe:
         cands.append(os.path.join(os.path.dirname(python_exe.strip('"')), "Lib", "site-packages"))
     return [c for c in cands if os.path.isdir(c)]
+
+
+# ------------------------------------------------------------ 启动前提示 ----
+
+DRIVER_URL = "https://www.nvidia.cn/drivers/lookup/"
+DRIVER_MIN = 580
+
+# CUDA 13 放弃了这些老架构（GTX 9xx/10xx、TITAN X/V、Tesla P/M）：驱动再新也跑不了 cu130
+_LEGACY_GPU_RE = re.compile(
+    r"GTX?\s*(9\d\d|10\d\d)\b|TITAN\s+X|TITAN\s+V\b|Tesla\s+[PM]\d+", re.IGNORECASE)
+
+
+_gpu_cache = {"t": 0.0, "v": []}
+
+
+def gpu_names():
+    if time.time() - _gpu_cache["t"] < 600:
+        return _gpu_cache["v"]
+    names = []
+    exe = find_nvidia_smi()
+    if exe:
+        try:
+            r = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"],
+                               capture_output=True, timeout=15, creationflags=_NO_WINDOW)
+            names = [x.strip() for x in (r.stdout or b"").decode("utf-8", "replace").splitlines() if x.strip()]
+        except Exception:
+            names = []
+    _gpu_cache.update(t=time.time(), v=names)
+    return names
+
+
+def is_legacy_gpu():
+    return any(_LEGACY_GPU_RE.search(n) for n in gpu_names())
+
+
+LEGACY_TAG = "cu126"   # PyTorch 给老架构卡保留的最后一个 CUDA 系列（cu128 起已不含 sm_50/sm_60）
+
+
+def effective_tag(wanted_tag, driver=None):
+    """
+    实际该装的 tag：老架构卡（GTX 9xx/10xx 等）一律 cu126——驱动再新，cu128/cu130 也没有它们的
+    内核（报 no kernel image）；其余按驱动能力降级（supported_tag）。
+    """
+    need = tag_cuda(wanted_tag)
+    if need and need > tag_cuda(LEGACY_TAG) and is_legacy_gpu():
+        return LEGACY_TAG
+    return supported_tag(wanted_tag, driver)
+
+
+def driver_issue(need_tag, what, can_auto_fix):
+    """
+    环境要用的 torch（need_tag，如 cu130）驱动带不动时，返回给启动前检查用的提示；没问题返回 None。
+    can_auto_fix：启动器这次能不能自动换装兼容 torch（Forge 能，ComfyUI 不能）。
+    """
+    need = tag_cuda(need_tag)
+    names = gpu_names()
+    gpu = "、".join(names) or "NVIDIA 显卡"
+    if need and need > tag_cuda(LEGACY_TAG) and is_legacy_gpu():
+        return {
+            "level": "warn", "id": "gpu_too_old",
+            "text": f"这张显卡（{gpu}）架构比较老，新版 torch（{need_tag}）已经不支持它，"
+                    "升级驱动也没用。\n\n"
+                    + ("启动器会自动换装老卡专用的 cu126 版 torch（需要下载约 3GB）。" if can_auto_fix
+                       else "需要把 torch 换成老卡专用的 cu126 版本（在「环境部署」页重新部署 ComfyUI 会自动选对）。"),
+        }
+    driver = driver_cuda_version()
+    if not need or not driver or driver[0] >= need[0]:
+        return None
+    return {
+        "level": "warn", "id": "driver_outdated", "url": DRIVER_URL,
+        "text": f"显卡驱动太旧：{gpu} 当前的驱动最高支持 CUDA {fmt_cuda(driver)}，"
+                f"而{what}的 torch（{need_tag}）需要 CUDA {need[0]}，也就是 {DRIVER_MIN} 以上的驱动。\n\n"
+                f"建议先升级显卡驱动（NVIDIA App 里一键更新，或去官网下载），升级完直接启动就行，不用换 torch。\n\n"
+                + ("不想升级的话也可以直接启动：启动器会自动换装兼容的 torch（CUDA 12 版，需要下载约 3GB）。"
+                   if can_auto_fix else "不升级驱动的话这次启动会失败。"),
+    }
