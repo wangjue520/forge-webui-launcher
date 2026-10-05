@@ -14,7 +14,7 @@
 
   const CELL = 168, GAP = 8, THUMB = 320;
   let base = "", token = "";
-  let ids = [], kinds = "", missing = new Set();
+  let ids = [], kinds = "", missing = new Set(), vers = [];
   let filters = { q: "", kind: "", iid: "", collection: "", chars: [], tags: [], lora: "", model: "", sort: "new" };
   let timeDays = "";
   let collections = [];
@@ -26,6 +26,8 @@
   let autoTimer = 0, queryTimer = 0;
 
   const url = (route, id) => `${base}/${route}/${id}?t=${token}`;
+  // 缩略图带版本号：同一个 id 的文件内容变了，URL 也变，不会读到浏览器缓存里的旧图
+  const thumbUrl = (i) => url("t", ids[i]) + (vers[i] ? `&v=${vers[i]}` : "");
 
   /* ---------- 查询 ---------- */
   function currentFilters() {
@@ -52,6 +54,7 @@
       ids = (r && r.ids) || [];
       kinds = (r && r.kinds) || "";
       missing = new Set((r && r.missing) || []);
+      vers = (r && r.vers) || [];
       renderFacets(fc || {});
       layout(true);
       const kindTxt = fc && fc.kinds ? Object.entries(fc.kinds).map(([k, n]) =>
@@ -251,7 +254,7 @@
       const img = document.createElement("img");
       img.loading = "lazy";
       img.alt = "";
-      img.src = url("t", id);
+      img.src = thumbUrl(i);
       img.onerror = () => { img.onerror = null; makeThumb(id, kind, img); };
       el.prepend(img);
     }
@@ -676,7 +679,8 @@
         if (e.relinked) bits.push(`找回改名的 ${e.relinked}`);
         if (e.missing) bits.push(`${e.missing} 个收藏已失效`);
         $("#out-scan-hint").textContent = bits.length ? "索引已更新：" + bits.join("，") : "";
-        if (e.added || e.updated || e.missing || e.relinked || !ids.length) { reloadCollections(); scheduleQuery(0); }
+        if (e.removed) bits.push(`移除已删除的 ${e.removed}`);
+        if (e.added || e.updated || e.missing || e.relinked || e.removed || !ids.length) { reloadCollections(); scheduleQuery(0); }
       });
       App.on("outputs", "export_done", (e) =>
         App.toast(`导出完成：复制了 ${e.copied} 个文件到 ${e.dest}` + (e.failed ? `，${e.failed} 个失败` : ""), e.failed ? "error" : "ok", 6000));

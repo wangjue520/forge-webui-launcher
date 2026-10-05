@@ -39,7 +39,7 @@ IGNORE_NAMES = {"thumbs.db", "desktop.ini", ".ds_store"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS outputs(
-  id INTEGER PRIMARY KEY,
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   path TEXT UNIQUE,
   name TEXT,
   iid TEXT,
@@ -231,6 +231,7 @@ class OutputIndex:
         self.db = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
+        self._migrate_autoincrement()
         self.fts = True
         try:
             self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS outputs_fts USING fts5(prompt, negative)")
@@ -240,6 +241,34 @@ class OutputIndex:
         self.chars = CharacterDict(char_dirs)
         self.scanning = False
         self.scan_state = {"done": 0, "total": 0, "phase": ""}
+
+    def _migrate_autoincrement(self):
+        """
+        老索引的 outputs.id 是普通 INTEGER PRIMARY KEY：SQLite 会把「被删掉的最大 id」
+        再发给新记录。在文件夹里删掉最新的几张图 → 重新扫描删掉记录 → 再出图，
+        新图就拿到了旧图的 id，而缩略图（磁盘缓存 + 浏览器缓存）都是按 id 存的，
+        于是网格里显示的是已删除的旧图、点进去详情却是新图。
+        改成 AUTOINCREMENT 后 id 永不复用。原有 id 原样保留（标签/收藏/全文索引都按 id 关联）。
+        """
+        row = self.db.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='outputs'").fetchone()
+        if not row or "AUTOINCREMENT" in (row[0] or "").upper():
+            return
+        try:
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(outputs)")]
+            self.db.execute("BEGIN")
+            self.db.execute("ALTER TABLE outputs RENAME TO outputs_old")
+            ddl = _SCHEMA.split("CREATE TABLE IF NOT EXISTS outputs(", 1)[1].split(");", 1)[0]
+            self.db.execute("CREATE TABLE outputs(" + ddl + ")")
+            new_cols = {r[1] for r in self.db.execute("PRAGMA table_info(outputs)")}
+            keep = ", ".join(c for c in cols if c in new_cols)
+            self.db.execute(f"INSERT INTO outputs({keep}) SELECT {keep} FROM outputs_old")
+            self.db.execute("DROP TABLE outputs_old")   # 旧表的索引随之删除，下面重建
+            self.db.commit()
+        except sqlite3.Error:
+            self.db.rollback()
+            return
+        self.db.executescript(_SCHEMA)
 
     # ---------------------------------------------------------- 扫描 ----
     def scan(self, sources, progress=None, cancelled=lambda: False):
@@ -292,15 +321,22 @@ class OutputIndex:
         gone = [r for p, r in known.items() if p not in found and not r[4]]
 
         # 被改名/挪动的文件：新路径的 (大小, 时间) 跟消失的记录一致 → 接上原记录
+        # 只在「指纹两边都唯一」时才接：同一秒批量出的图大小可能一样，
+        # 一对多时宁可当成新文件重新解析，也不要把 A 的参数接到 B 身上
         gone_by_fp = {}
         for r in gone:
             gone_by_fp.setdefault((r[2], int(r[3])), []).append(r)
+        new_fp_count = {}
+        for p in new_paths:
+            k = (found[p][1], int(found[p][2]))
+            new_fp_count[k] = new_fp_count.get(k, 0) + 1
         relinked = 0
         still_new = []
         for p in new_paths:
             iid, size, mtime = found[p]
-            cand = gone_by_fp.get((size, int(mtime)))
-            if cand:
+            key = (size, int(mtime))
+            cand = gone_by_fp.get(key)
+            if cand and len(cand) == 1 and new_fp_count[key] == 1:
                 r = cand.pop(0)
                 with self.lock:
                     self.db.execute("UPDATE outputs SET path=?, name=?, iid=?, missing=0 WHERE id=?",
@@ -333,18 +369,23 @@ class OutputIndex:
         with self.lock:
             # 消失的文件：在收藏夹里的保留记录并标记失效，其余直接删掉
             fav = {r[0] for r in self.db.execute("SELECT DISTINCT oid FROM collection_items")}
-            missing = 0
+            missing = removed = 0
             for r in gone:
                 if r[0] in fav:
                     self.db.execute("UPDATE outputs SET missing=1 WHERE id=?", (r[0],))
                     missing += 1
                 else:
                     self._delete_row(r[0])
+                    removed += 1
             self.db.commit()
+        # removed：在文件夹里被删掉的。以前不报这个数，只删了文件时前端不刷新，
+        # 网格里还挂着已删除的记录
         return {"added": len(still_new), "updated": len(changed), "missing": missing,
+                "removed": removed + len(grid_ids),
                 "relinked": relinked, "total_files": len(found)}
 
     def _delete_row(self, oid):
+        drop_thumbs(oid)
         self.db.execute("DELETE FROM outputs WHERE id=?", (oid,))
         self.db.execute("DELETE FROM output_tags WHERE oid=?", (oid,))
         self.db.execute("DELETE FROM output_loras WHERE oid=?", (oid,))
@@ -363,6 +404,8 @@ class OutputIndex:
                     meta.get("source", ""), meta.get("has_meta", 0))
             if cur:
                 oid = cur[0]
+                # 同一路径换了内容（ComfyUI 删图后计数器回退，新图会沿用旧文件名）：旧缩略图作废
+                drop_thumbs(oid)
                 self.db.execute("""UPDATE outputs SET name=?, iid=?, kind=?, size=?, mtime=?, width=?,
                     height=?, prompt=?, negative=?, model=?, seed=?, sampler=?, source=?, has_meta=?,
                     missing=0 WHERE id=?""", vals + (oid,))
@@ -436,11 +479,13 @@ class OutputIndex:
         order = "o.mtime DESC" if (f or {}).get("sort", "new") == "new" else "o.mtime ASC"
         with self.lock:
             rows = self.db.execute(
-                f"SELECT o.id, o.kind, o.width, o.height, o.missing FROM outputs o WHERE {where} "
+                f"SELECT o.id, o.kind, o.width, o.height, o.missing, o.mtime, o.size FROM outputs o WHERE {where} "
                 f"ORDER BY {order} LIMIT 100000", args).fetchall()
         return {"ids": [r[0] for r in rows], "kinds": "".join((r[1] or "o")[0] for r in rows),
                 "ratios": [round((r[2] / r[3]) if r[2] and r[3] else 1, 3) for r in rows],
-                "missing": [r[0] for r in rows if r[4]]}
+                "missing": [r[0] for r in rows if r[4]],
+                # 缩略图版本号：文件内容变了（同 id 同路径被覆盖）URL 跟着变，浏览器缓存不会串图
+                "vers": [f"{int(r[5] or 0):x}{(r[6] or 0) % 4096:x}" for r in rows]}
 
     def facets(self, f):
         """当前筛选条件下的角色 / LoRA / 模型 / tag 计数"""
@@ -565,6 +610,19 @@ def thumb_path(oid, mtime):
     return os.path.join(THUMB_DIR, str(int(oid) % 256), f"{int(oid)}_{int(mtime or 0)}.webp")
 
 
+def drop_thumbs(oid, keep=None):
+    """删掉某条记录的缩略图缓存（keep 指定的那份除外）"""
+    d = os.path.join(THUMB_DIR, str(int(oid) % 256))
+    keep_n = os.path.normcase(os.path.abspath(keep)) if keep else None
+    for p in glob.glob(os.path.join(d, f"{int(oid)}_*.webp")):
+        if keep_n and os.path.normcase(os.path.abspath(p)) == keep_n:
+            continue
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     index = None
     token = ""
@@ -631,6 +689,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             os.makedirs(os.path.dirname(tp), exist_ok=True)
             with open(tp, "wb") as f:
                 f.write(data)
+            drop_thumbs(oid, keep=tp)
         except OSError:
             self.send_error(500)
             return
