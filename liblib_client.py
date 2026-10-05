@@ -214,7 +214,11 @@ def fetch_download_info(model_uuid, version_uuid=None):
     }
 
 
-def guess_folder_by_size(size_bytes, file_name=""):
+_TE_NAME_HINTS = ("text_encoder", "text-encoder", "textencoder",
+                  "t5xxl", "umt5", "clip_l", "clip_g", "qwen3", "qwen_3")
+
+
+def guess_folder_by_size(size_bytes, file_name="", branch=""):
     """
     liblib 的接口里 LoRA 和大模型的类型编码是一样的（modelType=5 两边都在用），
     只能靠文件大小猜：>= 1.5GB 按大模型，否则按 LoRA。猜错无所谓——
@@ -222,11 +226,23 @@ def guess_folder_by_size(size_bytes, file_name=""):
     返回 (相对文件夹, 类型显示名)。
     """
     name = (file_name or "").lower()
+
+    def _role_folder(role, fallback):
+        try:
+            import image_meta_core as imc
+            return imc.role_folder(role, branch) or fallback
+        except Exception:
+            return fallback
+
+    # 文本编码器只能靠文件名认（liblib 没有类型字段），放在大小判断之前：
+    # qwen3/t5xxl 这类动辄好几个 GB，走大小会被错判成大模型
+    if any(p in name for p in _TE_NAME_HINTS):
+        return _role_folder("TextEncoder", "models/text_encoder"), "文本编码器（按文件名猜测）"
     if "vae" in name:
-        return "models/VAE", "VAE（按文件名猜测）"
+        return _role_folder("VAE", "models/VAE"), "VAE（按文件名猜测）"
     if size_bytes >= 1536 * 1024 * 1024:
-        return "models/Stable-diffusion", "Checkpoint 大模型（按文件大小猜测）"
-    return "models/Lora", "LoRA（按文件大小猜测）"
+        return _role_folder("Checkpoint", "models/Stable-diffusion"), "Checkpoint 大模型（按文件大小猜测）"
+    return _role_folder("LoRA", "models/Lora"), "LoRA（按文件大小猜测）"
 
 
 def download_headers(token):

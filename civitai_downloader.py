@@ -41,6 +41,7 @@ MODEL_TYPE_FOLDER_MAP = {
     "Controlnet": "models/ControlNet",
     "VAE": "models/VAE",
     "Upscaler": "models/ESRGAN",
+    "TextEncoder": "models/text_encoder",
     "MotionModule": "models/motion_module",
     "Poses": "models/Poses",
     "Wildcards": "models/wildcards",
@@ -49,6 +50,19 @@ MODEL_TYPE_FOLDER_MAP = {
 }
 
 DEFAULT_FOLDER = "models/Other"
+
+# Civitai 类型 → image_meta_core 的角色名。走角色表是为了按分支分目录：
+# 同一类模型在 Neo（models/embeddings）和 Classic（根目录 embeddings）、
+# ComfyUI（全小写复数）下的目录名不一样，硬编码 A1111 目录会放错地方。
+_TYPE_TO_ROLE = {
+    "Checkpoint": "Checkpoint",
+    "LORA": "LoRA", "LoCon": "LoRA", "DoRA": "LoRA",
+    "TextualInversion": "Embedding",
+    "VAE": "VAE",
+    "Controlnet": "ControlNet",
+    "Upscaler": "Upscaler",
+    "TextEncoder": "TextEncoder",
+}
 
 
 class CivitaiError(Exception):
@@ -290,7 +304,19 @@ def search_models_by_name(query, api_key=None, limit=6, host=None):
     return results
 
 
-def guess_folder(model_type):
+def guess_folder(model_type, branch=""):
+    """Civitai 模型类型 → 建议存放的相对目录。branch 传入实例分支
+    （classic/neo2/comfyui）时按目标分支的目录结构走，避免 Neo/ComfyUI
+    目录名不同导致放错地方；认不出的类型回退老映射表。"""
+    role = _TYPE_TO_ROLE.get(model_type)
+    if role:
+        try:
+            import image_meta_core as imc
+            folder = imc.role_folder(role, branch)
+            if folder:
+                return folder
+        except Exception:
+            pass
     return MODEL_TYPE_FOLDER_MAP.get(model_type, DEFAULT_FOLDER)
 
 

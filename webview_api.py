@@ -2060,8 +2060,47 @@ SHARED_CACHE_PORTABLE = os.path.join(SHARED_CACHE_DIR, "portable")
 
 COMFY_REPO = "https://github.com/comfyanonymous/ComfyUI.git"
 COMFY_REF = "master"
-# ComfyUI 官方 README 推荐的 CUDA 版本 torch；RTX 50 系需要 cu128 及以上
-COMFY_TORCH_TAG = "cu128"
+# ComfyUI 官方 README 给 NVIDIA 用户的 torch 索引（cu130 是 20 系及以后的要求；
+# Maxwell/Pascal/Volta 老卡（GTX 9xx/10xx、TITAN X/V 等）在 CUDA 13 里已被放弃，
+# 只能用官方为老卡保留的 cu126 系列（官方 cu126 便携包同理）
+COMFY_TORCH_TAG = "cu130"
+COMFY_TORCH_TAG_LEGACY = "cu126"
+
+# 名字命中这些的就是 CUDA 13 不再支持的老架构卡
+_LEGACY_GPU_RE = re.compile(
+    r"GTX?\s*(9\d\d|10\d\d)\b|TITAN\s+X|TITAN\s+V\b|Tesla\s+[PM]\d+", re.IGNORECASE)
+
+
+def _nvidia_gpu_names():
+    """nvidia-smi 列出本机 N 卡型号；没有 N 卡或查询失败返回空列表"""
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        # nvidia-smi 常常不在 PATH（驱动装了但没加），去默认安装位置找
+        for c in (r"C:\Windows\System32\nvidia-smi.exe",
+                  r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"):
+            if os.path.isfile(c):
+                exe = c
+                break
+    if not exe:
+        return []
+    try:
+        r = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"],
+                           capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW)
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    return [x.strip() for x in r.stdout.splitlines() if x.strip()]
+
+
+def _pick_comfy_torch_tag(log):
+    """按本机显卡选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）"""
+    names = _nvidia_gpu_names()
+    if names and any(_LEGACY_GPU_RE.search(n) for n in names):
+        log(f"[部署] 检测到老架构显卡（{'、'.join(names)}），CUDA 13 已不支持这些卡，"
+            f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
+        return COMFY_TORCH_TAG_LEGACY
+    return COMFY_TORCH_TAG
 
 
 def _cached_archive_ok(path, expected_sha, log):
@@ -2097,6 +2136,10 @@ def _deploy_cfg_for(self, target, branch):
             cfg[k] = cm.DEFAULT_CONFIG.get(k)
     cfg["webui_branch"] = branch
     cfg["webui_root"] = target
+    # 网络检测缓存是上次运行写下的，机器可能换了网络环境（搬了地方、开关了
+    # 代理）——部署前强制重新探测，否则可能一直用着过期的镜像判定
+    cfg.pop("mirror_detected", None)
+    cfg.pop("github_mirror_detected", None)
     return cfg
 
 
@@ -2143,6 +2186,81 @@ def _unique_instance_name(self, base):
     return f"{base} {n}"
 
 
+def _comfy_existing_version(comfy_dir):
+    """读现有 ComfyUI 的版本号（comfyui_version.py），读不到返回空串"""
+    try:
+        with open(os.path.join(comfy_dir, "comfyui_version.py"),
+                  "r", encoding="utf-8", errors="replace") as f:
+            m = re.search(r'__version__\s*=\s*"([^"]+)"', f.read())
+            return m.group(1) if m else ""
+    except OSError:
+        return ""
+
+
+def _comfy_update_existing(self, target, git_exe, env, log, dcfg):
+    """
+    目录里已有 ComfyUI 源码时把它更新到最新 master，而不是拿旧版继续部署——
+    旧版（0.2.x 时代）没有内置 Manager 支持，节点生态也早已对不上，直接补齐
+    依赖部署出来就是个残缺环境。
+
+    只更新官方仓库的 git 检出（远程地址指向 ComfyUI 官方仓库）；没有 .git 的
+    目录（整合包解压出来的）不碰源码，只提醒版本可能过旧。更新失败不算部署
+    失败：继续用现有源码装依赖。
+    """
+    old_ver = _comfy_existing_version(target)
+    if not os.path.isdir(os.path.join(target, ".git")):
+        log(f"[部署] 检测到已有 ComfyUI 源码{f'（版本 {old_ver}）' if old_ver else ''}，"
+            "但这个目录不是 git 检出（可能是整合包解压的），无法自动更新源码，"
+            "将继续用现有版本补齐环境。如果版本太旧导致 Manager/节点不兼容，"
+            "建议换一个空目录全新部署最新版\n")
+        return
+    try:
+        r = subprocess.run([git_exe, "-C", target, "config", "--get", "remote.origin.url"],
+                           capture_output=True, text=True, timeout=30, env=env,
+                           creationflags=_NO_WINDOW)
+        url = (r.stdout or "").strip().lower()
+    except Exception:
+        url = ""
+    if "comfyui" not in url:
+        log("[部署] 已有源码的 git 远程不是 ComfyUI 官方仓库，跳过自动更新，"
+            "将继续用现有版本补齐环境\n")
+        return
+    log(f"[部署] 检测到已有 ComfyUI 源码{f'（当前版本 {old_ver}）' if old_ver else ''}，"
+        "自动更新到最新版 ...\n")
+    candidates = [COMFY_REPO]
+    try:
+        import mirror_manager as mm
+        if mm.resolve_github_mode(dcfg, log):
+            mirrored = [mm.github_url(COMFY_REPO, True, i) for i in range(len(mm.GITHUB_PROXIES))]
+            candidates = [u for u in mirrored if u != COMFY_REPO] + [COMFY_REPO]
+    except Exception:
+        pass
+    parent = os.path.dirname(os.path.abspath(target)) or "."
+    fetched = False
+    for u in candidates:
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        self._deploy_run_cmd(git_exe, ["-C", target, "config", "remote.origin.url", u],
+                             parent, log, env=env)
+        rc = self._deploy_run_cmd(
+            git_exe, ["-C", target, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=120",
+                      "fetch", "--depth", "1", "origin", COMFY_REF],
+            parent, log, env=env, timeout=1800)
+        if rc == 0:
+            fetched = True
+            break
+        log(f"\n[部署] 从该地址拉取失败（退出码 {rc}），换下一个地址 ...\n")
+    if not fetched:
+        log("[部署] 更新源码失败（网络问题），将继续用现有版本补齐环境\n")
+        return
+    if self._deploy_run_cmd(git_exe, ["-C", target, "checkout", "-f", "-B", COMFY_REF,
+                                      f"origin/{COMFY_REF}"], parent, log, env=env) != 0:
+        log("[部署] 检出最新代码失败，将继续用现有版本补齐环境\n")
+        return
+    new_ver = _comfy_existing_version(target)
+    log(f"[部署] 源码已更新：{old_ver or '未知'} → {new_ver or '最新 master'}\n")
+
+
 def _deploy_flow_comfy(self, target, use_portable):
     """部署 ComfyUI：便携 Python/Git → 拉源码 → 装 torch → 装依赖 → 冒烟测试 → 登记实例"""
     log = lambda t: self._emit("deploy", "log", text=t)
@@ -2186,7 +2304,7 @@ def _deploy_flow_comfy(self, target, use_portable):
         if os.path.exists(bundled_git):
             pe.tune_bundled_git(os.path.join(target, "git"), log_cb=log)
 
-        # ---- 2. 拉源码（幂等：已有 main.py 就跳过）----
+        # ---- 2. 拉源码（没有就克隆；已有 git 检出就更新到最新版）----
         if not os.path.isfile(os.path.join(target, "main.py")):
             candidates = [COMFY_REPO]
             try:
@@ -2227,7 +2345,7 @@ def _deploy_flow_comfy(self, target, use_portable):
                 self._emit("deploy", "error", title="部署失败", text="检出 ComfyUI 代码失败，请查看部署日志。")
                 return
         else:
-            log("[部署] 检测到已有 ComfyUI 源码，跳过拉取\n")
+            _comfy_update_existing(self, target, git_exe, env, log, dcfg)
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
 
@@ -2246,19 +2364,33 @@ def _deploy_flow_comfy(self, target, use_portable):
                     return
             py = venv_py
 
-        pip_mirror = []
-        torch_indexes = [f"{mm_official()}/{COMFY_TORCH_TAG}"]
+        pip_mirror_argsets = []
+        torch_tag = _pick_comfy_torch_tag(log)
+        torch_indexes = [f"{mm_official()}/{torch_tag}"]
         try:
             import mirror_manager as mm
             if mm.resolve_mode(dcfg, log):
-                pip_mirror = mm.pip_index_args(True)
-                torch_indexes = [f"{b}/{COMFY_TORCH_TAG}" for b in mm.PYTORCH_MIRROR_BASES] + torch_indexes
+                # 全部镜像都进候选（按顺序轮换，官方源兜底）：单个镜像缺包/
+                # 同步延迟/限速是国内依赖装不上的最常见原因，只试一个太脆
+                pip_mirror_argsets = [mm.pip_index_args(True, i)
+                                      for i in range(len(mm.PYPI_MIRRORS))]
+                torch_indexes = [f"{b}/{torch_tag}" for b in mm.PYTORCH_MIRROR_BASES] + torch_indexes
         except Exception:
             pass
 
-        # ---- 4. torch（已装就跳过；镜像失败自动换官方源）----
-        has_torch = subprocess.run([py, "-c", "import torch"], capture_output=True,
-                                   creationflags=_NO_WINDOW).returncode == 0
+        # ---- 4. torch（已装且 CUDA 可用就跳过；镜像失败自动换下一个源）----
+        probe = subprocess.run(
+            [py, "-c", "import torch; print(torch.cuda.is_available())"],
+            capture_output=True, text=True, creationflags=_NO_WINDOW)
+        has_torch = probe.returncode == 0
+        if has_torch and _nvidia_gpu_names() and "True" not in (probe.stdout or ""):
+            # 已装的 torch 是 CPU 版（国内镜像装歪的经典事故）：pip 见到同名包
+            # 会认为"已满足"不肯换，必须先卸再装 CUDA 版
+            log("[部署] 已安装的 torch 用不了 CUDA（是 CPU 版），卸载后重装 CUDA 版 ...\n")
+            self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y",
+                                      "torch", "torchvision", "torchaudio"],
+                                 target, log, env=env, timeout=600)
+            has_torch = False
         if has_torch:
             log("[部署] torch 已安装，跳过\n")
         else:
@@ -2279,13 +2411,18 @@ def _deploy_flow_comfy(self, target, use_portable):
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
 
-        # ---- 5. ComfyUI 依赖 ----
+        # ---- 5. ComfyUI 依赖（逐个源轮换，官方源兜底）----
         req = os.path.join(target, "requirements.txt")
-        rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "-r", req] + pip_mirror,
-                                  target, log, env=env, timeout=3600)
-        if rc != 0 and pip_mirror:
-            log("\n[部署] 镜像安装失败，改用官方源重试 ...\n")
-            rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "-r", req], target, log, env=env, timeout=3600)
+        rc = 1
+        for i, extra in enumerate(list(pip_mirror_argsets) + [[]]):
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            if i > 0:
+                log("\n[部署] 上一个源安装失败，换下一个源重试 ...\n")
+            rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "-r", req] + extra,
+                                      target, log, env=env, timeout=3600)
+            if rc == 0:
+                break
         if rc != 0:
             self._emit("deploy", "error", title="依赖安装失败",
                        text="ComfyUI 依赖安装失败，请查看部署日志。修复后重新点「开始部署」会跳过已完成的步骤。")
@@ -2301,12 +2438,23 @@ def _deploy_flow_comfy(self, target, use_portable):
                 node_ids, target, py, git_exe,
                 run=lambda prog, args, cwd, e, t: self._deploy_run_cmd(prog, args, cwd, log, env=e, timeout=t),
                 log=log, env=env, cancelled=self._deploy_cancel.is_set,
-                gh_proxies=_gh_proxies(dcfg, lambda m: log(m + "\n")), pip_mirror_args=pip_mirror)
+                gh_proxies=_gh_proxies(dcfg, lambda m: log(m + "\n")),
+                pip_mirror_argsets=pip_mirror_argsets)
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
             log("[部署] 常用节点：" + comfy_nodes.summary_text(res) + "\n")
             if res["failed"]:
                 log("[部署] 失败的节点可以之后在「常用插件」页重新安装\n")
+            # Manager 是日常使用频率最高的节点，明确告知最终状态，免得用户
+            # 打开 ComfyUI 才发现没有
+            if comfy_nodes.MANAGER_ID in node_ids:
+                mgr = comfy_nodes.find(comfy_nodes.MANAGER_ID)
+                if comfy_nodes.is_installed(mgr, target, py):
+                    log("[部署] ComfyUI-Manager 就绪：启动时会自动加 --enable-manager，"
+                        "网页里会出现 Manager 按钮\n")
+                else:
+                    log("[部署] 注意：ComfyUI-Manager 没能装上（上面日志有原因），"
+                        "网络好转后可到「常用插件」页勾选重装\n")
 
         # ---- 7. 冒烟测试（失败只提醒，不算部署失败）----
         log("\n[部署] 冒烟测试：以 CPU 模式初始化一次 ComfyUI ...\n")
@@ -2404,7 +2552,7 @@ def _api_civitai_fetch(self, text):
             info = cd.fetch_version_info(parsed, api_key)
             self._civitai_version_info = info
             self._download_source = "civitai"
-            folder = cd.guess_folder(info["model_type"])
+            folder = cd.guess_folder(info["model_type"], self.cfg.get("webui_branch", ""))
             root = (self.cfg.get("webui_root") or "").strip()
             dest = os.path.join(root, folder.replace("/", os.sep)) if root else folder
             subset = {
@@ -2436,7 +2584,8 @@ def _fetch_liblib(self, text, log):
     versions = info["versions"]
     chosen = versions[info["chosen"]]
     folder, type_label = lc.guess_folder_by_size(chosen["file_size"],
-                                                 chosen["file_name"])
+                                                 chosen["file_name"],
+                                                 self.cfg.get("webui_branch", ""))
     root = (self.cfg.get("webui_root") or "").strip()
     dest = os.path.join(root, folder.replace("/", os.sep)) if root else folder
     subset = {
@@ -3794,11 +3943,12 @@ def _gh_proxies(cfg, log=None):
     return []
 
 
-def _pip_mirror(cfg, log=None):
+def _pip_mirror_argsets(cfg, log=None):
+    """国内网络时返回全部 PyPI 镜像的参数组列表（按顺序轮换用），国外返回空"""
     try:
         import mirror_manager as mm
         if mm.resolve_mode(cfg, log):
-            return mm.pip_index_args(True)
+            return [mm.pip_index_args(True, i) for i in range(len(mm.PYPI_MIRRORS))]
     except Exception:
         pass
     return []
@@ -3908,7 +4058,7 @@ def _api_ext_install(self, names, iid=None):
                     run=lambda prog, args, cwd, e, t: _ext_run_cmd(self, prog, args, cwd, e, t),
                     log=log, env=env, cancelled=lambda: self._ext_cancel,
                     gh_proxies=_gh_proxies(cfg, lambda m: log(m + "\n")),
-                    pip_mirror_args=_pip_mirror(cfg, lambda m: log(m + "\n")))
+                    pip_mirror_argsets=_pip_mirror_argsets(cfg, lambda m: log(m + "\n")))
                 if self._ext_cancel:
                     log("\n[插件] 已取消\n")
                 else:
