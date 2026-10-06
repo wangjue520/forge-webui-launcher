@@ -237,9 +237,9 @@
   & #bg-topo { display: none; }
   & #main::before {   /* 细网格 + 网格交点的小十字 */
     background-image:
-      linear-gradient(rgba(165, 172, 177, .078) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(165, 172, 177, .078) 1px, transparent 1px),
-      radial-gradient(circle, rgba(200, 204, 206, .55) 1px, transparent 1.6px);
+      linear-gradient(rgba(165, 172, 177, .06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(165, 172, 177, .06) 1px, transparent 1px),
+      radial-gradient(circle, rgba(200, 204, 206, .42) 1px, transparent 1.6px);
     background-size: 48px 48px, 48px 48px, 96px 96px;
     background-position: 0 0, 0 0, -48px -48px;
     -webkit-mask-image: linear-gradient(180deg, #000, rgba(0, 0, 0, .7) 70%, rgba(0, 0, 0, .45));
@@ -258,17 +258,17 @@
   }
   & .bp-xr-step { width: 100%; height: 100%; transition: transform 1.6s cubic-bezier(.3, 1.25, .4, 1); }
   & .bp-xr {
-    width: 100%; height: 100%; display: block; opacity: .8;
+    width: 100%; height: 100%; display: block; opacity: .62;
     animation: bpSpin 300s linear infinite; will-change: transform;
   }
   & .bp-guides { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
   & .bp-guides * { vector-effect: non-scaling-stroke; }
-  & .bp-guides .g-arc { fill: none; stroke: rgba(200, 204, 206, .55); stroke-width: 1; }
-  & .bp-guides .g-arc.hi { stroke: rgba(235, 228, 210, .72); stroke-dasharray: 2 6; }
-  & .bp-guides .g-hair { stroke: rgba(200, 204, 206, .34); stroke-width: 1; }
-  & .bp-guides .g-red { stroke: var(--bp-cream); stroke-width: 1.5; opacity: 1; }
-  & .bp-guides .g-cross { stroke: rgba(235, 228, 210, .95); stroke-width: 1; }
-  & .bp-guides .g-lab { fill: rgba(220, 222, 220, .8); font: 400 9px var(--bp-disp); letter-spacing: .22em; }
+  & .bp-guides .g-arc { fill: none; stroke: rgba(200, 204, 206, .42); stroke-width: 1; }
+  & .bp-guides .g-arc.hi { stroke: rgba(235, 228, 210, .55); stroke-dasharray: 2 6; }
+  & .bp-guides .g-hair { stroke: rgba(200, 204, 206, .26); stroke-width: 1; }
+  & .bp-guides .g-red { stroke: var(--bp-cream); stroke-width: 1.5; opacity: .8; }
+  & .bp-guides .g-cross { stroke: rgba(235, 228, 210, .75); stroke-width: 1; }
+  & .bp-guides .g-lab { fill: rgba(220, 222, 220, .62); font: 400 9px var(--bp-disp); letter-spacing: .22em; }
   & .bp-guides .draw { stroke-dasharray: var(--len) var(--len); stroke-dashoffset: var(--len); animation: bpDraw 2.4s var(--bp-ease-io) forwards; }
   & .bp-halftone {
     position: absolute; left: 0; right: 0; bottom: 0; height: 40%;
@@ -276,7 +276,7 @@
     background-size: 7px 7px;
     -webkit-mask-image: linear-gradient(0deg, rgba(0, 0, 0, .8), transparent);
             mask-image: linear-gradient(0deg, rgba(0, 0, 0, .8), transparent);
-    opacity: .52;
+    opacity: .4;
   }
 
   /* ======================= 页头（大字排版） ======================= */
