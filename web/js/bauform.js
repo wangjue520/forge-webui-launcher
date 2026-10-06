@@ -42,7 +42,9 @@
     if (!B || !window.BPXray) return;
     var cv = B.xr, wrap = B.xrWrap;
     var w = wrap.clientWidth, h = wrap.clientHeight;
-    if (!w || !h) return;
+    // 主题样式表可能比脚本晚到：没套上样式时容器不是正方形，这时画了会被拉伸变扁，
+    // 等 ResizeObserver 报告真正的尺寸再画
+    if (!w || !h || Math.abs(w - h) > 2) return;
     var dpr = Math.min(1.5, window.devicePixelRatio || 1);
     var W = Math.round(w * dpr), H = Math.round(h * dpr);
     if (cv.width === W && cv.height === H) return;
@@ -192,6 +194,11 @@
       } else if (flip) it._bfNum.set(t); else it._bfNum.jump(t);
     });
   }
+  // 当前显示的导航项（按顺序）。只比数量会漏掉「一项出现、另一项同时隐藏」的情况
+  function visibleSig() {
+    return Array.prototype.filter.call(document.querySelectorAll("#nav .nav-item"), function (n) { return !n.hidden; })
+      .map(function (n) { return n.dataset.page; }).join(",");
+  }
   function perfFlaps() {
     if (!B || !window.BFFlap) return;
     document.querySelectorAll("#perf-mon .pm-val").forEach(function (v) {
@@ -290,7 +297,7 @@
       // 只关心导航项本身的显隐 / 选中变化（翻牌内部的改动不算）
       var hit = recs.some(function (r) { return r.target.classList && r.target.classList.contains("nav-item"); });
       if (!hit) return;
-      var vis = Array.prototype.filter.call(document.querySelectorAll("#nav .nav-item"), function (n) { return !n.hidden; }).length;
+      var vis = visibleSig();
       if (vis !== B.navVis) { B.navVis = vis; navNums(true); }
       placeNavlight(false);
     });
@@ -321,9 +328,13 @@
       B.rt = setTimeout(function () { drawXray(); buildGuides(); placeNavlight(false); }, 160);
     };
     window.addEventListener("resize", B.onResize);
+    if (window.ResizeObserver) {
+      B.ro = new ResizeObserver(function () { B.onResize(); });
+      B.ro.observe(B.xrWrap); B.ro.observe(main);
+    }
 
     navNums(false);
-    B.navVis = Array.prototype.filter.call(document.querySelectorAll("#nav .nav-item"), function (n) { return !n.hidden; }).length;
+    B.navVis = visibleSig();
     B.pmHosts = [];
     var pm = $("perf-mon");
     if (pm) {
@@ -350,6 +361,7 @@
     (B.pmHosts || []).forEach(function (v) { if (v._bf) { v._bf.destroy(); v._bfEl.remove(); v._bf = null; } });
     window.removeEventListener("mousemove", B.onMove);
     window.removeEventListener("resize", B.onResize);
+    if (B.ro) B.ro.disconnect();
     clearInterval(B.clockT);
     [B.bg, B.mast, B.navlight, B.coord, B.clockEl].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
     var logo = document.querySelector(".brand-logo"), name = document.querySelector(".brand-name");

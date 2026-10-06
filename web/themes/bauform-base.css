@@ -151,7 +151,7 @@
   font-family: "WWY Bauform", "WWY Sans SC", sans-serif; font-weight: 700; font-style: normal; line-height: 1;
 }
 .bfl-cell { position: relative; display: inline-block; width: var(--bfl-w); height: var(--bfl-h); perspective: 2.4em; flex: none; }
-.bfl-h { position: absolute; left: 0; right: 0; height: calc(50% - .035em); overflow: hidden; backface-visibility: hidden; }
+.bfl-h { position: absolute; left: 0; right: 0; height: calc(50% - .035em); overflow: hidden; }
 .bfl-top, .bfl-ftop { top: 0; border-radius: .07em .07em 0 0; background: linear-gradient(180deg, var(--bfl-bg), var(--bfl-bg-2)); }
 .bfl-bot, .bfl-fbot { bottom: 0; border-radius: 0 0 .07em .07em; background: linear-gradient(180deg, var(--bfl-bg-2), var(--bfl-bg)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); }
 .bfl-h i {
@@ -170,7 +170,7 @@
 }
 .bfl-cell::before { left: 0; } .bfl-cell::after { right: 0; }
 /* 一次翻页（时长 --bfl-t）：0–45% 上半片带着旧字向前倒下，45–100% 下半片带着新字落下并回弹 */
-.bfl-ftop, .bfl-fbot { visibility: hidden; z-index: 2; }
+.bfl-ftop, .bfl-fbot { visibility: hidden; z-index: 2; backface-visibility: hidden; }   /* 只有翻动片是 3D 的，静态两半保持普通 2D 图层 */
 .bfl-cell.go .bfl-ftop {
   visibility: visible; transform-origin: 50% 100%;
   animation: bflFall calc(var(--bfl-t, 200ms) * .45) cubic-bezier(.55, 0, .9, .5) forwards;
