@@ -1,0 +1,200 @@
+/* ============================================================
+   开屏动画 · 构型 · 机能包豪斯（js/splash.js 的 bauformSplash）
+   相位 class：b-on → b-line → b-frame → b-burst → b-slab → b-title → b-info → (b-out → b-out2)
+   这个文件始终加载（开屏在主题 CSS 生效前就开始了），选择器都限定在 #splash.sp-bp 里
+   ============================================================ */
+#splash.sp-bp {
+  --s-void: #06080a;
+  --s-slate: #1d2226;
+  --s-slate-2: #2a3136;
+  --s-slate-3: #a7aeb2;
+  --s-cream: #ebe4d2;
+  --s-red: #e5482f;
+  --s-disp: "WWY Bauform", "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
+  --s-line: "WWY Bauform Line", "WWY Bauform", sans-serif;
+  --s-ease: cubic-bezier(.16, 1, .3, 1);
+  --s-io: cubic-bezier(.77, 0, .18, 1);
+  position: fixed; inset: 0; z-index: 500; overflow: hidden; cursor: default;
+  background: var(--s-void); color: var(--s-cream); font-family: var(--s-disp);
+  transition: background-color .6s ease;
+}
+#splash.sp-bp > * { position: absolute; pointer-events: none; }
+
+/* ---- 色块 ---- */
+.sp-bp .bps-slabs { inset: 0; z-index: 1; }
+.sp-bp .bps-slabs i { position: absolute; top: 0; bottom: 0; transform: translateX(110vw); transition: transform .95s var(--s-io); }
+.sp-bp .bps-slabs i:nth-child(1) { left: 0; right: 0; background: var(--s-slate); }
+.sp-bp .bps-slabs i:nth-child(2) { left: 5%; width: 27%; background: var(--s-slate-2); transition-delay: .08s; }
+.sp-bp .bps-slabs i:nth-child(3) { left: 72%; width: 1.2%; background: var(--s-cream); transition-delay: .16s; opacity: .9; }
+.sp-bp.b-slab .bps-slabs i { transform: none; }
+.sp-bp.b-out .bps-slabs i { transform: translateX(-110vw); transition-duration: .8s; }
+.sp-bp.b-out .bps-slabs i:nth-child(1) { transition-delay: .22s; }
+.sp-bp.b-out .bps-slabs i:nth-child(2) { transition-delay: .08s; }
+.sp-bp.b-out .bps-slabs i:nth-child(3) { transition-delay: 0s; }
+
+/* ---- 零件画布 ---- */
+.sp-bp .bps-xr { inset: 0; width: 100%; height: 100%; z-index: 2; }
+.sp-bp .bps-flash {
+  inset: 0; z-index: 3; opacity: 0;
+  background: radial-gradient(circle at 50% 50%, rgba(235, 228, 210, .55), rgba(235, 228, 210, 0) 40%);
+}
+.sp-bp.b-burst .bps-flash { animation: bpsFlash .7s ease-out; }
+
+/* ---- 发丝线 / 弧 / 准星 ---- */
+.sp-bp .bps-mid { left: 0; right: 0; top: 50%; height: 1px; background: var(--s-red); z-index: 4; transform: scaleX(0); transition: transform .6s var(--s-io), opacity .8s; }
+.sp-bp.b-line .bps-mid { transform: scaleX(1); }
+.sp-bp.b-burst .bps-mid { opacity: 0; }
+.sp-bp .bps-frame { left: 6%; right: 6%; height: 1px; background: rgba(167, 174, 178, .45); z-index: 4; transform: scaleX(0); transition: transform .9s var(--s-io), opacity .5s; }
+.sp-bp .bps-frame.f1 { top: 28%; transform-origin: left; }
+.sp-bp .bps-frame.f2 { top: 72%; transform-origin: right; transition-delay: .08s; }
+.sp-bp.b-frame .bps-frame { transform: scaleX(1); }
+.sp-bp.b-slab .bps-frame { background: rgba(235, 228, 210, .35); }
+.sp-bp .bps-guides { inset: 0; width: 100%; height: 100%; z-index: 4; overflow: visible; }
+.sp-bp .bps-guides path { fill: none; stroke: rgba(167, 174, 178, .55); stroke-width: 1; vector-effect: non-scaling-stroke; stroke-dasharray: 1 1; stroke-dashoffset: 1; }
+.sp-bp.b-burst .bps-guides path { animation: bpsDraw 1.4s var(--s-io) forwards; }
+.sp-bp.b-burst .bps-guides .g-arc-r { animation-delay: .12s; }
+.sp-bp.b-slab .bps-guides path { stroke: rgba(235, 228, 210, .4); }
+.sp-bp .bps-cross { width: 15px; height: 15px; z-index: 5; transform: translate(-50%, -50%) scale(0) rotate(-90deg); transition: transform .6s var(--s-ease); }
+.sp-bp .bps-cross::before, .sp-bp .bps-cross::after { content: ""; position: absolute; background: var(--s-cream); }
+.sp-bp .bps-cross::before { left: 7px; top: 0; bottom: 0; width: 1px; }
+.sp-bp .bps-cross::after { top: 7px; left: 0; right: 0; height: 1px; }
+.sp-bp .bps-cross.c1 { left: 9%; top: 28%; } .sp-bp .bps-cross.c2 { left: 91%; top: 28%; transition-delay: .06s; }
+.sp-bp .bps-cross.c3 { left: 9%; top: 72%; transition-delay: .12s; } .sp-bp .bps-cross.c4 { left: 91%; top: 72%; transition-delay: .18s; }
+.sp-bp.b-frame .bps-cross { transform: translate(-50%, -50%) scale(1) rotate(0); }
+
+/* ---- 散落的单词（逐个闪现，色块进场后退场） ---- */
+.sp-bp .bps-words { inset: 0; z-index: 5; transition: opacity .35s; }
+.sp-bp .bps-words span {
+  position: absolute; font: 700 clamp(18px, 2vw, 30px)/1 var(--s-disp); letter-spacing: .01em; opacity: 0;
+  text-shadow: 0 0 18px rgba(6, 8, 10, .8);
+}
+.sp-bp.b-burst .bps-words span { animation: bpsWord .5s steps(1) forwards; animation-delay: calc(var(--i) * 95ms + 260ms); }
+.sp-bp.b-slab .bps-words { opacity: 0; }
+
+/* ---- 角落 HUD ---- */
+.sp-bp .bps-hud { z-index: 6; top: 5%; font: 400 9px/1.8 var(--s-disp); letter-spacing: .28em; color: rgba(235, 228, 210, .6); opacity: 0; transition: opacity .6s, transform .7s var(--s-ease); transform: translateY(-8px); }
+.sp-bp .bps-hud b { color: var(--s-cream); font-weight: 700; font-size: 13px; letter-spacing: .1em; }
+.sp-bp .bps-hud > span { display: block; }
+.sp-bp .bps-hud.tl { left: 6%; }
+.sp-bp .bps-hud.tr { right: 6%; text-align: right; }
+.sp-bp .bps-clock { font: 700 20px/1.2 var(--s-disp); letter-spacing: .06em; color: var(--s-cream); }
+.sp-bp.b-frame .bps-hud { opacity: 1; transform: none; }
+
+/* ---- 大字标题 ---- */
+.sp-bp .bps-title { z-index: 7; left: 9%; top: 50%; transform: translateY(-50%); }
+.sp-bp .bps-kick {
+  display: flex; align-items: center; gap: 12px; margin-bottom: 18px;
+  font: 400 11px/1 var(--s-disp); letter-spacing: .34em; opacity: 0; transform: translateX(-14px); transition: all .7s var(--s-ease);
+}
+.sp-bp .bps-kick i { width: 8px; height: 8px; border-radius: 50%; background: var(--s-red); }
+.sp-bp .bps-kick em { font-style: normal; color: rgba(235, 228, 210, .62); }
+.sp-bp .bps-big { display: flex; flex-direction: column; font: 700 clamp(64px, 9.6vw, 170px)/.8 var(--s-disp); letter-spacing: -.012em; }
+.sp-bp .bps-big > span { display: block; overflow: hidden; padding: .04em 0 .02em; white-space: nowrap; }
+.sp-bp .bps-big b { display: inline-block; font-weight: inherit; transform: translateY(112%); }
+.sp-bp .bps-big .l2 { font-family: var(--s-line); color: var(--s-cream); }
+.sp-bp.b-title .bps-big b { animation: bpsUp .9s var(--s-ease) forwards; animation-delay: calc(var(--i) * 38ms); }
+.sp-bp.b-title .bps-big .l2 b { animation-delay: calc(var(--i) * 38ms + 120ms); }
+.sp-bp.b-title .bps-kick { opacity: 1; transform: none; }
+.sp-bp .bps-sub {
+  display: flex; align-items: center; gap: 22px; margin-top: 22px;
+  font: 700 14px/1 "WWY Sans SC", sans-serif; letter-spacing: .24em; opacity: 0; transform: translateY(10px); transition: all .7s var(--s-ease);
+}
+.sp-bp .bps-dots { font: 400 11px/1 var(--s-disp); letter-spacing: .1em; color: rgba(235, 228, 210, .7); }
+.sp-bp .bps-ver { font: 700 22px/1 var(--s-line); font-style: normal; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.sp-bp.b-info .bps-sub { opacity: 1; transform: none; }
+
+/* ---- 票据条 + 进度 ---- */
+.sp-bp .bps-strip { z-index: 6; left: 9%; right: 9%; bottom: 17%; height: 12px; display: flex; gap: 6px; transform: scaleX(0); transform-origin: left; transition: transform 1s var(--s-io); }
+.sp-bp .bps-strip i { flex: 1; background: rgba(235, 228, 210, .18); position: relative; overflow: hidden; }
+.sp-bp .bps-strip i:nth-child(2) { flex: 3; background: rgba(6, 8, 10, .45); }
+.sp-bp .bps-strip i:nth-child(3) { flex: .4; background: var(--s-cream); }
+.sp-bp .bps-strip i:nth-child(5) { flex: 2.2; background: rgba(167, 174, 178, .5); }
+.sp-bp .bps-strip i:nth-child(6) { flex: .3; background: rgba(235, 228, 210, .55); }
+.sp-bp .bps-strip i:nth-child(7) { flex: 4; background: rgba(6, 8, 10, .35); }
+.sp-bp .bps-strip i::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(235, 228, 210, .5), transparent); transform: translateX(-100%); animation: bpsShine 2.4s ease-in-out infinite; animation-delay: calc(var(--d, 0) * 1s); }
+.sp-bp .bps-strip i:nth-child(odd)::after { --d: .4; }
+.sp-bp.b-info .bps-strip { transform: scaleX(1); }
+.sp-bp .bps-bar { z-index: 6; left: 9%; right: 9%; bottom: 9%; display: flex; align-items: center; gap: 18px; opacity: 0; transition: opacity .6s; }
+.sp-bp .bps-bar .lab { font: 400 9px/1 var(--s-disp); letter-spacing: .3em; white-space: nowrap; }
+.sp-bp .bps-bar .lab b { font: 700 11px/1 "WWY Sans SC", sans-serif; letter-spacing: .2em; margin-left: 10px; color: rgba(235, 228, 210, .7); }
+.sp-bp .bps-bar .trk { flex: 1; height: 1px; background: rgba(235, 228, 210, .25); position: relative; }
+.sp-bp .bps-bar .trk i { position: absolute; left: 0; top: -1px; height: 3px; width: 100%; background: var(--s-cream); transform-origin: left; transform: scaleX(0); }
+.sp-bp .bps-bar .pct { font: 700 28px/1 var(--s-disp); letter-spacing: .02em; min-width: 3.2ch; text-align: right; font-variant-numeric: tabular-nums; }
+.sp-bp.b-burst .bps-bar { opacity: 1; }
+.sp-bp .bps-skip { z-index: 6; right: 9%; bottom: 4.5%; font: 400 8.5px/1 var(--s-disp); letter-spacing: .3em; opacity: 0; transition: opacity .5s; color: rgba(235, 228, 210, .55); }
+.sp-bp.b-ready .bps-skip { opacity: 1; animation: bpsBlink 1.4s steps(1) infinite .6s; }
+
+/* ---- 撤场 ---- */
+.sp-bp.b-out .bps-big b { animation: bpsOut .55s var(--s-io) forwards !important; animation-delay: calc(var(--i) * 22ms) !important; transform: none; }
+.sp-bp.b-out :is(.bps-kick, .bps-sub, .bps-hud, .bps-bar, .bps-skip, .bps-strip, .bps-cross, .bps-frame, .bps-guides, .bps-words) {
+  opacity: 0 !important; transition: opacity .35s ease !important;
+}
+.sp-bp.b-out, .sp-bp.b-out2 { background-color: transparent !important; }
+
+@keyframes bpsFlash { 0% { opacity: 0; } 15% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes bpsDraw { to { stroke-dashoffset: 0; } }
+@keyframes bpsWord { 0% { opacity: 1; } 12% { opacity: .2; } 24% { opacity: 1; } 36% { opacity: .5; } 48%, 100% { opacity: 1; } }
+@keyframes bpsUp { to { transform: none; } }
+@keyframes bpsOut { from { transform: none; } to { transform: translateY(-112%); } }
+@keyframes bpsShine { 0% { transform: translateX(-100%); } 60%, 100% { transform: translateX(100%); } }
+@keyframes bpsBlink { 50% { opacity: .25; } }
+
+/* ============================================================
+   机械翻牌数字（js/bauform-flap.js）—— 老式机场时刻表的 split-flap
+   每块牌：上下两半 + 中间铰链缝；翻动时上半片向前倒下、下半片落下盖住。
+   颜色 / 尺寸用变量，各处按需覆盖：
+     --bfl-bg 牌面  --bfl-fg 字  --bfl-w 牌宽  --bfl-h 牌高  --bfl-gap 牌间距
+   ============================================================ */
+.bfl {
+  --bfl-bg: #161e25; --bfl-bg-2: #10161b; --bfl-fg: #ebe4d2; --bfl-w: .86em; --bfl-h: 1.22em; --bfl-gap: .07em;
+  display: inline-flex; gap: var(--bfl-gap); vertical-align: top; align-items: stretch;
+  font-family: "WWY Bauform", "WWY Sans SC", sans-serif; font-weight: 700; font-style: normal; line-height: 1;
+}
+.bfl-cell { position: relative; display: inline-block; width: var(--bfl-w); height: var(--bfl-h); perspective: 2.4em; flex: none; }
+.bfl-h { position: absolute; left: 0; right: 0; height: calc(50% - .035em); overflow: hidden; backface-visibility: hidden; }
+.bfl-top, .bfl-ftop { top: 0; border-radius: .07em .07em 0 0; background: linear-gradient(180deg, var(--bfl-bg), var(--bfl-bg-2)); }
+.bfl-bot, .bfl-fbot { bottom: 0; border-radius: 0 0 .07em .07em; background: linear-gradient(180deg, var(--bfl-bg-2), var(--bfl-bg)); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06); }
+.bfl-h i {
+  position: absolute; left: 0; right: 0; height: var(--bfl-h); line-height: var(--bfl-h);
+  text-align: center; font-style: normal; color: var(--bfl-fg); font-variant-numeric: tabular-nums;
+}
+.bfl-top i, .bfl-ftop i { top: 0; }
+.bfl-bot i, .bfl-fbot i { bottom: 0; }
+/* 明暗：翻片挡住的部分会暗下去，翻开后再亮起来 */
+.bfl-top::after, .bfl-bot::after, .bfl-ftop::after, .bfl-fbot::after {
+  content: ""; position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none;
+}
+/* 铰链两端的小轴 */
+.bfl-cell:not(.bfl-sep)::before, .bfl-cell:not(.bfl-sep)::after {
+  content: ""; position: absolute; top: calc(50% - .07em); width: .06em; height: .14em; background: rgba(235, 228, 210, .32); z-index: 3;
+}
+.bfl-cell::before { left: 0; } .bfl-cell::after { right: 0; }
+/* 一次翻页（时长 --bfl-t）：0–45% 上半片带着旧字向前倒下，45–100% 下半片带着新字落下并回弹 */
+.bfl-ftop, .bfl-fbot { visibility: hidden; z-index: 2; }
+.bfl-cell.go .bfl-ftop {
+  visibility: visible; transform-origin: 50% 100%;
+  animation: bflFall calc(var(--bfl-t, 200ms) * .45) cubic-bezier(.55, 0, .9, .5) forwards;
+}
+.bfl-cell.go .bfl-ftop::after { animation: bflShadeIn calc(var(--bfl-t, 200ms) * .45) ease-in forwards; }
+.bfl-cell.go .bfl-fbot {
+  visibility: visible; transform-origin: 50% 0; transform: rotateX(90deg);
+  animation: bflLand calc(var(--bfl-t, 200ms) * .55) cubic-bezier(.2, 1.7, .45, 1) calc(var(--bfl-t, 200ms) * .45) forwards;
+}
+.bfl-cell.go .bfl-fbot::after { animation: bflShadeOut calc(var(--bfl-t, 200ms) * .55) ease-out calc(var(--bfl-t, 200ms) * .45) both; }
+.bfl-cell.go .bfl-top::after { animation: bflShadeOut calc(var(--bfl-t, 200ms) * .45) ease-in both; }
+.bfl-cell.go .bfl-bot::after { animation: bflShadeIn calc(var(--bfl-t, 200ms) * .45) ease-in forwards; }
+@keyframes bflFall { from { transform: rotateX(0); } to { transform: rotateX(-90deg); } }
+@keyframes bflLand { from { transform: rotateX(90deg); } to { transform: rotateX(0); } }
+@keyframes bflShadeIn { from { opacity: 0; } to { opacity: .62; } }
+@keyframes bflShadeOut { from { opacity: .62; } to { opacity: 0; } }
+.bfl-cell.bfl-sep { width: .38em; }
+.bfl-cell.bfl-sep.bfl-wide { width: .78em; }
+.bfl-cell.bfl-sep.bfl-sp { width: .28em; }
+.bfl-sep .bfl-h { background: none; height: 50%; }
+.bfl-sep .bfl-h i { color: var(--bfl-fg); opacity: .8; }
+@media (prefers-reduced-motion: reduce) { .bfl-cell.go .bfl-ftop, .bfl-cell.go .bfl-fbot { animation: none; visibility: hidden; } }
+
+/* 开屏里的翻牌 */
+.sp-bp .bps-clock.bfl { display: inline-flex; font-size: 15px; --bfl-bg: #11181e; --bfl-bg-2: #0b1014; margin-bottom: 6px; }
+.sp-bp .bps-ver.bfl { font-size: 17px; --bfl-bg: rgba(6, 8, 10, .62); --bfl-bg-2: rgba(6, 8, 10, .8); }
+.sp-bp .bps-bar .pct.bfl { font-size: 24px; min-width: 0; --bfl-bg: rgba(6, 8, 10, .62); --bfl-bg-2: rgba(6, 8, 10, .82); }

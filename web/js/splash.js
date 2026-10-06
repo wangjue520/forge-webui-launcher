@@ -40,6 +40,10 @@
     if (live) vectorSplash(el); else vectorVideoSplash(el);
     return;
   }
+  if (variant === "bauform") {
+    bauformSplash(el);
+    return;
+  }
   if (variant === "none") {
     el.remove();
     window.Splash = { ready: function () {} };
@@ -185,6 +189,144 @@
     },
   };
   setTimeout(function () { if (!bootReady) window.Splash.ready(); tryClose(true); }, MAX_MS);
+
+  /* ---------- 构型 · 机能包豪斯开屏 ----------
+   * 参考 PV 的节奏（只借语言）：黑场 → 中线红色发丝线拉开 → 宽银幕上下边线 + 准星 →
+   * X 光零件从中心径向炸开（带拖影）、左右两道巨弧描线、散落的单词逐个闪现 →
+   * 石板蓝色块从右擦入垫到零件下面（零件变成「蓝底白片」）→ 大字 WWY / LAUNCHER 逐字上浮 →
+   * 进度走完后：大字上飞、色块向左依次抽走，露出主界面并触发主界面入场动画（BPUI.intro）。
+   * 时间轴（ms，减少动态效果时整体 ×0.35）：
+   *   80 b-line   260 b-frame   420 b-burst   1500 b-slab   1700 b-title   2050 b-info
+   * 画面全部 DOM + 一个 canvas（零件是预渲染的 sprite，每帧只做十几次 drawImage）。 */
+  function bauformSplash(host) {
+    var reduceB = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var KB = reduceB ? 0.35 : 1;
+    var MIN = 3000 * KB, MAX = 9000, start = performance.now();
+    var ready = false, leaving = false, done = false, tms = [];
+    function at(fn, ms) { tms.push(setTimeout(fn, ms * KB)); }
+    function chars(t, cls) {
+      return '<span class="' + cls + '">' + t.split("").map(function (c, i) {
+        return '<b style="--i:' + i + '">' + (c === " " ? "&nbsp;" : c) + "</b>";
+      }).join("") + "</span>";
+    }
+    var WORDS = [["EVERY", 18, 30], ["FRAME", 22, 37], ["-", 31, 54], ["STARTS", 56, 22], ["AS", 63, 29],
+                 ["A", 74, 40], ["BAUFORM", 70, 47], ["-", 52, 45], ["TONIGHT", 42, 64]];
+    host.className = "sp-bp";
+    host.innerHTML =
+      '<div class="bps-slabs"><i></i><i></i><i></i></div>' +
+      '<canvas class="bps-xr"></canvas>' +
+      '<div class="bps-flash"></div>' +
+      '<svg class="bps-guides" preserveAspectRatio="none" viewBox="0 0 1000 1000" aria-hidden="true">' +
+        '<path class="g-arc g-arc-l" pathLength="1" d="M230 60 A640 640 0 0 0 230 940"/>' +
+        '<path class="g-arc g-arc-r" pathLength="1" d="M770 60 A640 640 0 0 1 770 940"/>' +
+      '</svg>' +
+      '<div class="bps-mid"></div><div class="bps-frame f1"></div><div class="bps-frame f2"></div>' +
+      '<div class="bps-cross c1"></div><div class="bps-cross c2"></div><div class="bps-cross c3"></div><div class="bps-cross c4"></div>' +
+      '<div class="bps-words">' + WORDS.map(function (w, i) {
+        return '<span style="left:' + w[1] + '%;top:' + w[2] + '%;--i:' + i + '">' + w[0] + "</span>";
+      }).join("") + "</div>" +
+      '<div class="bps-hud tl"><b>WWY</b> / 启动器<span>BAUFORM — BOOT SEQUENCE</span></div>' +
+      '<div class="bps-hud tr"><span class="bps-clock">00:00:00</span><span>SECTION 04 · LAYER INVERSE</span></div>' +
+      '<div class="bps-title">' +
+        '<div class="bps-kick"><i></i>LAUNCHER<em>COMFYUI · WEBUI</em></div>' +
+        '<div class="bps-big">' + chars("WWY", "l1") + chars("LAUNCHER", "l2") + "</div>" +
+        '<div class="bps-sub"><span>AI 绘图启动器</span><span class="bps-dots">( (&#9632;( )&#9632;) )</span><em class="bps-ver">#-.-.-</em></div>' +
+      "</div>" +
+      '<div class="bps-strip"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>' +
+      '<div class="bps-bar"><span class="lab">INITIALIZING<b>初始化</b></span><span class="trk"><i></i></span><span class="pct">000</span></div>' +
+      '<div class="bps-skip">CLICK TO SKIP</div>';
+
+    var cv = host.querySelector(".bps-xr"), ctx = cv.getContext("2d");
+    var m = window.BPXray ? window.BPXray.model(20261006) : null;
+    var W = 0, H = 0, dpr = Math.min(1.5, window.devicePixelRatio || 1);
+    function size() {
+      W = Math.round(innerWidth * dpr); H = Math.round(innerHeight * dpr);
+      if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    }
+    size();
+    window.addEventListener("resize", size);
+
+    [[80, "b-line"], [260, "b-frame"], [420, "b-burst"], [1500, "b-slab"], [1700, "b-title"], [2050, "b-info"]].forEach(function (p) {
+      at(function () { host.classList.add(p[1]); }, p[0]);
+    });
+    requestAnimationFrame(function () { host.classList.add("b-on"); });
+
+    var pctEl = host.querySelector(".pct"), trk = host.querySelector(".trk i"), clock = host.querySelector(".bps-clock");
+    var verEl = host.querySelector(".bps-ver"), verLocked = false, pct = 0;
+    // 数字全部是机械翻牌（js/bauform-flap.js）：百分比、时钟、版本号
+    var F = window.BFFlap, pctF = null, clockF = null, verF = null, lastPct = -1, lastClock = "";
+    if (F) {
+      pctF = F.create(pctEl, { speed: 110, text: "000" });
+      clockF = F.create(clock, { speed: 300, text: "00:00:00" });
+      verF = F.create(verEl, { speed: 150, text: "#0.0.00" });
+    }
+    function pad2(n) { return (n < 10 ? "0" : "") + n; }
+    function ver() {
+      try { return (window.App && App.state && App.state.launcher && App.state.launcher.version) || ""; } catch (e) { return ""; }
+    }
+    var BURST = 420 * KB, DUR = 1500 * KB;
+    function frame(now) {
+      if (done) return;
+      var t = now - start;
+      // 零件
+      if (m && t > BURST) {
+        var p = Math.min(1, (t - BURST) / DUR);
+        var drift = (t - BURST) / 1000;
+        ctx.clearRect(0, 0, W, H);
+        var sc = Math.min(W, H) / 1050 * (0.92 + 0.1 * Math.min(1, drift / 6)) * (leaving ? 1 + (now - leaving) / 900 : 1);
+        window.BPXray.draw(ctx, m, W, H, {
+          p: p, rot: -0.35 + drift * 0.045, scale: sc, blur: Math.pow(1 - p, 2) * 1.2,
+          alpha: leaving ? Math.max(0, 1 - (now - leaving) / 520) : 1,
+          cx: W * .62, cy: H * .5,
+        });
+      }
+      // 进度：就绪前渐近 88%，就绪后冲到 100
+      var cap = ready ? 100 : 88 * (1 - Math.exp(-t / 1100));
+      pct += (cap - pct) * (ready ? .14 : .08);
+      if (ready && pct > 99.4) pct = 100;
+      var ip = Math.floor(pct);
+      if (ip !== lastPct) {
+        lastPct = ip;
+        var ps = (ip < 10 ? "00" : ip < 100 ? "0" : "") + ip;
+        if (pctF) pctF.set(ps); else if (pctEl) pctEl.textContent = ps;
+      }
+      if (trk) trk.style.transform = "scaleX(" + (pct / 100).toFixed(3) + ")";
+      var d = new Date();
+      var cs = pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+      if (cs !== lastClock) {
+        // 第一次直接显示当前时间，之后每秒翻一格
+        if (clockF) { if (lastClock) clockF.set(cs); else clockF.jump(cs); } else if (clock) clock.textContent = cs;
+        lastClock = cs;
+      }
+      if (verEl && !verLocked) {
+        var v = ver();
+        if (v) { verLocked = true; if (verF) verF.set("#" + v); else verEl.textContent = "#" + v; }
+      }
+      if (ready && pct >= 100 && t >= MIN) leave();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+
+    function leave() {
+      if (leaving) return;
+      leaving = performance.now();
+      tms.forEach(clearTimeout);
+      ["b-on", "b-line", "b-frame", "b-burst", "b-slab", "b-title", "b-info"].forEach(function (c) { host.classList.add(c); });
+      host.classList.add("b-out");
+      setTimeout(function () {
+        if (window.BPUI) window.BPUI.intro();
+        host.classList.add("b-out2");
+      }, (reduceB ? 60 : 260));
+      setTimeout(function () {
+        done = true;
+        window.removeEventListener("resize", size);
+        host.remove();
+      }, reduceB ? 400 : 1300);
+    }
+    host.addEventListener("click", function () { if (ready) { pct = 100; start = Math.min(start, performance.now() - MIN); leave(); } });
+    window.Splash = { ready: function () { ready = true; host.classList.add("b-ready"); } };
+    setTimeout(function () { ready = true; leave(); }, MAX);
+  }
 
   /* ---------- 液态玻璃开屏 ----------
    * 背景色团流动 → 一滴玻璃从中心弹出 → 横向流开成胶囊，露出图标和名字 →

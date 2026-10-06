@@ -32,6 +32,7 @@
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
 
   const mockConfig = {
+    ui_theme: (/[?&]theme=([\w-]+)/.exec(location.search) || [])[1] || "terminal",
     webui_root: "",
     custom_python_path: "",
     custom_git_path: "",

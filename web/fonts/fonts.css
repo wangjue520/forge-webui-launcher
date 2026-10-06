@@ -34,3 +34,10 @@
 @font-face { font-family: "WWY Grotesk"; src: url("WWYGrotesk-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
 @font-face { font-family: "WWY Grotesk Cn"; src: url("WWYGroteskCn-Regular.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "WWY Grotesk Cn"; src: url("WWYGroteskCn-Bold.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+/* WWY Bauform / WWY Bauform Line — 「蓝图 · 机能包豪斯」风格的自制几何西文装饰字体
+   （tools/build_bauform_font.py 生成，矩形 + 椭圆环 + 平切斜笔画构成；只有大写，小写映射到大写；
+   数字等宽；随本项目 MIT 许可分发）。中文自动回落到思源黑体 */
+@font-face { font-family: "WWY Bauform"; src: url("WWYBauform-Light.woff2") format("woff2"); font-weight: 300; font-display: block; }
+@font-face { font-family: "WWY Bauform"; src: url("WWYBauform-Regular.woff2") format("woff2"); font-weight: 400 600; font-display: block; }
+@font-face { font-family: "WWY Bauform"; src: url("WWYBauform-Bold.woff2") format("woff2"); font-weight: 700 900; font-display: block; }
+@font-face { font-family: "WWY Bauform Line"; src: url("WWYBauformLine-Bold.woff2") format("woff2"); font-weight: 400 900; font-display: block; }

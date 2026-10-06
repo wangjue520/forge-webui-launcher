@@ -18,6 +18,10 @@
   "use strict";
   var THEMES = [
     { id: "terminal", label: "终末地 · 工业终端（默认）", css: "", splash: "terminal" },
+    // 构型 · BAUFORM（机能包豪斯，深色）：结构沿用默认（style.css），themes/bauform.css 全面改皮，
+    // 动效 / 背景由 js/bauform.js 负责，数字翻牌是 js/bauform-flap.js，
+    // 西文装饰字体是自制的 WWY Bauform（tools/build_bauform_font.py）
+    { id: "bauform", label: "构型 BAUFORM（深色）", css: "themes/bauform.css", splash: "bauform" },
     { id: "minimal-light", label: "极简 · 浅色（无开屏动画）", css: "themes/minimal.css", base: "minimal", splash: "none" },
     { id: "minimal-dark", label: "极简 · 深色（无开屏动画）", css: "themes/minimal.css", base: "minimal", splash: "none" },
     // 液态玻璃：结构沿用极简（base），再叠一层玻璃材质 + 流动背景（js/liquid.js）
@@ -29,7 +33,7 @@
   ];
   var KEY = "ui-theme";
   // 旧版本只叫 "minimal"，自动归到浅色
-  var ALIAS = { minimal: "minimal-light" };
+  var ALIAS = { minimal: "minimal-light", blueprint: "bauform" };   // blueprint = 构型的内测名
 
   function find(id) {
     id = ALIAS[id] || id;
@@ -38,6 +42,9 @@
   }
 
   function currentId() {
+    // 预览用：地址里带 ?theme=xxx 时优先（正式运行的地址不会带这个参数）
+    var q = /[?&]theme=([\w-]+)/.exec(location.search);
+    if (q) return q[1];
     // 优先读启动器生成的 js/current_theme.js（localStorage 按 origin 存，
     // pywebview 每次启动端口都变，跨启动拿不到，只当兜底）
     if (window.WWY_THEME_ID) return window.WWY_THEME_ID;
