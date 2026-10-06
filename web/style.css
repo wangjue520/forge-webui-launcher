@@ -1139,7 +1139,7 @@ textarea.ta-prompt {
 [data-ui-base="minimal"] .pm-spark { border-radius: 4px; }
 
 /* 矢量突破：侧栏是白色毛玻璃，默认的近白色数值字会和底色融在一起（只看得到曲线），
-   这里换成墨色字 + 青色曲线。写在这里而不是 themes/vector.css（那个文件已冻结） */
+   这里换成墨色字 + 青色曲线 */
 :root[data-ui-theme="vector"] .perf-mon {
   --pm-line: #14b3b7; --pm-fill: rgba(30, 200, 204, .16); --pm-grid: rgba(20, 40, 42, .14);
   --pm-hot: #d0453c; --pm-text: #4f5d60; --pm-val: #142224; --pm-bg: rgba(255, 255, 255, .45); --pm-dot: round;
