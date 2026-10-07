@@ -47,6 +47,7 @@ import updater
 import model_library as ml
 import output_index as oi
 import comfy_nodes
+import h3_models as h3m
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -83,6 +84,19 @@ CLASSIC_REPO = "https://github.com/lllyasviel/stable-diffusion-webui-forge.git"
 NEO_REPO = "https://github.com/Haoming02/sd-webui-forge-classic.git"
 NEO_BRANCH = "neo"
 _NEO_KEYS = ("neo", "neo2")
+# Forge Neo · H3：Neo 加 MiniMax-H3 视频生成的分支。参数体系、目录结构和 Neo 完全一样，
+# 所以实例里仍记 webui_branch = "neo2"（高级选项 / 参数生成 / 模型目录全部复用），
+# 只额外记 webui_variant = "h3"，用来选仓库和显示名
+H3_REPO = "https://github.com/wangjue520/sd-webui-forge-neo-h3.git"
+H3_BRANCH = "minimax-h3"
+H3_DEPLOY_KEY = "neo2h3"
+
+
+def _split_deploy_key(key):
+    """部署页下拉框的 key → (webui_branch, variant)"""
+    if key == H3_DEPLOY_KEY:
+        return "neo2", "h3"
+    return key, None
 
 # 自动部署反复失败时的最后退路：完整 Forge Neo 整合包（百度网盘）。
 # 用户手动下载解压后，在「环境部署」页选择解压目录再点「开始部署」，
@@ -97,6 +111,7 @@ PAN_FALLBACK_TEXT = (
 
 DEPLOY_BRANCH_OPTIONS = [
     ("Neo 版（Haoming02 社区维护分支，推荐）", "neo2"),
+    ("Neo · H3 视频版（Neo + MiniMax-H3 视频生成，新分支）", H3_DEPLOY_KEY),
     ("常规版 / Classic（lllyasviel 官方仓库）", "classic"),
     ("ComfyUI（官方仓库）", "comfyui"),
 ]
@@ -330,7 +345,8 @@ def _expand_to_image_files(paths):
 
 PREVIEW_DIR = os.path.join(APP_DIR, "web", "_preview")
 _preview_last_mode = ["未知"]
-_PREVIEW_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif")
+_PREVIEW_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif",
+                 ".mp4", ".m4v", ".mov", ".webm", ".mkv")   # 视频同样走硬链接，<video> 直接读盘
 
 
 def _preview_reset_dir():
@@ -477,6 +493,9 @@ class LauncherApi:
         self._civitai_download_cancel = False
         self._download_source = "civitai"   # 最近一次「获取信息」的来源：civitai / liblib
         self._liblib_download_info = None
+        # H3 视频模型一键下载
+        self._h3_thread = None
+        self._h3_cancel = False
 
         # 模型管理
         self._models_categories = []
@@ -781,12 +800,16 @@ class LauncherApi:
         except Exception as e:
             return {"ok": False, "error": str(e), "path": ""}
 
-    def choose_images(self, multiple=True):
+    def choose_images(self, multiple=True, video=False):
         try:
             import webview
+            types = ("图片文件 (*.png;*.jpg;*.jpeg;*.webp;*.bmp)", "所有文件 (*.*)")
+            if video:   # 图片信息页：也能选 Forge Neo / H3 / ComfyUI 生成的视频
+                types = ("图片和视频 (*.png;*.jpg;*.jpeg;*.webp;*.bmp;*.mp4;*.mkv;*.webm;*.mov)",
+                         "图片文件 (*.png;*.jpg;*.jpeg;*.webp;*.bmp)",
+                         "视频文件 (*.mp4;*.mkv;*.webm;*.mov)", "所有文件 (*.*)")
             res = self._window.create_file_dialog(
-                webview.OPEN_DIALOG, allow_multiple=multiple,
-                file_types=("图片文件 (*.png;*.jpg;*.jpeg;*.webp;*.bmp)", "所有文件 (*.*)"))
+                webview.OPEN_DIALOG, allow_multiple=multiple, file_types=types)
             return {"ok": True, "paths": list(res) if res else []}
         except Exception as e:
             return {"ok": False, "error": str(e), "paths": []}
@@ -984,6 +1007,7 @@ def _api_deploy_check_dir(self, target):
 
 
 def _api_deploy_precheck(self, target, branch, use_portable):
+    branch, _variant = _split_deploy_key(branch)
     target = (target or "").strip()
     issues = []
     if not target:
@@ -1055,6 +1079,7 @@ def _api_deploy_precheck(self, target, branch, use_portable):
 
 
 def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None):
+    branch, variant = _split_deploy_key(branch)
     # 检查和置位必须原子，否则双击会并发跑两个部署线程
     with self._deploy_lock:
         if self._deploy_running:
@@ -1084,7 +1109,7 @@ def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None):
         self._deploy_running = True
     self._emit("deploy", "state", running=True)
     try:
-        self._spawn(lambda: self._deploy_flow(target, branch, use_portable), name="deploy")
+        self._spawn(lambda: self._deploy_flow(target, branch, use_portable, variant), name="deploy")
     except Exception:
         # 线程没能起来就回滚状态，否则 _deploy_running 永远卡在 True，
         # 之后每次都只提示"已有部署任务在进行中"
@@ -1105,7 +1130,7 @@ def _api_deploy_cancel(self):
     return {"ok": True}
 
 
-def _deploy_flow(self, target, branch, use_portable):
+def _deploy_flow(self, target, branch, use_portable, variant=None):
     if branch == "comfyui":
         return _deploy_flow_comfy(self, target, use_portable)
     log = lambda t: self._emit("deploy", "log", text=t)
@@ -1183,7 +1208,10 @@ def _deploy_flow(self, target, branch, use_portable):
             pe.tune_bundled_git(os.path.join(target, "git"), log_cb=log)
 
         if not already_installed:
-            repo, ref = (NEO_REPO, NEO_BRANCH) if branch in _NEO_KEYS else (CLASSIC_REPO, "main")
+            if variant == "h3":
+                repo, ref = H3_REPO, H3_BRANCH
+            else:
+                repo, ref = (NEO_REPO, NEO_BRANCH) if branch in _NEO_KEYS else (CLASSIC_REPO, "main")
             # 候选地址：判定需要加速时把所有代理都排进来（逐个重试），
             # 原站永远兜底。踩过的坑：以前只用 proxy[0]，那个代理一挂
             # 部署就直接失败，用户只能干等或手动换。
@@ -1378,7 +1406,7 @@ def _deploy_flow(self, target, branch, use_portable):
             log(f"[部署] hashlib 补丁验证异常（不影响结果）: {e}\n")
 
         # ---- 6. 收尾：路径/分支写回配置，通知前端刷新 ----
-        _deploy_register_instance(self, target, branch, log)
+        _deploy_register_instance(self, target, branch, log, variant)
         log("\n[部署] 全部完成！\n")
         self._emit("deploy", "done", target=target, branch=branch)
     except _DeployCancelled:
@@ -1943,6 +1971,7 @@ def _auto_pick_install(self):
     cm.absorb_active(self.cfg)
     inst["webui_root"] = pick["path"]
     inst["webui_branch"] = pick["branch"]
+    inst["webui_variant"] = pick.get("variant") or ""
     inst["name"] = pick["label"]
     cm.project_active(self.cfg)
     cm.save_config(self.cfg)
@@ -1962,7 +1991,7 @@ def _instances_payload(self):
             "id": iid, "name": inst.get("name", ""),
             "branch": inst.get("webui_branch", ""),
             "kind": "comfyui" if inst.get("webui_branch") == "comfyui" else "forge",
-            "kind_label": cm.KIND_LABELS.get(inst.get("webui_branch"), "WebUI"),
+            "kind_label": cm.kind_label(inst.get("webui_branch"), inst.get("webui_variant")),
             "root": inst.get("webui_root", ""),
             "port": inst.get("port", ""),
             "active": iid == self.cfg.get("active_instance"),
@@ -1989,17 +2018,21 @@ def _api_instance_add(self, root, name=""):
         if inst.get("webui_root") and _same_path(inst["webui_root"], root):
             return {"ok": False, "error": f"这个目录已经是实例「{inst.get('name')}」了"}
     branch = "comfyui" if kind == "comfyui" else _guess_forge_branch(root)
+    import install_finder
+    variant = install_finder.forge_variant(root) if kind != "comfyui" else ""
     # 当前实例还是空的（新用户第一次添加）→ 直接填进当前实例
     if not (self.cfg.get("webui_root") or "").strip() and len(self.cfg.get("instances") or []) == 1:
         self.cfg["webui_root"] = root
         self.cfg["webui_branch"] = branch
-        cm.active_instance(self.cfg)["name"] = (name or "").strip() or cm.KIND_LABELS.get(branch, "WebUI")
+        self.cfg["webui_variant"] = variant
+        cm.active_instance(self.cfg)["name"] = (name or "").strip() or cm.kind_label(branch, variant)
         cm.save_config(self.cfg)
         self._emit("instances", "changed")
         return {"ok": True, "id": self.cfg["active_instance"], **_instances_payload(self)}
     inst = cm.make_instance(None, webui_root=root, webui_branch=branch,
                             name=(name or "").strip() or _unique_instance_name(
-                                self, cm.KIND_LABELS.get(branch, "WebUI")))
+                                self, cm.kind_label(branch, variant)))
+    inst["webui_variant"] = variant
     self.cfg["instances"].append(inst)
     cm.save_config(self.cfg)
     self._emit("instances", "changed")
@@ -2205,32 +2238,38 @@ def _deploy_cfg_for(self, target, branch):
     return cfg
 
 
-def _deploy_register_instance(self, target, branch, log):
+def _deploy_register_instance(self, target, branch, log, variant=None):
     """
     部署成功后登记实例：
       - 已有实例就是这个目录 → 更新它的分支
       - 当前实例还没设置目录（新用户）→ 直接用当前实例
       - 否则新建一个实例（实例数变成 2，多实例功能自动出现）
     """
+    label = cm.kind_label(branch, variant)
     for inst in self.cfg.get("instances") or []:
         if inst.get("webui_root") and _same_path(inst["webui_root"], target):
             inst["webui_branch"] = branch
+            inst["webui_variant"] = variant or ""
             if inst["id"] == self.cfg.get("active_instance"):
                 self.cfg["webui_branch"] = branch
+                self.cfg["webui_variant"] = variant or ""
             cm.save_config(self.cfg)
             self._emit("instances", "changed")
             return inst["id"]
     if not (self.cfg.get("webui_root") or "").strip():
         self.cfg["webui_root"] = target
         self.cfg["webui_branch"] = branch
+        self.cfg["webui_variant"] = variant or ""
         inst = cm.active_instance(self.cfg)
         if inst is not None:
-            inst["name"] = cm.KIND_LABELS.get(branch, inst.get("name", ""))
+            inst["name"] = label or inst.get("name", "")
+            inst["webui_variant"] = variant or ""
         cm.save_config(self.cfg)
         self._emit("instances", "changed")
         return self.cfg.get("active_instance")
     inst = cm.make_instance(None, webui_root=target, webui_branch=branch,
-                            name=_unique_instance_name(self, cm.KIND_LABELS.get(branch, "WebUI")))
+                            name=_unique_instance_name(self, label))
+    inst["webui_variant"] = variant or ""
     self.cfg["instances"].append(inst)
     cm.save_config(self.cfg)
     log(f"[部署] 已添加为新实例「{inst['name']}」，可以在侧栏切换实例\n")
@@ -2560,6 +2599,7 @@ def _looks_like_network_failure(tail_text):
 
 
 def _api_deploy_venv_check(self, target, branch):
+    branch, _variant = _split_deploy_key(branch)
     target = (target or "").strip()
     if not target or not os.path.isdir(target):
         return {"ok": False, "error": "请先在「安装目录」里填好要检测的 WebUI 根目录"}
@@ -2775,6 +2815,237 @@ def _liblib_download_start(self, file_index, dest_dir):
             log(f"错误: {e}")
             self._emit("civitai", "done", ok=False, error=f"下载失败: {e}")
     self._spawn(work, name="liblib-download")
+    return {"ok": True}
+
+
+# ============================================================
+# H3 视频模型一键下载（只对 Forge Neo H3 实例显示）
+# ============================================================
+
+def _is_h3_instance(cfg):
+    return cfg.get("webui_branch") == "neo2" and cfg.get("webui_variant") == "h3"
+
+
+def _h3_dirs(self, folder):
+    """(下载目录, 显示用位置, 判断「已存在」时要找的目录)：开了共享模型库时库里和实例里都找一遍"""
+    dest, disp = _download_dest(self, folder)
+    root = (self.cfg.get("webui_root") or "").strip()
+    look = [dest]
+    if root:
+        inst = os.path.join(root, *folder.split("/"))
+        if os.path.normcase(os.path.abspath(inst)) != os.path.normcase(os.path.abspath(dest)):
+            look.append(inst)
+    return dest, disp, look
+
+
+def _h3_hw():
+    """(内存 GB, 显存 GB)，查不到的项为 None"""
+    _used, ram_total = _query_ram()
+    ram_gb = round(ram_total / 1024, 1) if ram_total else None
+    vram_gb = None
+    exe = _find_nvidia_smi()
+    if exe:
+        try:
+            g = _query_gpu(exe)
+            if g and g.get("vram_total"):
+                vram_gb = round(g["vram_total"] / 1024, 1)
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    return ram_gb, vram_gb
+
+
+def _disk_free(path):
+    """path 可能还没建：往上找到第一个存在的目录再查剩余空间"""
+    p = os.path.abspath(path)
+    while p and not os.path.isdir(p):
+        parent = os.path.dirname(p)
+        if parent == p:
+            break
+        p = parent
+    try:
+        return shutil.disk_usage(p).free
+    except OSError:
+        return None
+
+
+def _api_h3_models_info(self):
+    cfg = self.cfg
+    root = (cfg.get("webui_root") or "").strip()
+    out = {"ok": True, "is_h3": _is_h3_instance(cfg), "root": root,
+           "running": bool(self._h3_thread and self._h3_thread.is_alive())}
+    if not out["is_h3"]:
+        return out
+    ram_gb, vram_gb = _h3_hw()
+    out.update(ram_gb=ram_gb, vram_gb=vram_gb, min_vram_gb=h3m.MIN_VRAM_GB,
+               ram_q4_gb=h3m.RAM_Q4_GB, quant_defaults=h3m.default_quants(ram_gb))
+    items = []
+    for it in h3m.CATALOG:
+        dest, disp, look = _h3_dirs(self, it["folder"])
+        files = []
+        variants = h3m.quant_options(it) or [{"q": None, "size": it["size"], "note": ""}]
+        for v in variants:
+            _it, _path, name, size = h3m.resolve(it["id"], v["q"])
+            p, size_ok = h3m.existing_file(look, name, size)
+            state = "ok" if p and size_ok else ("diff" if p else "")
+            if not state and h3m.partial_size(dest, name):
+                state = "part"
+            files.append({"q": v["q"], "note": v["note"], "name": name, "size": size,
+                          "state": state, "part": h3m.partial_size(dest, name)})
+        items.append({"id": it["id"], "label": it["label"], "desc": it["desc"],
+                      "required": it["required"], "default": it["default"],
+                      "where": disp, "quant_default": it.get("quant_default"),
+                      "files": files})
+    out["items"] = items
+    ck_dest = _h3_dirs(self, "models/Stable-diffusion")[0]
+    out["disk_free"] = _disk_free(ck_dest)
+    return out
+
+
+def _api_h3_models_download(self, selection):
+    if self._h3_thread and self._h3_thread.is_alive():
+        return {"ok": False, "error": "已经在下载了"}
+    if not _is_h3_instance(self.cfg):
+        return {"ok": False, "error": "当前实例不是 Forge Neo H3，请先在顶部切换到 H3 实例"}
+    root = (self.cfg.get("webui_root") or "").strip()
+    if not root or not os.path.isdir(root):
+        return {"ok": False, "error": "当前实例目录不存在，请先到「环境部署」部署 H3 或添加实例"}
+    plan = []
+    for sel in selection or []:
+        try:
+            it, path, name, size = h3m.resolve(sel.get("id"), sel.get("q"))
+        except h3m.H3ModelError as e:
+            return {"ok": False, "error": str(e)}
+        dest, disp, look = _h3_dirs(self, it["folder"])
+        plan.append({"id": it["id"], "label": it["label"], "repo": it["repo"], "path": path,
+                     "name": name, "size": size, "sha": None, "dest": dest, "where": disp,
+                     "look": look})
+    if not plan:
+        return {"ok": False, "error": "没有勾选要下载的模型"}
+    self._h3_cancel = False
+
+    def work():
+        import mirror_manager as mm
+        log = lambda t: self._emit("h3dl", "log", text=t + "\n")
+        item = lambda p, state, **kw: self._emit("h3dl", "item", id=p["id"], state=state, **kw)
+        failed, done_n, skipped = [], 0, 0
+        try:
+            use_mirror = mm.resolve_mode(self.cfg, log)
+            bases = h3m.base_order(use_mirror)
+            # 先查一次 HF 文件列表，拿最新大小和 sha256
+            for repo in dict.fromkeys(p["repo"] for p in plan):
+                if self._h3_cancel:
+                    raise cd.CivitaiError("下载已取消")
+                tree = h3m.fetch_tree(repo, bases)
+                if tree is None:
+                    log(f"[H3] 查不到 {repo} 的文件列表（网络不通？），先按已知大小下载，跳过哈希校验")
+                    continue
+                for p in plan:
+                    if p["repo"] == repo and p["path"] in tree:
+                        size, sha = tree[p["path"]]
+                        p["size"] = size or p["size"]
+                        p["sha"] = sha
+
+            todo = []
+            for p in plan:
+                found, size_ok = h3m.existing_file(p["look"], p["name"], p["size"])
+                if found and size_ok:
+                    skipped += 1
+                    log(f"[H3] 已存在，跳过：{p['name']}（{found}）")
+                    item(p, "ok")
+                    continue
+                if found:
+                    log(f"[H3] {p['name']} 已存在但大小不对（可能没下完或是旧版），重新下载覆盖")
+                p["need"] = max(0, p["size"] - h3m.partial_size(p["dest"], p["name"]))
+                todo.append(p)
+
+            # 磁盘空间：按所在磁盘汇总还要下载的量
+            by_disk = {}
+            for p in todo:
+                key = os.path.splitdrive(os.path.abspath(p["dest"]))[0].upper() or "/"
+                by_disk.setdefault(key, [p["dest"], 0])[1] += p["need"]
+            for key, (d, need) in by_disk.items():
+                free = _disk_free(d)
+                if free is not None and free < need + 2 * 1024 ** 3:
+                    raise cd.CivitaiError(
+                        f"{key or d} 剩余空间不够：还要下载 {need / 1024 ** 3:.1f} GB，"
+                        f"只剩 {free / 1024 ** 3:.1f} GB（另需留 2GB 余量）")
+
+            grand = sum(p["need"] for p in todo)
+            finished = 0
+            last_emit = [0.0]
+            for idx, p in enumerate(todo):
+                if self._h3_cancel:
+                    raise cd.CivitaiError("下载已取消")
+                item(p, "downloading")
+                log(f"[H3] ({idx + 1}/{len(todo)}) {p['name']} → {p['where']}"
+                    f"（{p['size'] / 1024 ** 3:.2f} GB）")
+                part0 = h3m.partial_size(p["dest"], p["name"])
+                if part0:
+                    log(f"[H3] 接着上次的 {part0 / 1024 ** 3:.2f} GB 续传（先核对已下载部分，大文件要等一会）")
+
+                def prog(d, t, p=p, idx=idx, part0=part0):
+                    now = time.monotonic()
+                    if now - last_emit[0] < 0.25 and d < t:
+                        return
+                    last_emit[0] = now
+                    self._emit("h3dl", "progress", id=p["id"], name=p["name"],
+                               index=idx + 1, count=len(todo),
+                               downloaded=d, total=t or p["size"],
+                               all_done=finished + max(0, d - part0), all_total=grand)
+
+                info = {"name": p["name"], "sizeKB": p["size"] // 1024,
+                        "hashes": {"SHA256": p["sha"]} if p["sha"] else {}}
+                result, err = None, None
+                for base in bases:
+                    if self._h3_cancel:
+                        break
+                    info["downloadUrl"] = h3m.file_url(base, p["repo"], p["path"])
+                    try:
+                        result = cd.download_file(info, p["dest"], progress_cb=prog,
+                                                  cancel_flag=lambda: self._h3_cancel)
+                        break
+                    except Exception as e:  # 网络错误 / 服务器报错：换下一个源接着续传
+                        err = e
+                        if self._h3_cancel:
+                            break
+                        host = base.split("//", 1)[-1]
+                        log(f"[H3] 从 {host} 下载出错：{e}；换另一个源继续（已下载部分会续传）")
+                if self._h3_cancel:
+                    raise cd.CivitaiError("下载已取消（已下载的部分保留，下次会接着下）")
+                finished += p["need"]
+                if result is None:
+                    failed.append(p["name"])
+                    item(p, "error", error=str(err))
+                    log(f"[H3] 失败：{p['name']}：{err}")
+                    continue
+                final, hash_ok = result
+                if hash_ok is False:
+                    failed.append(p["name"])
+                    item(p, "error", error="哈希校验未通过")
+                    log(f"[H3] 哈希校验未通过，文件已另存为 {final}，请删掉后重下")
+                    continue
+                done_n += 1
+                item(p, "ok")
+                log(f"[H3] 完成：{final}" + ("（sha256 校验通过）" if hash_ok else ""))
+
+            if failed:
+                self._emit("h3dl", "done", ok=False,
+                           error=f"{len(failed)} 个文件没下好：{'、'.join(failed)}（可以再点一次下载，会续传）")
+            else:
+                self._emit("h3dl", "done", ok=True, downloaded=done_n, skipped=skipped)
+        except cd.CivitaiError as e:
+            log(f"[H3] {e}")
+            self._emit("h3dl", "done", ok=False, cancelled=self._h3_cancel, error=str(e))
+        except Exception as e:
+            log(f"[H3] 出错：{e}")
+            self._emit("h3dl", "done", ok=False, error=f"下载失败：{e}")
+
+    self._h3_thread = self._spawn(work, name="h3-models")
+    return {"ok": True}
+
+
+def _api_h3_models_cancel(self):
+    self._h3_cancel = True
     return {"ok": True}
 
 
@@ -3988,9 +4259,9 @@ def _ext_target(self, iid=None):
         target_dir = os.path.join(root, "extensions") if root else None
     r = self._runners.get(iid) if iid else None
     info = {
-        "id": iid, "name": cfg.get("_name") or cm.KIND_LABELS.get(cfg.get("webui_branch"), "WebUI"),
+        "id": iid, "name": cfg.get("_name") or cm.kind_label(cfg.get("webui_branch"), cfg.get("webui_variant")),
         "kind": "comfyui" if comfy else "forge",
-        "kind_label": cm.KIND_LABELS.get(cfg.get("webui_branch"), "WebUI"),
+        "kind_label": cm.kind_label(cfg.get("webui_branch"), cfg.get("webui_variant")),
         "root": root, "target_dir": target_dir or "",
         "running": bool(r and r.running()),
     }
@@ -4546,7 +4817,7 @@ def _api_meta_load(self, path):
                          else ("data URL 兜底" if resp["preview"] else "无")),
     }
     if not meta["has_meta"]:
-        resp["prompt"] = ("（这张图里没有找到生成参数）\n\n"
+        resp["prompt"] = ("（这个文件里没有找到生成参数）\n\n"
                           "常见原因：截图、微信/QQ 传输、网站二次压缩都会把元数据整段抹掉。"
                           "顺带一提，这个解析器连隐写 PNG（参数藏在像素里的那种）也会尝试读取，"
                           "读不到基本就是真的没有了。")
@@ -4817,10 +5088,10 @@ def _api_meta_batch_load(self, paths):
         if os.path.isdir(p):
             for dirpath, _d, names in os.walk(p):
                 for n in sorted(names):
-                    if os.path.splitext(n)[1].lower() in imc.IMAGE_EXTS:
+                    if os.path.splitext(n)[1].lower() in imc.MEDIA_EXTS:
                         files.append(os.path.join(dirpath, n))
         elif os.path.isfile(p) and os.path.splitext(p)[1].lower() in (
-                imc.IMAGE_EXTS + (".json",)):
+                imc.MEDIA_EXTS + (".json",)):
             files.append(p)
     files = list(dict.fromkeys(files))
     if not files:
@@ -5068,7 +5339,7 @@ def _meta_response(meta, path):
         "refs_count": len(meta["refs"]),
     }
     if not meta["has_meta"]:
-        resp["prompt"] = ("（这张图里没有找到生成参数）\n\n"
+        resp["prompt"] = ("（这个文件里没有找到生成参数）\n\n"
                           "常见原因：截图、微信/QQ 传输、网站二次压缩都会把元数据整段抹掉。")
     return resp
 
@@ -5363,6 +5634,9 @@ for _name, _fn in {
     "_deploy_run_webui_until_ready": _deploy_run_webui_until_ready,
     "civitai_fetch": _api_civitai_fetch,
     "civitai_download": _api_civitai_download,
+    "h3_models_info": _api_h3_models_info,
+    "h3_models_download": _api_h3_models_download,
+    "h3_models_cancel": _api_h3_models_cancel,
     "detect_installs": _api_detect_installs,
     "_fetch_liblib": _fetch_liblib,
     "_liblib_download_start": _liblib_download_start,

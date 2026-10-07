@@ -85,7 +85,7 @@
       try { URL.revokeObjectURL(cur.objectUrl); } catch (e) { /* 忽略 */ }
       cur.objectUrl = null;
     }
-    drop.innerHTML = `<span>${App.esc(placeholder || "把图片拖到这里")}</span>`;
+    drop.innerHTML = `<span>${App.esc(placeholder || "把图片或视频拖到这里")}</span>`;
 
     cur.path = ""; cur.name = ""; cur.rawText = ""; cur.refsCount = 0;
 
@@ -110,6 +110,24 @@
     ["#meta-copy-prompt", "#meta-copy-neg", "#meta-copy-all"].forEach((s) => ($(s).disabled = true));
   }
 
+  /* 预览区：图片用 <img>，视频用 <video>（静音循环自动播放，带控制条，想听声音点一下即可） */
+  function showPreview(url, isVideo) {
+    const drop = $("#meta-drop");
+    drop.innerHTML = "";
+    let el;
+    if (isVideo) {
+      el = document.createElement("video");
+      el.muted = true; el.loop = true; el.autoplay = true; el.controls = true; el.playsInline = true;
+      el.onerror = () => { drop.innerHTML = "<span>（这个视频格式无法预览，参数照常读取）</span>"; };
+    } else {
+      el = new Image();
+      el.alt = "";
+      el.onerror = () => { drop.innerHTML = "<span>（无法预览这个格式）</span>"; };
+    }
+    el.src = url;
+    drop.appendChild(el);
+  }
+
   /* ================= 主流程：从 File 对象打开 ================= */
 
   async function openFile(file, knownPath) {
@@ -121,31 +139,36 @@
     cur.objectUrl = URL.createObjectURL(file);
     cur.name = file.name || "";
     cur.path = knownPath || "";
-    const drop = $("#meta-drop");
-    drop.innerHTML = "";
-    const img = new Image();
-    img.alt = "";
-    img.onerror = () => { drop.innerHTML = "<span>（无法预览这个格式）</span>"; };
-    img.src = cur.objectUrl;
-    drop.appendChild(img);
+    const isVideo = window.ImgContainer.isVideoFile(file);
+    showPreview(cur.objectUrl, isVideo);
     $("#meta-file").textContent = knownPath || file.name;
     mark("预览");
 
-    // 2. 读字节。大图这一步才是真正的耗时大头，而且完全在浏览器内部，
-    //    没有任何跨进程通信。
-    let buf;
-    try {
-      buf = await file.arrayBuffer();
-    } catch (e) {
-      if (my === seq) { resetPage("（读取失败）"); App.toast("读取文件失败：" + e.message, "error"); }
-      return;
-    }
-    if (my !== seq) return;
-    mark("读字节");
+    let container;
+    if (isVideo) {
+      // 视频（Forge Neo / H3 / ComfyUI）：只按需读容器头和 moov / Tags 那几 KB，
+      // 几百 MB 的视频也不会整个读进内存
+      try { container = await window.ImgContainer.readVideo(file); }
+      catch (e) { container = null; }
+      if (my !== seq) return;
+      mark("抠元数据");
+    } else {
+      // 2. 读字节。大图这一步才是真正的耗时大头，而且完全在浏览器内部，
+      //    没有任何跨进程通信。
+      let buf;
+      try {
+        buf = await file.arrayBuffer();
+      } catch (e) {
+        if (my === seq) { resetPage("（读取失败）"); App.toast("读取文件失败：" + e.message, "error"); }
+        return;
+      }
+      if (my !== seq) return;
+      mark("读字节");
 
-    // 3. 就地抠出元数据
-    const container = window.ImgContainer.readContainer(buf);
-    mark("抠元数据");
+      // 3. 就地抠出元数据
+      container = window.ImgContainer.readContainer(buf);
+      mark("抠元数据");
+    }
 
     if (!container || container.deferred) {
       // 认不出的格式，或者遇到压缩文本块（罕见）—— 交给后端按路径重来一次
@@ -237,16 +260,10 @@
     applyResult(r);
 
     // 走这条路时浏览器手里没有 File，只能让后端给个可引用的地址
-    const drop = $("#meta-drop");
-    drop.innerHTML = "";
     if (r.preview) {
-      const img = new Image();
-      img.alt = "";
-      img.onerror = () => { drop.innerHTML = "<span>（无法预览）</span>"; };
-      img.src = r.preview;
-      drop.appendChild(img);
+      showPreview(r.preview, /\.(mp4|m4v|mov|mkv|webm)$/i.test(r.preview.split("?")[0]));
     } else {
-      drop.innerHTML = "<span>（无法预览这个格式）</span>";
+      $("#meta-drop").innerHTML = "<span>（无法预览这个格式）</span>";
     }
     mark("预览");
     renderTiming();
@@ -376,7 +393,7 @@
       missingProg = App.progress($("#meta-missing-progress"));
 
       $("#meta-pick").addEventListener("click", async () => {
-        const r = await App.api.choose_images(false);
+        const r = await App.api.choose_images(false, true);
         if (r && r.ok && r.paths && r.paths.length) openPath(r.paths[0]);
       });
 

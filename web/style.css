@@ -579,7 +579,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .drop-area::before { left: 8px; top: 8px; border-top-width: 2px; border-left-width: 2px; }
 .drop-area::after { right: 8px; bottom: 8px; border-bottom-width: 2px; border-right-width: 2px; }
 .drop-area.dragover { border-color: var(--ink); background-color: rgba(255, 242, 0, .35); color: var(--ink); }
-.drop-area img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.drop-area img, .drop-area video { max-width: 100%; max-height: 100%; object-fit: contain; }
 
 .drop-list {
   margin-top: 10px; min-height: 90px; max-height: 130px; overflow-y: auto;
@@ -1149,3 +1149,24 @@ textarea.ta-prompt {
 :root[data-ui-theme="vector"] .pm-spark { border-radius: 4px; }
 
 @media (prefers-reduced-motion: reduce) { .pm-live { animation: none !important; } }
+
+/* 模型下载页：H3 视频模型一键下载 */
+.h3-list { margin-top: 6px; }
+.h3-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 2px 14px;
+  align-items: center; padding: 8px 0; border-top: 1px solid var(--line);
+}
+.h3-row:first-child { border-top: 0; }
+.h3-row .chk-row { padding: 0; }
+.h3-row .chk-row.locked { cursor: default; }
+.h3-row select { width: 250px; padding: 4px 8px; font-size: 12.5px; }
+.h3-size { font: 12px var(--mono); color: var(--text-dim); min-width: 76px; text-align: right; white-space: nowrap; }
+.h3-sub { grid-column: 1 / -1; padding-left: 25px; font-size: 11.5px; color: var(--text-faint); display: flex; gap: 12px; flex-wrap: wrap; }
+.h3-state[data-state="ok"] { color: var(--ok); }
+.h3-state[data-state="part"], .h3-state[data-state="diff"], .h3-state[data-state="downloading"] { color: var(--warn); }
+.h3-state[data-state="error"] { color: var(--bad); }
+.h3-total { margin: 0; }
+@media (max-width: 720px) {
+  .h3-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .h3-row select { grid-column: 1 / -1; margin-left: 25px; }
+}

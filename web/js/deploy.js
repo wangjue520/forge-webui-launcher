@@ -65,6 +65,7 @@
   }
   function syncNodesCard() {
     const comfy = $("#deploy-branch").value === "comfyui";
+    $("#deploy-branch-hint").hidden = $("#deploy-branch").value !== "neo2h3";
     $("#deploy-nodes-card").hidden = !comfy;
     // 「环境诊断」按 webui.bat/venv 结构检测，是 Forge 专属逻辑，ComfyUI 部署时用不上
     $("#deploy-diag-card").hidden = comfy;
@@ -186,7 +187,9 @@
         o.value = b.key; o.textContent = b.label;
         sel.appendChild(o);
       });
-      sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch : "neo2";
+      // H3 是新分支，不当默认；只有当前实例本身就是 H3 才默认选中它
+      sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch
+        : (App.cfg.webui_branch === "neo2" && App.cfg.webui_variant === "h3" ? "neo2h3" : "neo2");
       sel.addEventListener("change", syncNodesCard);
       syncNodesCard();
 

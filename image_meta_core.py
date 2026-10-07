@@ -29,6 +29,9 @@ import re
 import meta_engine as me
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".avif")
+# Forge Neo / H3 / ComfyUI 生成的视频：参数写在容器元数据里（见 meta_engine/container_reader.py）
+VIDEO_EXTS = (".mp4", ".m4v", ".mov", ".mkv", ".webm")
+MEDIA_EXTS = IMAGE_EXTS + VIDEO_EXTS
 
 
 class ImageMetaError(Exception):
@@ -308,6 +311,13 @@ def extract_refs(m):
     flat_other = other.get("other") if isinstance(other.get("other"), dict) else {}
 
     _add_ref(refs, seen, "VAE", flat_other.get("VAE"))
+
+    # Forge Neo 的「Module 1/2/3…」：同时选上的文本编码器和 VAE（Anima、Flux、MiniMax-H3 等），
+    # 只记了文件名（不带扩展名），名字里带 vae 的归 VAE，其余当文本编码器
+    for k in sorted(flat_other, key=lambda x: str(x)):
+        if re.match(r"^Module \d+$", str(k)):
+            name = str(flat_other.get(k) or "").strip()
+            _add_ref(refs, seen, "VAE" if "vae" in name.lower() else "TextEncoder", name)
 
     # TI hashes: "名字: 哈希, 名字: 哈希"
     ti = flat_other.get("TI hashes") or ""

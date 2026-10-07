@@ -93,8 +93,176 @@
     updateDownloadBtn();
   }
 
+  /* ---------- H3 视频模型一键下载（当前实例是 Forge Neo H3 才显示） ---------- */
+  const h3 = { info: null, running: false, log: null, prog: null, states: {}, inited: false };
+  const GB = (n) => (n / 1073741824).toFixed(n >= 10 * 1073741824 ? 1 : 2) + " GB";
+  const H3_STATE_TEXT = { ok: "已下载", part: "下了一部分，会续传", diff: "已有同名文件但大小不对，会重新下载",
+    downloading: "下载中…", error: "失败" };
+
+  function h3File(item) {
+    const sel = document.querySelector(`#h3-list select[data-h3="${item.id}"]`);
+    const q = sel ? sel.value : null;
+    return item.files.find((f) => f.q === q) || item.files[0];
+  }
+  function h3Checked(id) {
+    const el = document.querySelector(`#h3-list input[data-h3="${id}"]`);
+    return !!(el && el.checked);
+  }
+  function h3RenderRow(item) {
+    const f = h3File(item);
+    const row = document.querySelector(`#h3-list .h3-row[data-id="${item.id}"]`);
+    if (!row) return;
+    const st = h3.states[item.id] || f.state;
+    const sEl = row.querySelector(".h3-state");
+    sEl.dataset.state = st || "";
+    sEl.textContent = H3_STATE_TEXT[st] || "";
+    if (st === "error" && h3.states[item.id + ":err"]) sEl.textContent = "失败：" + h3.states[item.id + ":err"];
+    row.querySelector(".h3-size").textContent = GB(f.size);
+    row.querySelector(".h3-name").textContent = f.name;
+  }
+  function h3Total() {
+    if (!h3.info) return;
+    let need = 0, n = 0;
+    h3.info.items.forEach((it) => {
+      if (!h3Checked(it.id)) return;
+      const f = h3File(it);
+      if (f.state === "ok") return;
+      n++; need += Math.max(0, f.size - (f.part || 0));
+    });
+    const free = h3.info.disk_free;
+    let t = n ? `还要下载 ${n} 个文件，共 ${GB(need)}` : "选中的模型都已经下好了";
+    if (n && free != null) t += `　·　模型盘剩余 ${GB(free)}`;
+    const el = $("#h3-total");
+    el.textContent = t;
+    el.dataset.status = n && free != null && free < need + 2 * 1073741824 ? "bad" : "";
+    if (!h3.running) $("#h3-start").disabled = !n;
+  }
+  function h3Hw(info) {
+    const el = $("#h3-hw");
+    const parts = [];
+    let status = "";
+    if (info.vram_gb != null) {
+      parts.push(`显卡 ${info.vram_gb} GB 显存`);
+      if (info.vram_gb < info.min_vram_gb - 0.5) status = "bad";
+    } else parts.push("没检测到 NVIDIA 显卡");
+    if (info.ram_gb != null) parts.push(`内存 ${Math.round(info.ram_gb)} GB`);
+    let tip = "";
+    if (info.vram_gb != null && info.vram_gb < info.min_vram_gb - 0.5) {
+      tip = `H3 至少要 ${info.min_vram_gb}GB 显存，这块卡大概率跑不动。`;
+    } else if (info.ram_gb != null && info.ram_gb < 40) {
+      tip = `Q4 一套约占 ${info.ram_q4_gb}GB 内存，你的内存偏紧，已默认选 Q2 档（画质稍差但能跑）。`;
+      status = status || "warn";
+    } else if (info.ram_gb != null && info.ram_gb < 60) {
+      tip = "内存够跑 Q4，生成时尽量关掉其他占内存的程序。";
+    }
+    el.textContent = parts.join(" · ") + (tip ? "。" + tip : "");
+    el.dataset.status = status;
+  }
+  function h3Render(info) {
+    h3.info = info;
+    const defaults = info.quant_defaults || {};
+    $("#h3-list").innerHTML = info.items.map((it) => {
+      const hasQ = it.files.length > 1;
+      const have = it.files.find((f) => f.state === "ok");
+      // 默认档位：已经下过哪一档就选哪一档，否则按内存给的建议
+      const q = have && have.q ? have.q : (defaults[it.id] || it.quant_default);
+      const sel = hasQ ? `<select data-h3="${it.id}">` + it.files.map((f) =>
+        `<option value="${App.esc(f.q)}"${f.q === q ? " selected" : ""}>${App.esc(f.q)}　${GB(f.size)}` +
+        `${f.note ? "　" + App.esc(f.note) : ""}${f.state === "ok" ? "　✓" : ""}</option>`).join("") + `</select>` : "<span></span>";
+      const checked = it.required || it.default || !!have;
+      return `<div class="h3-row" data-id="${it.id}">` +
+        `<label class="chk-row${it.required ? " locked" : ""}"><input type="checkbox" data-h3="${it.id}"` +
+        `${checked ? " checked" : ""}${it.required ? " disabled" : ""}><i></i>` +
+        `<span><span class="ext-name">${App.esc(it.label)}</span>${it.required ? '<em class="tag">必需</em>' : ""}` +
+        `<div class="ext-desc">${App.esc(it.desc)}</div></span></label>` +
+        sel + `<span class="h3-size"></span>` +
+        `<div class="h3-sub"><span class="h3-name"></span><span>→ ${App.esc(it.where)}</span><span class="h3-state"></span></div></div>`;
+    }).join("");
+    info.items.forEach(h3RenderRow);
+    h3Hw(info);
+    h3Total();
+  }
+  async function h3Refresh() {
+    if (!App.api.h3_models_info || h3.running) return;
+    let r;
+    try { r = await App.api.h3_models_info(); } catch (e) { return; }
+    const card = $("#h3-card");
+    card.hidden = !(r && r.ok && r.is_h3);
+    if (card.hidden) return;
+    h3.states = {};
+    h3Render(r);
+    if (r.running) h3SetRunning(true);
+  }
+  function h3SetRunning(v) {
+    h3.running = v;
+    $("#h3-start").disabled = v;
+    $("#h3-cancel").disabled = !v;
+    document.querySelectorAll("#h3-list input, #h3-list select").forEach((el) => {
+      if (el.type === "checkbox" && el.closest(".locked")) return;
+      el.disabled = v;
+    });
+    if (!v) h3Total();
+  }
+  async function h3Start() {
+    if (h3.running || !h3.info) return;
+    const selection = h3.info.items.filter((it) => h3Checked(it.id))
+      .map((it) => ({ id: it.id, q: h3File(it).q }));
+    $("#h3-log-wrap").hidden = false;
+    h3SetRunning(true);
+    try {
+      const r = await App.api.h3_models_download(selection);
+      if (r && r.ok === false) { App.toast(r.error || "无法开始下载", "error", 5000); h3SetRunning(false); }
+    } catch (e) { App.toast("无法开始下载：" + e.message, "error"); h3SetRunning(false); }
+  }
+  function h3Init() {
+    if (h3.inited) return;
+    h3.inited = true;
+    h3.log = App.makeLogger($("#h3-log"), 300);
+    h3.prog = App.progress($("#h3-progress"));
+    h3.prog.hide();
+    $("#h3-list").addEventListener("change", () => {
+      if (h3.info) h3.info.items.forEach(h3RenderRow);
+      h3Total();
+    });
+    $("#h3-start").addEventListener("click", h3Start);
+    $("#h3-cancel").addEventListener("click", () => App.api.h3_models_cancel());
+    $("#h3-log-clear").addEventListener("click", () => { $("#h3-log").textContent = ""; });
+    App.on("h3dl", "log", (e) => h3.log(e.text));
+    App.on("h3dl", "item", (e) => {
+      h3.states[e.id] = e.state;
+      if (e.error) h3.states[e.id + ":err"] = e.error;
+      if (e.state === "ok" && h3.info) {
+        const it = h3.info.items.find((x) => x.id === e.id);
+        if (it) { const f = h3File(it); f.state = "ok"; f.part = 0; }
+      }
+      const it = h3.info && h3.info.items.find((x) => x.id === e.id);
+      if (it) h3RenderRow(it);
+    });
+    App.on("h3dl", "progress", (e) => {
+      const all = e.all_total > 0 ? e.all_done / e.all_total * 100 : 0;
+      const cur = e.total > 0 ? e.downloaded / e.total * 100 : 0;
+      h3.prog.set(all, `总进度 ${all.toFixed(1)}%　·　(${e.index}/${e.count}) ${e.name}　${App.fmtBytes(e.downloaded)} / ${App.fmtBytes(e.total)}（${cur.toFixed(1)}%）`);
+    });
+    App.on("h3dl", "done", (e) => {
+      h3SetRunning(false);
+      h3.prog.hide();
+      if (e.ok) {
+        App.toast(e.downloaded ? `H3 模型已下载 ${e.downloaded} 个` + (e.skipped ? `（另有 ${e.skipped} 个已存在跳过）` : "") +
+          "。启动 WebUI 后顶部 UI Preset 选 h3 即可" : "选中的 H3 模型都已经在了", "ok", 7000);
+      } else if (e.cancelled) {
+        App.toast("已取消，已下载的部分保留，下次点下载会接着下", "ok", 5000);
+      } else {
+        App.toast(e.error || "下载失败", "error", 7000);
+      }
+      h3Refresh();
+    });
+  }
+
   App.pages.civitai = {
+    onShow() { h3Refresh(); },
     init(state) {
+      h3Init();
+      h3Refresh();
       log = App.makeLogger($("#cv-log"), 400);
       prog = App.progress($("#cv-progress"));
       prog.hide();

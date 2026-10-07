@@ -36,6 +36,7 @@ DEFAULT_CONFIG = {
     "custom_python_path": "",     # 留空则自动检测(如秋叶整合包的 python\python.exe)或用系统python
     "custom_git_path": "",        # 留空则自动检测或用系统git
     "webui_branch": "neo2",  # 默认新装/新配置就用新版 Neo 参数体系
+    "webui_variant": "",      # "h3" = Forge Neo · H3 视频分支（参数体系同 neo2，只是仓库不同）
     "use_portable_env": True,    # classic / neo —— 由“环境部署”页部署后自动写入，也可以手动切换
     "gpu_device_id": "0",
     "vram_mode": "auto",          # auto / always_gpu / high / normal / low / no_vram / cpu
@@ -109,7 +110,7 @@ CONFIG_VERSION = 3
 # 属于「实例」的键：每个实例各有一份。其余键（镜像、API Key、多实例开关等）是全局的。
 INSTANCE_KEYS = (
     "webui_root", "bat_file_name", "custom_python_path", "custom_git_path",
-    "webui_branch", "use_portable_env", "gpu_device_id", "vram_mode", "precision_mode",
+    "webui_branch", "webui_variant", "use_portable_env", "gpu_device_id", "vram_mode", "precision_mode",
     "always_offload_from_vram", "cuda_malloc", "install_xformers", "install_flash",
     "install_sage", "enable_listen", "enable_api", "enable_share",
     "enable_insecure_extension_access", "autolaunch", "auto_open_browser_on_ready",
@@ -122,6 +123,13 @@ INSTANCE_KEYS = (
 
 KIND_LABELS = {"comfyui": "ComfyUI", "neo2": "Forge Neo", "neo": "Forge Neo",
                "classic": "Forge Classic"}
+
+
+def kind_label(branch, variant=None):
+    """实例显示名：Forge Neo 的 H3 视频分支单独叫「Forge Neo H3」"""
+    if variant == "h3":
+        return "Forge Neo H3"
+    return KIND_LABELS.get(branch, "WebUI")
 
 
 def is_comfy(cfg):

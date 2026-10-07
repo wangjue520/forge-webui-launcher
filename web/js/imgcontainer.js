@@ -299,5 +299,251 @@
     return null;
   }
 
-  window.ImgContainer = { readContainer: readContainer };
+  /* ============================ 视频 ============================ */
+  /* Forge Neo / H3 用 ffmpeg -metadata description=<A1111 参数> 存视频：
+   * mp4 在 moov/udta/meta/ilst/desc，mkv 在 Tags/SimpleTag。ComfyUI 视频写 prompt/workflow。
+   * 视频可能几百 MB，而 moov 常在文件末尾 —— 用 File.slice 跳着读，只读需要的几 KB。
+   * 和 Python 侧 meta_engine/container_reader.py 的视频部分是同一套逻辑、同样的输出键。 */
+
+  const VIDEO_EXT_RE = /\.(mp4|m4v|mov|mkv|webm)$/i;
+  function isVideoFile(file) {
+    return !!file && (/^video\//.test(file.type || "") || VIDEO_EXT_RE.test(file.name || ""));
+  }
+  async function sliceBytes(file, start, end) {
+    return new Uint8Array(await file.slice(start, end).arrayBuffer());
+  }
+  const u32 = (b, o) => ((b[o] << 24) >>> 0) + (b[o + 1] << 16) + (b[o + 2] << 8) + b[o + 3];
+  const u16 = (b, o) => (b[o] << 8) | b[o + 1];
+
+  function* boxes(b, start, end) {
+    let pos = start;
+    while (pos + 8 <= end) {
+      let size = u32(b, pos), hdr = 8;
+      const typ = td(b.subarray(pos + 4, pos + 8), "latin1");
+      if (size === 1) { size = u32(b, pos + 8) * 4294967296 + u32(b, pos + 12); hdr = 16; }
+      else if (size === 0) size = end - pos;
+      if (size < hdr || pos + size > end) return;
+      yield [typ, pos + hdr, pos + size];
+      pos += size;
+    }
+  }
+  function dataText(b, s, e) {
+    for (const [t, ds, de] of boxes(b, s, e)) if (t === "data" && de - ds >= 8) return bestText(b.subarray(ds + 8, de));
+    return null;
+  }
+  function metaItems(b, s, e, out) {
+    let handler = "", keys = [], ilst = null;
+    for (const [t, cs, ce] of boxes(b, s + 4, e)) {
+      if (t === "hdlr" && ce - cs >= 12) handler = td(b.subarray(cs + 8, cs + 12), "latin1");
+      else if (t === "keys") {
+        const n = u32(b, cs + 4); let p = cs + 8;
+        for (let i = 0; i < n && p + 8 <= ce; i++) { const ks = u32(b, p); keys.push(td(b.subarray(p + 8, p + ks))); p += ks; }
+      } else if (t === "ilst") ilst = [cs, ce];
+    }
+    if (!ilst) return;
+    for (const [t, cs, ce] of boxes(b, ilst[0], ilst[1])) {
+      let name = t;
+      if (handler === "mdta" && keys.length) {
+        const idx = u32(b, cs - 4);
+        if (idx >= 1 && idx <= keys.length) name = keys[idx - 1].startsWith("com.") ? keys[idx - 1].split(".").pop() : keys[idx - 1];
+      }
+      const v = dataText(b, cs, ce);
+      if (v && !(name in out)) out[name] = v;
+    }
+  }
+  function parseMoov(b) {
+    const texts = {};
+    let width = 0, height = 0, duration = null;
+    const hdr = u32(b, 0) === 1 ? 16 : 8;
+    for (const [t, s, e] of boxes(b, hdr, b.length)) {
+      if (t === "mvhd" && e - s >= 20) {
+        const v1 = b[s] === 1;
+        const ts = u32(b, s + (v1 ? 20 : 12));
+        const dur = v1 ? u32(b, s + 24) * 4294967296 + u32(b, s + 28) : u32(b, s + 16);
+        if (ts) duration = dur / ts;
+      } else if (t === "trak") {
+        for (const [t2, s2, e2] of boxes(b, s, e)) {
+          if (t2 === "tkhd" && e2 - s2 >= 84) {
+            const off = s2 + (b[s2] === 1 ? 88 : 76);
+            if (off + 8 <= e2) {
+              const w = u32(b, off) >>> 16, h = u32(b, off + 4) >>> 16;
+              if (w * h > width * height) { width = w; height = h; }
+            }
+          }
+        }
+      } else if (t === "udta") {
+        for (const [t2, s2, e2] of boxes(b, s, e)) {
+          if (t2 === "meta") metaItems(b, s2, e2, texts);
+          else if (t2.charCodeAt(0) === 0xa9 && e2 - s2 >= 4) {
+            const n = u16(b, s2);
+            if (n > 0 && n <= e2 - s2 - 4 && !(t2 in texts)) texts[t2] = bestText(b.subarray(s2 + 4, s2 + 4 + n));
+          }
+        }
+      } else if (t === "meta") metaItems(b, s, e, texts);
+    }
+    return { info: videoInfo(texts), width: width, height: height, format: videoFormat("MP4", duration) };
+  }
+  async function readMP4(file) {
+    let pos = 0;
+    const size = file.size;
+    while (pos + 8 <= size) {
+      const h = await sliceBytes(file, pos, pos + 16);
+      if (h.length < 8) break;
+      let bs = u32(h, 0);
+      const typ = td(h.subarray(4, 8), "latin1");
+      if (bs === 1 && h.length >= 16) bs = u32(h, 8) * 4294967296 + u32(h, 12);
+      else if (bs === 0) bs = size - pos;
+      if (bs < 8) break;
+      if (typ === "moov") {
+        if (bs > 64 * 1024 * 1024) return null;
+        return parseMoov(await sliceBytes(file, pos, pos + bs));
+      }
+      pos += bs;
+    }
+    return null;
+  }
+
+  // ---- Matroska / WebM ----
+  function vint(b, o, isId) {
+    const first = b[o];
+    if (first === undefined) return null;
+    let mask = 0x80, len = 1;
+    while (len <= 8 && !(first & mask)) { mask >>= 1; len++; }
+    if (len > (isId ? 4 : 8)) return null;
+    let val = isId ? first : (first & (mask - 1));
+    for (let i = 1; i < len; i++) val = val * 256 + b[o + i];
+    const unknown = !isId && val === Math.pow(2, 7 * len) - 1;
+    return { val: val, len: len, unknown: unknown };
+  }
+  // 读 [start, end) 里的子元素头（每个元素头最多 12 字节）
+  async function ebmlChildren(file, start, end, cb) {
+    let pos = start;
+    end = Math.min(end, file.size);
+    while (pos < end) {
+      const h = await sliceBytes(file, pos, Math.min(pos + 12, file.size));
+      const id = vint(h, 0, true); if (!id) return;
+      const sz = vint(h, id.len, false); if (!sz) return;
+      const ds = pos + id.len + sz.len;
+      const stop = await cb(id.val, ds, sz.unknown ? null : sz.val);
+      if (stop === true || sz.unknown) return;
+      pos = ds + sz.val;
+    }
+  }
+  const beUint = (b) => { let v = 0; for (let i = 0; i < b.length && i < 8; i++) v = v * 256 + b[i]; return v; };
+  async function readMKV(file) {
+    const texts = {};
+    let width = 0, height = 0, duration = null, scale = 1000000, seg = null;
+    await ebmlChildren(file, 0, file.size, async (id, s, n) => {
+      if (id === 0x18538067) { seg = [s, n === null ? file.size : s + n]; return true; }
+    });
+    if (!seg) return null;
+    const todo = [];
+    async function visit(id, s, n) {
+      const end = s + (n || 0);
+      if (id === 0x114D9B74) {
+        await ebmlChildren(file, s, end, async (sid, ss, sn) => {
+          if (sid !== 0x4DBB) return;
+          let target = null, tpos = null;
+          await ebmlChildren(file, ss, ss + (sn || 0), async (cid, cs, cn) => {
+            const v = await sliceBytes(file, cs, cs + (cn || 0));
+            if (cid === 0x53AB) target = beUint(v);
+            else if (cid === 0x53AC) tpos = beUint(v);
+          });
+          if ((target === 0x1254C367 || target === 0x1654AE6B || target === 0x1549A966) && tpos !== null) todo.push(seg[0] + tpos);
+        });
+      } else if (id === 0x1549A966) {
+        await ebmlChildren(file, s, end, async (cid, cs, cn) => {
+          const v = await sliceBytes(file, cs, cs + (cn || 0));
+          if (cid === 0x2AD7B1) scale = beUint(v) || scale;
+          else if (cid === 0x4489 && (cn === 4 || cn === 8)) {
+            const dv = new DataView(v.buffer, v.byteOffset, v.byteLength);
+            duration = cn === 4 ? dv.getFloat32(0) : dv.getFloat64(0);
+          }
+        });
+      } else if (id === 0x1654AE6B) {
+        await ebmlChildren(file, s, end, async (tid, ts, tn) => {
+          if (tid !== 0xAE) return;
+          await ebmlChildren(file, ts, ts + (tn || 0), async (vid, vs, vn) => {
+            if (vid !== 0xE0) return;
+            let w = 0, h = 0;
+            await ebmlChildren(file, vs, vs + (vn || 0), async (pid, ps, pn) => {
+              const v = await sliceBytes(file, ps, ps + (pn || 0));
+              if (pid === 0xB0) w = beUint(v); else if (pid === 0xBA) h = beUint(v);
+            });
+            if (w * h > width * height) { width = w; height = h; }
+          });
+        });
+      } else if (id === 0x1254C367) {
+        await ebmlChildren(file, s, end, async (tid, ts, tn) => {
+          if (tid !== 0x7373) return;
+          await ebmlChildren(file, ts, ts + (tn || 0), async (sid, ss, sn) => {
+            if (sid !== 0x67C8) return;
+            let name = null, val = null;
+            await ebmlChildren(file, ss, ss + (sn || 0), async (cid, cs, cn) => {
+              if ((cid === 0x45A3 || cid === 0x4487) && cn !== null && cn <= MAX_TEXT) {
+                const t = td(await sliceBytes(file, cs, cs + cn)).replace(/\0+$/, "");
+                if (cid === 0x45A3) name = t; else val = t;
+              }
+            });
+            if (name && val && !(name.toLowerCase() in texts)) texts[name.toLowerCase()] = val;
+          });
+        });
+      }
+    }
+    const seen = new Set();
+    await ebmlChildren(file, seg[0], seg[1], async (id, s, n) => {
+      seen.add(s);
+      if (id === 0x1F43B675) return true;    // Cluster：后面全是画面，剩下的交给 SeekHead
+      await visit(id, s, n);
+    });
+    for (const pos of todo) {
+      if (seen.has(pos)) continue;
+      await ebmlChildren(file, pos, file.size, async (id, s, n) => { await visit(id, s, n); return true; });
+    }
+    if (duration !== null) duration = duration * scale / 1e9;
+    const fmt = /\.webm$/i.test(file.name || "") ? "WEBM" : "MKV";
+    return { info: videoInfo(texts), width: width, height: height, format: videoFormat(fmt, duration) };
+  }
+
+  function videoFormat(name, duration) {
+    return duration ? `${name} 视频 ${duration.toFixed(1)} 秒` : `${name} 视频`;
+  }
+  const TEXT_KEYS = ["desc", "des", "ldes", "description", "cmt", "comment", "parameters", "inf"];
+  function videoInfo(texts) {
+    const info = {}, low = {};
+    for (const k in texts) low[k.toLowerCase().replace(/^©/, "")] = texts[k];
+    for (const k of ["prompt", "workflow"]) {
+      if (typeof low[k] === "string" && low[k].trim().startsWith("{")) info[k] = low[k];
+    }
+    for (const k of ["comment", "cmt", "description", "des", "desc"]) {
+      const v = low[k];
+      if (typeof v === "string" && v.trim().startsWith("{") && !("prompt" in info)) {
+        try {
+          const obj = JSON.parse(v);
+          if (obj && typeof obj === "object" && ("prompt" in obj || "workflow" in obj)) {
+            for (const kk of ["prompt", "workflow"]) {
+              if (kk in obj) info[kk] = typeof obj[kk] === "string" ? obj[kk] : JSON.stringify(obj[kk]);
+            }
+          }
+        } catch (e) { /* 不是 JSON */ }
+      }
+    }
+    if ("prompt" in info || "workflow" in info) return info;
+    for (const k of TEXT_KEYS) {
+      if (typeof low[k] === "string" && low[k].trim()) { info.parameters = low[k]; break; }
+    }
+    return info;
+  }
+
+  /** 视频文件（File/Blob）→ 容器结构；认不出返回 null */
+  async function readVideo(file) {
+    try {
+      const head = await sliceBytes(file, 0, 16);
+      if (td(head.subarray(4, 8), "latin1") === "ftyp") return await readMP4(file);
+      if (head[0] === 0x1a && head[1] === 0x45 && head[2] === 0xdf && head[3] === 0xa3) return await readMKV(file);
+    } catch (e) { /* 坏文件 */ }
+    return null;
+  }
+
+  window.ImgContainer = { readContainer: readContainer, readVideo: readVideo, isVideoFile: isVideoFile };
 })();

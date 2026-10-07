@@ -389,8 +389,9 @@
         </div>
 
         <div class="card">
-          <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge 的两个分支或 ComfyUI；装到新目录会自动添加为新实例</span></div>
+          <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge（Neo / H3 视频版 / Classic）或 ComfyUI；装到新目录会自动添加为新实例</span></div>
           <select id="deploy-branch"></select>
+          <div class="hint" id="deploy-branch-hint" data-status="warn" hidden>H3 视频版是新分支，还在快速迭代，原来的 Neo 照常可用、互不影响。跑视频生成需要显卡 ≥ 12GB 显存；内存 GGUF Q4 一套约占 33GB，建议 48GB 以上，64GB 最稳；部署完到「模型下载」页的「H3 视频模型一键下载」把模型配齐。</div>
         </div>
 
         <div class="card" id="deploy-nodes-card" hidden>
@@ -450,6 +451,22 @@
 
       <!-- ======== 模型下载 ======== -->
       <section class="page" id="page-civitai">
+        <div class="card" id="h3-card" hidden>
+          <div class="card-title">H3 视频模型一键下载<span class="card-title-hint">按 Forge Neo H3 的模型表配齐，自动放进对应目录；断点续传、sha256 校验</span></div>
+          <div class="hint" id="h3-hw"></div>
+          <div class="h3-list" id="h3-list"></div>
+          <div class="action-row">
+            <button class="btn btn-accent" id="h3-start"><svg class="btn-icon"><use href="#i-download"/></svg>下载选中的模型</button>
+            <button class="btn" id="h3-cancel" disabled>取消</button>
+            <span class="hint h3-total" id="h3-total"></span>
+          </div>
+          <div class="progress" id="h3-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+          <div class="console-wrap" id="h3-log-wrap" hidden>
+            <div class="console-head"><span>下载日志</span><button class="btn btn-xs" id="h3-log-clear">清空</button></div>
+            <pre class="console console-sm" id="h3-log"></pre>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-title">输入 Civitai / liblib 模型网址 / 版本网址 / ID</div>
           <div class="row">
@@ -658,9 +675,9 @@
         <div class="meta-layout">
           <div class="meta-left">
             <div class="drop-area" id="meta-drop">
-              <span>把图片拖到这里<br>（或点击下方按钮选择）<br><br>支持 PNG / JPG / WebP<br>以及 ComfyUI 工作流 .json</span>
+              <span>把图片或视频拖到这里<br>（或点击下方按钮选择）<br><br>支持 PNG / JPG / WebP<br>MP4 / MKV / WebM 视频（Forge Neo、H3、ComfyUI）<br>以及 ComfyUI 工作流 .json</span>
             </div>
-            <button class="btn" id="meta-pick">选择图片…</button>
+            <button class="btn" id="meta-pick">选择图片 / 视频…</button>
             <div class="hint" id="meta-file"></div>
           </div>
           <div class="meta-right">

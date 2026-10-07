@@ -156,6 +156,7 @@
         settings_schema: schema,
         deploy_branches: [
           { label: "Neo 版（Haoming02 社区维护分支，推荐）", key: "neo2" },
+          { label: "Neo · H3 视频版（Neo + MiniMax-H3 视频生成，新分支）", key: "neo2h3" },
           { label: "常规版 / Classic（lllyasviel 官方仓库）", key: "classic" },
           { label: "ComfyUI（官方仓库）", key: "comfyui" },
         ],
@@ -167,6 +168,41 @@
         ],
       }),
       update_config: () => ok({ ok: true, cmd_args: "" }),
+      h3_models_info: () => {
+        if (!/[?&]h3=1/.test(location.search)) return ok({ ok: true, is_h3: false });
+        const G = 1073741824;
+        const qf = (base, sizes, notes, state) => Object.keys(sizes).map((q) => ({ q, note: notes[q] || "",
+          name: base.replace("{q}", q), size: sizes[q] * G, state: state && state[q] || "", part: 0 }));
+        const one = (name, gb, state) => [{ q: null, note: "", name, size: gb * G, state: state || "", part: 0 }];
+        const qn = { Q2_K: "最省内存，画质有损", Q4_K: "推荐", Q8_0: "接近原版，很吃内存", Q4_K_M: "推荐", Q2_K_M: "省约 5GB 内存" };
+        const fl = { Q2_K: 6.26, Q3_K: 8.16, Q4_K: 10.64, Q5_0: 12.97, Q6_K: 15.45, Q8_0: 19.97 };
+        return ok({ ok: true, is_h3: true, root: "D:/AI/forge-neo-h3", ram_gb: 63.9, vram_gb: 24, min_vram_gb: 12, ram_q4_gb: 33,
+          quant_defaults: { fl2va: "Q4_K", ref2va: "Q4_K", te: "Q4_K_M" }, disk_free: 812 * G, running: false,
+          items: [
+            { id: "fl2va", label: "主模型 FL2VA", desc: "文生视频 / 图生视频 / 首尾帧 / ControlNet", required: true, default: true, where: "共享模型库/checkpoints", quant_default: "Q4_K", files: qf("minimax_h3_fl2va_pruned-{q}.gguf", fl, qn) },
+            { id: "te", label: "文本编码器 Qwen3-VL-32B", desc: "必需，所有模式都要", required: true, default: true, where: "共享模型库/text_encoders", quant_default: "Q4_K_M", files: qf("qwen3vl_32b_minimax_h3-{q}.gguf", { Q4_K_M: 16.97, Q2_K_M: 12.2 }, qn) },
+            { id: "vae_video", label: "视频 VAE", desc: "必需", required: true, default: true, where: "共享模型库/VAE", files: one("minimax_h3_video_vae_fp16.safetensors", 4.85, "ok") },
+            { id: "vae_audio", label: "音频 VAE", desc: "必需（H3 同时生成立体声音轨）", required: true, default: true, where: "共享模型库/VAE", files: one("minimax_h3_audio_vae_fp32.safetensors", 0.56, "ok") },
+            { id: "turbo_fl2v", label: "Turbo LoRA · FL2V 8 步", desc: "可选，强烈推荐：8 步出片，速度快好几倍", required: false, default: true, where: "共享模型库/loras", files: one("minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", 1.82, "part") },
+            { id: "ref2va", label: "主模型 Ref2VA", desc: "可选：参考图 / 参考视频 / 参考音频生视频才需要", required: false, default: false, where: "共享模型库/checkpoints", quant_default: "Q4_K", files: qf("minimax_h3_ref2va_pruned-{q}.gguf", fl, qn) },
+            { id: "turbo_ref2v", label: "Turbo LoRA · Ref2V 8 步", desc: "可选：配合 Ref2VA 用", required: false, default: false, where: "共享模型库/loras", files: one("minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", 1.82) },
+            { id: "controlnet", label: "ControlNet Union 2.0（int8）", desc: "可选：上传普通视频做姿态 / 深度 / 线稿控制、视频局部重绘", required: false, default: false, where: "models/model_patches", files: one("minimax_h3_fun_controlnet_union_2.0_pruned_int8_convrot.safetensors", 4.22) },
+          ] });
+      },
+      h3_models_download: (sel) => {
+        let pct = 0;
+        const t = setInterval(() => {
+          pct += 7;
+          const total = 10.64 * 1073741824;
+          window.App.onEvent({ scope: "h3dl", type: "progress", id: "fl2va", name: "minimax_h3_fl2va_pruned-Q4_K.gguf", index: 1, count: sel.length,
+            downloaded: total * Math.min(pct, 100) / 100, total, all_done: total * Math.min(pct, 100) / 100, all_total: total * 2.8 });
+          if (pct >= 100) { clearInterval(t); window.App.onEvent({ scope: "h3dl", type: "item", id: "fl2va", state: "ok" }); }
+        }, 300);
+        window.App.onEvent({ scope: "h3dl", type: "item", id: "fl2va", state: "downloading" });
+        window.App.onEvent({ scope: "h3dl", type: "log", text: "[H3] (1/3) minimax_h3_fl2va_pruned-Q4_K.gguf → 共享模型库/checkpoints（10.64 GB）\n" });
+        return ok({ ok: true });
+      },
+      h3_models_cancel: () => { window.App.onEvent({ scope: "h3dl", type: "done", ok: false, cancelled: true }); return ok({ ok: true }); },
       instance_config_get: () => ok({ ok: true, iid: "demo", config: mockConfig, cmd_args: "" }),
       instance_config_update: () => ok({ ok: true, cmd_args: "" }),
       launch_env_detect: () => ok({ python: "", git: "" }),

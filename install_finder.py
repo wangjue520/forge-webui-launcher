@@ -49,12 +49,24 @@ def _branch_of(root, kind):
     return guess_forge_branch(root)
 
 
+def forge_variant(root):
+    """Forge Neo 的 H3 视频分支（wangjue520/sd-webui-forge-neo-h3）→ "h3"，其他返回 ""。
+    git 远程优先；整合包（没有 .git）看有没有 MiniMax-H3 的模型实现文件"""
+    try:
+        with open(os.path.join(root, ".git", "config"), "r", encoding="utf-8", errors="replace") as f:
+            if "sd-webui-forge-neo-h3" in f.read().lower():
+                return "h3"
+    except OSError:
+        pass
+    return "h3" if os.path.isfile(os.path.join(root, "modules_forge", "minimax_h3.py")) else ""
+
+
 def guess_forge_branch(root):
     """Neo（新参数体系 neo2）还是 Classic：先看 git 远程，没有 .git（整合包）就看源码特征"""
     try:
         with open(os.path.join(root, ".git", "config"), "r", encoding="utf-8", errors="replace") as f:
             txt = f.read().lower()
-        if "sd-webui-forge-classic" in txt:
+        if "sd-webui-forge-classic" in txt or "sd-webui-forge-neo-h3" in txt:
             return "neo2"
         if "stable-diffusion-webui-forge" in txt:
             return "classic"
@@ -86,8 +98,9 @@ def find_installs(budget=TIME_BUDGET):
             if real not in seen:
                 seen.add(real)
                 branch = _branch_of(d, kind)
-                found.append({"path": d, "kind": kind, "branch": branch,
-                              "label": cm.KIND_LABELS.get(branch, "WebUI")})
+                variant = forge_variant(d) if kind == "forge" else ""
+                found.append({"path": d, "kind": kind, "branch": branch, "variant": variant,
+                              "label": cm.kind_label(branch, variant)})
             return                                          # 安装目录里面不再往下找
         if depth >= MAX_DEPTH:
             return
