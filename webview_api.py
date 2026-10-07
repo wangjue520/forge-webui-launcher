@@ -49,6 +49,7 @@ import output_index as oi
 import comfy_nodes
 import h3_models as h3m
 import amd_rocm
+import netspeed
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1639,6 +1640,7 @@ def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
     start_ts = time.monotonic()
     last_out_ts = start_ts
     last_beat_ts = start_ts
+    meter = netspeed.NetMeter()
     try:
         while True:
             if self._deploy_cancel.is_set():
@@ -1658,7 +1660,7 @@ def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
                 last_beat_ts = now
                 el = int(now - start_ts)
                 log(f"[部署] 仍在执行 {os.path.basename(program)}，"
-                    f"已运行 {el // 60} 分 {el % 60} 秒...\n")
+                    f"已运行 {el // 60} 分 {el % 60} 秒{meter.text()}...\n")
             try:
                 chunk = out_q.get(timeout=0.5)
             except queue.Empty:
@@ -1740,6 +1742,7 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     last_out_ts = start_ts
     last_beat_ts = start_ts
     last_probe_ts = start_ts
+    meter = netspeed.NetMeter()
     try:
         while True:
             if self._deploy_cancel.is_set():
@@ -1754,7 +1757,7 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
                 last_beat_ts = now
                 el = int(now - start_ts)
                 log(f"[部署] 仍在执行（装依赖/启动 WebUI），"
-                    f"已运行 {el // 60} 分 {el % 60} 秒...\n")
+                    f"已运行 {el // 60} 分 {el % 60} 秒{meter.text()}...\n")
             if saw_output and now - last_probe_ts >= 2:
                 last_probe_ts = now
                 for p in probe_ports:
