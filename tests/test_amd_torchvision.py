@@ -161,6 +161,57 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(next(i["version"] for i in plan if i["name"] == "torchvision"), "0.24.1+rocm7.1")
 
 
+    def test_newest_torch_without_pair_falls_back_to_older_set(self):
+        # AMD 源先发了 torch 2.11、torchvision 0.26 还没跟上：要退回有配套的 2.9.1，而不是整个失败
+        self.wheel("torch", "2.11.0+rocm7.2")
+        self.wheel("torch", "2.9.1+rocm7.1")
+        self.wheel("torchvision", "0.24.1+rocm7.1", ["torch"])
+        self.wheel("torchaudio", "2.9.1+rocm7.1", ["torch"])
+        self.wheel("torchaudio", "2.11.0+rocm7.2", ["torch"])
+        self.wheel("rocm", "7.1.0")
+        plan = amd_rocm.Planner(self.index, "cp313").plan(amd_rocm.root_requirements("gfx1101"))
+        found = {item["name"]: item["version"] for item in plan}
+        self.assertEqual(found["torch"], "2.9.1+rocm7.1")
+        self.assertEqual(found["torchvision"], "0.24.1+rocm7.1")
+        self.assertEqual(found["torchaudio"], "2.9.1+rocm7.1")
+
+    def test_same_series_pair_accepted_when_exact_patch_missing(self):
+        self.wheel("torch", "2.9.1+rocm7.1")
+        self.wheel("torchvision", "0.24.0+rocm7.1", ["torch"])
+        self.wheel("torchaudio", "2.9.0+rocm7.1", ["torch"])
+        self.wheel("rocm", "7.1.0")
+        torch_ver, pins = amd_rocm.Planner(self.index, "cp313").pick_torch_set()
+        self.assertEqual(torch_ver, "2.9.1+rocm7.1")
+        self.assertEqual(pins, {"torchvision": "==0.24.*", "torchaudio": "==2.9.*"})
+
+    def test_series_pair_rejected_when_metadata_pins_other_torch(self):
+        # torchvision 0.24.0 元数据钉死 torch==2.9.0：不能配给 2.9.1，应改选 torch 2.9.0
+        self.wheel("torch", "2.9.1+rocm7.1")
+        self.wheel("torch", "2.9.0+rocm7.1")
+        self.wheel("torchvision", "0.24.0+rocm7.1", ["torch==2.9.0"])
+        self.wheel("torchaudio", "2.9.0+rocm7.1", ["torch==2.9.0"])
+        self.wheel("rocm", "7.1.0")
+        torch_ver, pins = amd_rocm.Planner(self.index, "cp313").pick_torch_set()
+        self.assertEqual(torch_ver, "2.9.0+rocm7.1")
+        self.assertEqual(pins["torchvision"], "==0.24.0")
+
+
+class PurgeTests(unittest.TestCase):
+    def test_leftover_dirs_removed_after_pip(self):
+        with tempfile.TemporaryDirectory() as sp:
+            for d in ("torchvision", "torchvision-0.25.0+cu128.dist-info", "torch", "torchaudio-x.egg-info"):
+                os.makedirs(os.path.join(sp, d))
+            Path(sp, "torchvision", "_C.pyd").write_bytes(b"cuda")
+            os.makedirs(os.path.join(sp, "torchsde"))   # 名字相近的其他包不能误删
+            fake = types.SimpleNamespace(stdout=f'["{sp.replace(chr(92), "/")}"]\n', returncode=0)
+            log = Mock()
+            with patch.object(api.subprocess, "run", return_value=fake):
+                api._purge_leftover_pkgs("python.exe", ["torchvision"], log)
+            left = sorted(os.listdir(sp))
+            self.assertEqual(left, ["torch", "torchaudio-x.egg-info", "torchsde"])
+            self.assertIn("残留", "".join(c.args[0] for c in log.call_args_list))
+
+
 class InstallTests(unittest.TestCase):
     def setUp(self):
         self.host = types.SimpleNamespace(_deploy_cancel=threading.Event(), _deploy_run_cmd=Mock(return_value=0))
@@ -171,7 +222,9 @@ class InstallTests(unittest.TestCase):
         # 直装回退只需查 torch 索引，测试中禁止访问真实 AMD 源。
         self.addCleanup(patch.stopall)
         patch("cuda_compat.python_tag", return_value="cp313").start()
-        patch.object(amd_rocm.Planner, "best", return_value=("2.9.1+rocm7.1", {})).start()
+        patch.object(amd_rocm.Planner, "pick_torch_set", return_value=(
+            "2.9.1+rocm7.1", {"torchvision": "==0.24.1", "torchaudio": "==2.9.1"})).start()
+        patch.object(amd_rocm.Planner, "pair_pins", return_value={"torchvision": "==0.24.1"}).start()
 
     def install(self):
         return api._install_rocm_torch(self.host, "python.exe", "gfx1101", ".", self.log, {})
@@ -260,7 +313,7 @@ class InstallTests(unittest.TestCase):
     def test_cannot_resolve_pair_does_not_install_unpinned_packages(self):
         with patch.object(amd_rocm, "probe_torch", return_value={"installed": False}), \
                 patch.object(api, "_predownload_rocm", return_value=(None, None)), \
-                patch.object(amd_rocm.Planner, "best", return_value=None):
+                patch.object(amd_rocm.Planner, "pick_torch_set", side_effect=amd_rocm.PlanError("无配套")):
             self.assertFalse(self.install())
         self.host._deploy_run_cmd.assert_not_called()
 

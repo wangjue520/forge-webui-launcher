@@ -123,13 +123,18 @@ def detect_amd_gpus():
 PIP_NET_ARGS = ["--retries", "10", "--timeout", "120"]
 
 
-def root_requirements(gfx, torch_version=None):
-    """要装的顶层包（照教程）"""
+def root_requirements(gfx, torch_version=None, pins=None):
+    """
+    要装的顶层包（照教程）。torch_version + pins（Planner.pick_torch_set 的结果，
+    {"torchvision": "==0.24.1", "torchaudio": "==2.9.*"}）给出时把三件套钉成配套版本
+    """
     if torch_version:
-        versions = paired_versions(torch_version)
+        if pins is None:
+            v = paired_versions(torch_version)
+            pins = {"torchvision": "==" + v["torchvision"], "torchaudio": "==" + v["torchaudio"]}
         return [f"torch[device-{gfx}]=={torch_version}",
-                f"torchvision[device-{gfx}]=={versions['torchvision']}",
-                f"torchaudio=={versions['torchaudio']}", "rocm[devel]"]
+                f"torchvision[device-{gfx}]{pins['torchvision']}",
+                f"torchaudio{pins['torchaudio']}", "rocm[devel]"]
     return [f"torch[device-{gfx}]", f"torchvision[device-{gfx}]", "torchaudio", "rocm[devel]"]
 
 
@@ -148,9 +153,9 @@ def pip_common_args(nightly=False, cache_dir=None):
     return args + PIP_NET_ARGS
 
 
-def pip_install_args(gfx, nightly=False, cache_dir=None, torch_version=None):
+def pip_install_args(gfx, nightly=False, cache_dir=None, torch_version=None, pins=None):
     """python -m pip 后面的参数（列表形式，给启动器自己跑命令用）"""
-    return ["install"] + pip_common_args(nightly, cache_dir) + root_requirements(gfx, torch_version)
+    return ["install"] + pip_common_args(nightly, cache_dir) + root_requirements(gfx, torch_version, pins)
 
 
 def rocm_sdk_exe(python_exe):
@@ -281,6 +286,19 @@ def paired_versions(torch_version):
         raise PlanError(f"无法确定 torch {torch_version} 的配套版本，请记录版本并反馈给启动器维护者")
     minor, patch, suffix = int(m[1]), int(m[2]), m[3]
     return {"torchvision": f"0.{minor + 15}.{patch}{suffix}", "torchaudio": f"2.{minor}.{patch}{suffix}"}
+
+
+def paired_specs(torch_version):
+    """
+    配套版本的候选约束，按优先级排：先要修订号也对上的（官方就是这么配的），
+    源里没有再放宽到同一小版本系列（AMD 偶尔只发 0.24.0 配 torch 2.9.1）
+    """
+    v = paired_versions(torch_version)
+    out = {}
+    for name, ver in v.items():
+        series = ".".join(ver.split(".")[:2]) + ".*"
+        out[name] = ["==" + ver, "==" + series]
+    return out
 
 
 def _packaging():
@@ -416,19 +434,80 @@ class Planner:
                  for t in tags)
         return ver if ok else None
 
-    def best(self, name, spec):
+    def candidates(self, name, spec):
+        """满足约束的 (版本, link)，新的在前；正式源优先正式版，没有才用预发布版"""
         cands = []
         for link in self.links(name):
             ver = self._compatible(link)
             if ver is None or not spec.contains(ver, prereleases=True):
                 continue
             cands.append((ver, link))
-        if not cands:
-            return None
         final = [c for c in cands if not c[0].is_prerelease]
         pool = cands if (self.pre or not final) else final
         pool.sort(key=lambda c: c[0], reverse=True)
-        return pool[0]
+        return pool
+
+    def best(self, name, spec):
+        pool = self.candidates(name, spec)
+        return pool[0] if pool else None
+
+    def pair_pins(self, torch_version, names=("torchvision", "torchaudio")):
+        """
+        某个 torch 版本在源里能配上的 torchvision / torchaudio 约束 → {"torchvision": "==…", ...}；
+        配不齐返回 None
+        """
+        try:
+            options = paired_specs(torch_version)
+        except PlanError:
+            return None
+        pins = {}
+        for name, specs in options.items():
+            if name not in names:
+                continue
+            pin = None
+            for sp in specs:
+                # 候选包自己的元数据如果钉了 torch 版本（官方 torchvision 都钉死），必须和这个 torch 对得上
+                if any(self._torch_req_ok(link, torch_version)
+                       for _v, link in self.candidates(name, self.SpecifierSet(sp))[:3]):
+                    pin = sp
+                    break
+            if pin is None:
+                return None
+            pins[name] = pin
+        return pins
+
+    def _torch_req_ok(self, link, torch_version):
+        """这个 wheel 对 torch 的依赖是否接受 torch_version；读不到元数据时不拦（交给 pip 再判断）"""
+        try:
+            reqs = self.requires(self.metadata(link))
+        except Exception:
+            return True
+        for line in reqs:
+            try:
+                req = self.Requirement(line)
+            except Exception:
+                continue
+            if self.canon(req.name) == "torch" and req.marker is None and str(req.specifier):
+                return req.specifier.contains(torch_version, prereleases=True)
+        return True
+
+    def pick_torch_set(self, torch_spec=None):
+        """
+        挑「源里有配套 torchvision / torchaudio 的最新 torch」→ (torch 版本, pins)。
+        AMD 源常常先发新 torch、过一阵才补 torchvision——只挑最新 torch 会在这段时间里
+        整个装不上，所以逐个往旧版本退
+        """
+        tried = []
+        for ver, _link in self.candidates("torch", torch_spec or self.SpecifierSet("")):
+            pins = self.pair_pins(str(ver))
+            if pins:
+                return str(ver), pins
+            tried.append(str(ver))
+            if len(tried) >= 12:
+                break
+        if not tried:
+            raise PlanError(f"AMD 源里没有适合这个 Python（{self.pytag}）的 torch")
+        raise PlanError(f"AMD 源里的 torch（{'、'.join(tried[:4])} 等）都找不到配套的 torchvision / torchaudio")
 
     # ---- 元数据 ----
     def metadata(self, link):
@@ -470,14 +549,11 @@ class Planner:
         if any(n in specs for n in ("torch", "torchvision", "torchaudio")):
             # 先确定 torch，再给另外两件套补约束。不能依赖元数据一定写了 torch==：
             # 部分 AMD wheel 只写 torch，此时各自挑最新版会得到 ABI 不配套的组合。
-            got = self.best("torch", specs.get("torch", self.SpecifierSet("")))
-            if got is None:
-                raise PlanError(f"AMD 源里没有适合这个 Python（{self.pytag}）的 torch")
-            torch_ver = str(got[0])
+            torch_ver, pins = self.pick_torch_set(specs.get("torch"))
             specs["torch"] = self.SpecifierSet("==" + torch_ver)
             extras.setdefault("torch", set())
-            for name, version in paired_versions(torch_ver).items():
-                specs[name] = specs.get(name, self.SpecifierSet("")) & self.SpecifierSet("==" + version)
+            for name, pin in pins.items():
+                specs[name] = specs.get(name, self.SpecifierSet("")) & self.SpecifierSet(pin)
             queue = ["torch"] + [n for n in queue if n != "torch"]
         steps = 0
         while queue:

@@ -103,7 +103,27 @@ def _bind_dom_events(window, api):
     window.dom.document.events.drop += DOMEventHandler(on_drop, prevent_default=True)
 
 
+def _quiet_windows_error_dialogs():
+    """
+    关掉 Windows 的系统报错弹窗（「无法定位程序输入点 …于动态链接库 …上」这类）。
+    子进程会继承这个设置：WebUI / pip / 环境检查里加载到不配套的 DLL（比如 ROCm 版
+    torch 配上 CUDA 版 torchvision 的 _C.pyd）时不再弹一个要人点「确定」的窗口把进程
+    卡住，而是照常报 ImportError，错误进运行日志，启动器能识别并给出修复提示。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX, SEM_NOOPENFILEERRORBOX = 0x0001, 0x0002, 0x8000
+        k32 = ctypes.windll.kernel32
+        k32.SetErrorMode(k32.GetErrorMode() | SEM_FAILCRITICALERRORS
+                         | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
+    except Exception:
+        pass
+
+
 def main():
+    _quiet_windows_error_dialogs()
     _patch_http_server_backlog()
     api = LauncherApi()
     cm.write_theme_file(api.cfg)   # 开屏动画在后端应答前就要读风格文件

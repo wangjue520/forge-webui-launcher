@@ -2732,6 +2732,36 @@ def _uninstall_torch(self, py, cwd, log, env, with_rocm=True):
         names += amd_rocm.installed_rocm_packages(py, env)
     log("[环境] 卸载旧的 torch：" + "、".join(names) + "\n")
     self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y"] + names, cwd, log, env=env, timeout=1200)
+    _purge_leftover_pkgs(py, amd_rocm.UNINSTALL_BASE, log, env)
+
+
+def _purge_leftover_pkgs(py, names, log, env=None):
+    """
+    pip 卸完还留着的包目录直接删掉。整合包里的 Python 常常是整个拷过来的，dist-info 的
+    RECORD 不全甚至没有，pip 认为「没装」就跳过，旧的 CUDA 版文件原封不动——之后装的
+    ROCm 版要是没完全覆盖，就会出现 torchvision\\_C.pyd 找不到 c10_cuda 入口这种错。
+    """
+    try:
+        r = subprocess.run(
+            [py, "-c", "import json,sysconfig;p=sysconfig.get_paths();"
+                       "print(json.dumps(sorted({p['purelib'],p['platlib']})))"],
+            capture_output=True, text=True, env=env, timeout=60, creationflags=_NO_WINDOW)
+        sites = json.loads((r.stdout or "[]").strip().splitlines()[-1])
+    except Exception:
+        return
+    import glob as _glob
+    for sp in sites:
+        for name in names:
+            targets = [os.path.join(sp, name)] + _glob.glob(os.path.join(sp, f"{name}-*.dist-info")) \
+                + _glob.glob(os.path.join(sp, f"{name}-*.egg-info"))
+            for t in targets:
+                if not os.path.exists(t):
+                    continue
+                try:
+                    shutil.rmtree(t) if os.path.isdir(t) else os.remove(t)
+                    log(f"[环境] 清掉 pip 没卸干净的残留：{t}\n")
+                except OSError as e:
+                    log(f"[环境] 残留删不掉（{e}）：{t}——请关掉 WebUI 等占用这个环境的程序后手动删除再重试\n")
 
 
 def _predownload_rocm(self, py, gfx, nightly, log):
@@ -2805,6 +2835,21 @@ def _make_forge_venv(self, target, log, env):
     return _forge_env_python(self._deploy_cfg, target)
 
 
+def _rocm_tv_pin(py, torch_version, nightly, log):
+    """查 AMD 源里和这个 torch 配套的 torchvision 约束（先精确版本、再同系列）；查不到返回 None"""
+    try:
+        import cuda_compat as cc
+        pytag = cc.python_tag(py)
+        if not pytag:
+            return None
+        index = amd_rocm.ROCM_NIGHTLY_INDEX if nightly else amd_rocm.ROCM_INDEX
+        pins = amd_rocm.Planner(index, pytag, prerelease=nightly).pair_pins(torch_version, names=("torchvision",))
+        return (pins or {}).get("torchvision")
+    except Exception as e:
+        log(f"[环境] 查询配套 torchvision 版本没成功（{e}），按版本规则直接安装\n")
+        return None
+
+
 def _repair_rocm_torchvision(self, py, gfx, cwd, log, env, info):
     """torch 已可用时只修 torchvision，避免重新下载数 GB 的 torch/ROCm。"""
     try:
@@ -2828,11 +2873,14 @@ def _repair_rocm_torchvision(self, py, gfx, cwd, log, env, info):
         if rc != 0:
             log("[环境] torchvision 卸载失败，请停止正在使用该环境的程序，再点「把安装目录的环境切换成所选显卡」\n")
             return False
+        # pip 卸不掉的残留（整合包常见：没有安装记录的旧 CUDA 版）直接删目录
+        _purge_leftover_pkgs(py, ["torchvision"], log, env)
         src = "AMD nightly 源" if nightly else "AMD 正式源"
-        log(f"[环境] 从{src}安装配套的 torchvision...\n")
+        pin = _rocm_tv_pin(py, info["version"], nightly, log) or f"=={version}"
+        log(f"[环境] 从{src}安装配套的 torchvision（{pin[2:]}）...\n")
         # 同时钉住当前 torch（包括 +rocm 构建号），防止 pip 为满足依赖偷偷替换它。
         args = ["-m", "pip", "install"] + amd_rocm.pip_common_args(nightly, SHARED_CACHE_PIP)
-        args += [f"torch[device-{gfx}]=={info['version']}", f"torchvision[device-{gfx}]=={version}"]
+        args += [f"torch[device-{gfx}]=={info['version']}", f"torchvision[device-{gfx}]{pin}"]
         rc = self._deploy_run_cmd(py, args, cwd, log, env=env, timeout=5400)
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
@@ -2888,6 +2936,12 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
                 raise _DeployCancelled()
             try:
                 torch_version = next((i["version"] for i in (plan or []) if i["name"] == "torch"), None)
+                pins = None
+                if torch_version:
+                    # 预下载算出的配套组合：torchvision / torchaudio 也按它钉死
+                    got = {i["name"]: i["version"] for i in plan}
+                    if got.get("torchvision") and got.get("torchaudio"):
+                        pins = {"torchvision": "==" + got["torchvision"], "torchaudio": "==" + got["torchaudio"]}
                 if not torch_version:
                     # METADATA / Range 读取失败仍可只读索引决定 torch 版本；不能退回
                     # 不限版本的三件套，否则 pip 会绕过 Planner 的配套约束。
@@ -2897,11 +2951,8 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
                         raise amd_rocm.PlanError("无法确定目标 Python 版本")
                     index = amd_rocm.ROCM_NIGHTLY_INDEX if nightly else amd_rocm.ROCM_INDEX
                     planner = amd_rocm.Planner(index, pytag, prerelease=nightly)
-                    got = planner.best("torch", planner.SpecifierSet(""))
-                    if got is None:
-                        raise amd_rocm.PlanError("AMD 源里没有适合这个 Python 的 torch")
-                    torch_version = str(got[0])
-                args = amd_rocm.pip_install_args(gfx, nightly, SHARED_CACHE_PIP, torch_version)
+                    torch_version, pins = planner.pick_torch_set()
+                args = amd_rocm.pip_install_args(gfx, nightly, SHARED_CACHE_PIP, torch_version, pins)
             except Exception as e:
                 log(f"[环境] 无法确定配套版本（{e}），请检查 AMD 源连接和 Python 版本；跳过这个源\n")
                 continue
