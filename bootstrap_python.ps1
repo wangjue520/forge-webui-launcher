@@ -1,4 +1,6 @@
-#Requires -Version 3.0
+﻿#Requires -Version 3.0
+# 【注意】本文件必须保存为「UTF-8 带 BOM」：Windows 自带的 PowerShell 5.1 读到没有 BOM 的脚本
+# 会按系统编码（中文系统 GBK）解析，中文变乱码、引号被吃掉，整个脚本语法错误，首次启动直接失败。
 # Forge WebUI 启动器 - 便携 Python 自动引导脚本
 #
 # 用途：启动WWY启动器.bat 在系统里找不到任何可用 Python 时调用本脚本，
