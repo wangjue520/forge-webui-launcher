@@ -123,8 +123,13 @@ def detect_amd_gpus():
 PIP_NET_ARGS = ["--retries", "10", "--timeout", "120"]
 
 
-def root_requirements(gfx):
+def root_requirements(gfx, torch_version=None):
     """要装的顶层包（照教程）"""
+    if torch_version:
+        versions = paired_versions(torch_version)
+        return [f"torch[device-{gfx}]=={torch_version}",
+                f"torchvision[device-{gfx}]=={versions['torchvision']}",
+                f"torchaudio=={versions['torchaudio']}", "rocm[devel]"]
     return [f"torch[device-{gfx}]", f"torchvision[device-{gfx}]", "torchaudio", "rocm[devel]"]
 
 
@@ -143,9 +148,9 @@ def pip_common_args(nightly=False, cache_dir=None):
     return args + PIP_NET_ARGS
 
 
-def pip_install_args(gfx, nightly=False, cache_dir=None):
+def pip_install_args(gfx, nightly=False, cache_dir=None, torch_version=None):
     """python -m pip 后面的参数（列表形式，给启动器自己跑命令用）"""
-    return ["install"] + pip_common_args(nightly, cache_dir) + root_requirements(gfx)
+    return ["install"] + pip_common_args(nightly, cache_dir) + root_requirements(gfx, torch_version)
 
 
 def rocm_sdk_exe(python_exe):
@@ -191,37 +196,53 @@ def apply_args_str(arg_str, extra):
 
 # ------------------------------------------------------------ 环境探测 ----
 
-_PROBE = ("import json,torch;print(json.dumps({'v':torch.__version__,"
-          "'hip':getattr(torch.version,'hip',None),'cuda':torch.version.cuda,"
-          "'ok':bool(torch.cuda.is_available()),"
-          "'name':(torch.cuda.get_device_name(0) if torch.cuda.is_available() else '')}))")
+_PROBE = """
+import json
+import torch
+d = {'v': torch.__version__, 'hip': getattr(torch.version, 'hip', None),
+     'cuda': torch.version.cuda, 'ok': bool(torch.cuda.is_available()),
+     'name': (torch.cuda.get_device_name(0) if torch.cuda.is_available() else ''),
+     'tv_version': '', 'tv_ok': False, 'tv_error': ''}
+try:
+    import torchvision
+    d['tv_version'] = torchvision.__version__
+    # 仅能 import 不代表扩展算子可用；在 CPU 上实跑，避免依赖显卡初始化状态。
+    torchvision.ops.nms(torch.zeros(1, 4, device='cpu'), torch.zeros(1, device='cpu'), 0.5)
+    d['tv_ok'] = True
+except Exception as e:
+    # torchvision 坏了仍要保留健康 torch 的信息，让调用方只修复损坏的包。
+    d['tv_error'] = type(e).__name__ + ': ' + str(e)
+print(json.dumps(d))
+"""
 
 
 def probe_torch(python_exe, env=None, timeout=180):
     """
-    {'installed': bool, 'backend': 'rocm'/'cuda'/'cpu'/None, 'version', 'ok', 'name', 'error'}
+    返回 torch 的 installed/backend/version/ok/name/error，以及 tv_version/tv_ok/tv_error。
     import torch 要几秒，ROCm 首次还会更久，超时给宽一点
     """
+    tv_failed = {"tv_version": "", "tv_ok": False, "tv_error": "torch 探测未完成，无法检查 torchvision"}
     try:
         r = subprocess.run([python_exe, "-c", _PROBE], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", env=env, timeout=timeout,
                            creationflags=_NO_WINDOW)
     except Exception as e:
-        return {"installed": False, "backend": None, "error": str(e)}
+        return {"installed": False, "backend": None, "error": str(e), **tv_failed}
     line = (r.stdout or "").strip().splitlines()
     if r.returncode != 0 or not line:
         err = (r.stderr or "").strip().splitlines()
         no_torch = any("No module named 'torch'" in x for x in err)
         return {"installed": not no_torch, "backend": None,
-                "error": err[-1] if err else f"退出码 {r.returncode}"}
+                "error": err[-1] if err else f"退出码 {r.returncode}", **tv_failed}
     try:
         d = json.loads(line[-1])
     except ValueError:
-        return {"installed": True, "backend": None, "error": line[-1]}
+        return {"installed": True, "backend": None, "error": line[-1], **tv_failed}
     backend = "rocm" if d.get("hip") or "rocm" in str(d.get("v", "")).lower() else (
         "cuda" if d.get("cuda") else "cpu")
     return {"installed": True, "backend": backend, "version": d.get("v"), "ok": d.get("ok"),
-            "name": d.get("name") or "", "error": ""}
+            "name": d.get("name") or "", "error": "", "tv_version": d.get("tv_version") or "",
+            "tv_ok": bool(d.get("tv_ok")), "tv_error": d.get("tv_error") or ""}
 
 
 def installed_rocm_packages(python_exe, env=None):
@@ -249,6 +270,17 @@ FAMILY_PREFIXES = ("torch", "rocm", "_rocm", "triton")
 
 class PlanError(Exception):
     pass
+
+
+def paired_versions(torch_version):
+    """torch 2.x.y 对应 torchvision 0.(x+15).y、torchaudio 2.x.y。"""
+    # +rocm 等本地构建标签由 AMD 源决定；预发布后缀保留，避免 nightly 被配到正式版。
+    m = re.fullmatch(r"2\.(\d+)\.(\d+)((?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?)"
+                     r"(?:\+[a-zA-Z0-9.]+)?", str(torch_version or ""))
+    if not m:
+        raise PlanError(f"无法确定 torch {torch_version} 的配套版本，请记录版本并反馈给启动器维护者")
+    minor, patch, suffix = int(m[1]), int(m[2]), m[3]
+    return {"torchvision": f"0.{minor + 15}.{patch}{suffix}", "torchaudio": f"2.{minor}.{patch}{suffix}"}
 
 
 def _packaging():
@@ -435,6 +467,18 @@ class Planner:
             specs[n] = specs.get(n, self.SpecifierSet("")) & req.specifier
             extras[n] = extras.get(n, set()) | set(req.extras)
             queue.append(n)
+        if any(n in specs for n in ("torch", "torchvision", "torchaudio")):
+            # 先确定 torch，再给另外两件套补约束。不能依赖元数据一定写了 torch==：
+            # 部分 AMD wheel 只写 torch，此时各自挑最新版会得到 ABI 不配套的组合。
+            got = self.best("torch", specs.get("torch", self.SpecifierSet("")))
+            if got is None:
+                raise PlanError(f"AMD 源里没有适合这个 Python（{self.pytag}）的 torch")
+            torch_ver = str(got[0])
+            specs["torch"] = self.SpecifierSet("==" + torch_ver)
+            extras.setdefault("torch", set())
+            for name, version in paired_versions(torch_ver).items():
+                specs[name] = specs.get(name, self.SpecifierSet("")) & self.SpecifierSet("==" + version)
+            queue = ["torch"] + [n for n in queue if n != "torch"]
         steps = 0
         while queue:
             steps += 1

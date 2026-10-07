@@ -2737,10 +2737,11 @@ def _uninstall_torch(self, py, cwd, log, env, with_rocm=True):
 def _predownload_rocm(self, py, gfx, nightly, log):
     """
     读 AMD 源算出 torch / rocm 一族的 wheel，用断点续传下到共享缓存（sha256 校验）。
-    返回 (plan, 本地路径列表)；任何失败返回 (None, None)，调用方退回普通 pip 安装。
+    返回 (plan, 本地路径列表)；失败时路径为 None，保留已解析的 plan 给 pip 直装约束版本。
     """
     import cuda_compat as cc
     index = amd_rocm.ROCM_NIGHTLY_INDEX if nightly else amd_rocm.ROCM_INDEX
+    plan = None
     try:
         pytag = cc.python_tag(py)
         if not pytag:
@@ -2782,7 +2783,8 @@ def _predownload_rocm(self, py, gfx, nightly, log):
         log(f"[环境] 预下载没成功（{e}），改用 pip 直接安装\n")
     except Exception as e:
         log(f"[环境] 预下载没成功（{e}），改用 pip 直接安装\n")
-    return None, None
+    # 下载失败仍保留已经解析好的版本，pip 直装回退必须安装同一套配套包。
+    return plan, None
 
 
 def _make_forge_venv(self, target, log, env):
@@ -2803,12 +2805,67 @@ def _make_forge_venv(self, target, log, env):
     return _forge_env_python(self._deploy_cfg, target)
 
 
+def _repair_rocm_torchvision(self, py, gfx, cwd, log, env, info):
+    """torch 已可用时只修 torchvision，避免重新下载数 GB 的 torch/ROCm。"""
+    try:
+        version = amd_rocm.paired_versions(info.get("version"))["torchvision"]
+    except amd_rocm.PlanError as e:
+        log(f"[环境] torchvision 修复失败：{e}\n")
+        return False
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
+    log(f"[环境] ROCm torch {info.get('version')} 可用，但 torchvision "
+        f"{info.get('tv_version') or '未知版本'} 检查失败：{info.get('tv_error') or 'NMS 算子不可用'}\n"
+        f"[环境] 保留当前 torch，修复配套的 torchvision {version}...\n")
+    for nightly in (False, True):
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        # 正式源能装上但核验失败时也要重装，否则 pip 会跳过同版本的 nightly wheel。
+        rc = self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y", "torchvision"],
+                                  cwd, log, env=env, timeout=1200)
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        if rc != 0:
+            log("[环境] torchvision 卸载失败，请停止正在使用该环境的程序，再点「把安装目录的环境切换成所选显卡」\n")
+            return False
+        src = "AMD nightly 源" if nightly else "AMD 正式源"
+        log(f"[环境] 从{src}安装配套的 torchvision...\n")
+        # 同时钉住当前 torch（包括 +rocm 构建号），防止 pip 为满足依赖偷偷替换它。
+        args = ["-m", "pip", "install"] + amd_rocm.pip_common_args(nightly, SHARED_CACHE_PIP)
+        args += [f"torch[device-{gfx}]=={info['version']}", f"torchvision[device-{gfx}]=={version}"]
+        rc = self._deploy_run_cmd(py, args, cwd, log, env=env, timeout=5400)
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        if rc == 0:
+            self._deploy_run_cmd(amd_rocm.rocm_sdk_exe(py), ["init"], cwd, log, env=env, timeout=1800)
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            checked = amd_rocm.probe_torch(py, env=env, timeout=300)
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            if (checked.get("backend") == "rocm" and checked.get("ok") and checked.get("tv_ok")):
+                log(f"[环境] torchvision 修复成功：torch {checked.get('version')} / "
+                    f"torchvision {checked.get('tv_version')}，CPU NMS 算子核验通过\n")
+                return True
+            log(f"[环境] torchvision 修复后核验失败：{checked.get('tv_error') or checked.get('error') or 'torch 无法使用 AMD 显卡'}\n")
+        if not nightly:
+            log("[环境] 正式源未能修复，改用 AMD nightly 源重试同一配套版本\n")
+    log("[环境] torchvision 修复失败。请保留以上日志，确认 AMD 显卡型号和网络后重试；"
+        "若源里没有配套版本，请把 torch 版本和日志反馈给启动器维护者\n")
+    return False
+
+
 def _install_rocm_torch(self, py, gfx, cwd, log, env):
     """装 ROCm 版 torch（AMD 正式源 → 失败换 nightly 源）+ rocm-sdk init，装完核验。成功返回 True"""
     info = amd_rocm.probe_torch(py, env=env)
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
     if info.get("backend") == "rocm" and info.get("ok"):
-        log(f"[环境] 已是 ROCm 版 torch {info.get('version')}（{info.get('name')}），跳过安装\n")
-        return True
+        if info.get("tv_ok"):
+            log(f"[环境] 已是 ROCm 版 torch {info.get('version')}（{info.get('name')}），"
+                f"torchvision {info.get('tv_version')} 的 NMS 核验通过，跳过安装\n")
+            return True
+        return _repair_rocm_torchvision(self, py, gfx, cwd, log, env, info)
     if info.get("installed"):
         _uninstall_torch(self, py, cwd, log, env)
     ok = False
@@ -2827,8 +2884,30 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
             if rc != 0 and not self._deploy_cancel.is_set():
                 log("[环境] 从本地文件安装没成功，改用 pip 直接从 AMD 源安装 ...\n")
         if rc != 0:
-            rc = self._deploy_run_cmd(py, ["-m", "pip"] + amd_rocm.pip_install_args(gfx, nightly, SHARED_CACHE_PIP),
-                                      cwd, log, env=env, timeout=5400)
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            try:
+                torch_version = next((i["version"] for i in (plan or []) if i["name"] == "torch"), None)
+                if not torch_version:
+                    # METADATA / Range 读取失败仍可只读索引决定 torch 版本；不能退回
+                    # 不限版本的三件套，否则 pip 会绕过 Planner 的配套约束。
+                    import cuda_compat as cc
+                    pytag = cc.python_tag(py)
+                    if not pytag:
+                        raise amd_rocm.PlanError("无法确定目标 Python 版本")
+                    index = amd_rocm.ROCM_NIGHTLY_INDEX if nightly else amd_rocm.ROCM_INDEX
+                    planner = amd_rocm.Planner(index, pytag, prerelease=nightly)
+                    got = planner.best("torch", planner.SpecifierSet(""))
+                    if got is None:
+                        raise amd_rocm.PlanError("AMD 源里没有适合这个 Python 的 torch")
+                    torch_version = str(got[0])
+                args = amd_rocm.pip_install_args(gfx, nightly, SHARED_CACHE_PIP, torch_version)
+            except Exception as e:
+                log(f"[环境] 无法确定配套版本（{e}），请检查 AMD 源连接和 Python 版本；跳过这个源\n")
+                continue
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            rc = self._deploy_run_cmd(py, ["-m", "pip"] + args, cwd, log, env=env, timeout=5400)
         if rc == 0:
             ok = True
             break
@@ -2842,9 +2921,15 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
     if rc != 0:
         log("[环境] rocm-sdk init 没成功（上面有原因），torch 可能仍能用，继续核验\n")
     info = amd_rocm.probe_torch(py, env=env, timeout=300)
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
     if info.get("backend") != "rocm":
         log(f"[环境] 核验失败：装上的不是 ROCm 版 torch（{info.get('version') or info.get('error')}）。"
             "多半是这个显卡型号在 AMD 的源里没有对应的包\n")
+        return False
+    if not info.get("tv_ok"):
+        log(f"[环境] torchvision 核验失败：{info.get('tv_error') or 'NMS 算子不可用'}。"
+            "请在「环境部署」页确认 AMD 显卡和型号，再点「把安装目录的环境切换成所选显卡」修复\n")
         return False
     if info.get("ok"):
         log(f"[环境] ROCm 版 torch {info.get('version')} 就绪，识别到显卡：{info.get('name') or '未知'}\n")

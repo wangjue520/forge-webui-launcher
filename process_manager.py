@@ -95,6 +95,13 @@ _AMD_FATAL_HINT = (
 
 def _fatal_hint_for(text, rocm=False):
     low = (text or "").lower()
+    if "operator torchvision::nms does not exist" in low:
+        if rocm:
+            return ("[启动器] 启动失败：torch 和 torchvision 不配套，torchvision 的 NMS 算子不可用。\n"
+                    "  · 到「环境部署」页，选好 AMD 显卡和型号，"
+                    "点「把安装目录的环境切换成所选显卡」自动修复，然后重新启动")
+        return ("[启动器] 启动失败：torchvision 和 torch 不配套，torchvision 的 NMS 算子不可用。\n"
+                "  · 请卸载这个 WebUI 环境里的 torch / torchvision，然后重新启动，让 Forge 重新安装配套版本")
     if rocm and any(k in low for k in ("pytorch is not able to access any compute device",
                                         "torch is not able to use gpu", "hip error", "no hip gpus")):
         return _AMD_FATAL_HINT
@@ -757,6 +764,7 @@ class InstanceRunner:
             # 与新一轮启动擦肩时 self.proc 可能已被重置，没有进程可读就收工
             return
         url_re = _COMFY_URL_RE if comfy else _URL_RE
+        startup_error = ""
         try:
             while True:
                 # read1() 而非 read()：后者会攒满 4096 字节才返回，输出停顿时日志卡住不显示
@@ -770,6 +778,13 @@ class InstanceRunner:
                 self.output_tail = combined[-500:]
                 if not self.fatal_hint and not self.url:
                     self.fatal_hint = _fatal_hint_for(combined, self.cfg.get("gpu_backend") == "rocm")
+                if not self.url:
+                    # 单独记住异常，免得长堆栈或 pause 把错误挤出 output_tail；
+                    # 通用提示到退出才生成，让后续出现的 nms 等专门提示优先。
+                    error = re.search(r"Traceback \(most recent call last\):|\b(?:\w*Error|ERROR)\b[^\r\n]*",
+                                      combined)
+                    if error:
+                        startup_error = error.group(0)[-500:]
 
                 if not comfy and _BIND_ERROR_RE.search(combined) and not self.url:
                     self.set_status("starting",
@@ -791,7 +806,11 @@ class InstanceRunner:
             manager_restart = "restarting" in self.output_tail.lower()
             # 还没就绪就退出、且输出里认出了致命错误：webui.bat 结尾有 pause，
             # 按任意键后返回码是 0，不能凭返回码当成「正常退出」
-            failed_start = bool(self.fatal_hint) and not self.url
+            failed_start = bool(self.fatal_hint or startup_error) and not self.url
+            if failed_start and not self.fatal_hint:
+                self.fatal_hint = (f"[启动器] 启动失败：程序在监听地址出现前报错并退出。\n"
+                                   f"  · {startup_error}\n"
+                                   "  · 请查看上方完整错误日志，按报错修复环境后重试；无法判断时请把日志发给维护者")
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
             if failed_start:
                 self.log(self.fatal_hint + "\n")
@@ -808,13 +827,13 @@ class InstanceRunner:
                 self.proc = None
                 self.url = None
                 self.port = None
-                if manager_restart:
+                if failed_start:
+                    self.set_status("stopped", "启动失败（原因见运行日志末尾）")
+                elif manager_restart:
                     self.log("[启动器] 这是程序自己的自动重启（ComfyUI-Manager 装/卸节点后就是这样重启的），"
                              "不是崩溃。如果界面还能正常打开就不用管——新进程可能已在后台运行；"
                              "打不开的话再点一次「启动」。\n")
                     self.set_status("stopped", "已正常退出（自动重启）")
-                elif failed_start:
-                    self.set_status("stopped", "启动失败（原因见运行日志末尾）")
                 elif rc == 0:
                     self.set_status("stopped", "已正常退出")
                 else:
