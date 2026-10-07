@@ -267,8 +267,10 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
   }
 
+  let libSaved = { enabled: false, path: "" };   // 后端当前生效的设置（输入框里没提交的改动不算）
   function renderLibrary(st) {
     if (!st) return;
+    libSaved = { enabled: !!st.enabled, path: st.path || "" };
     $("#lib-enabled").checked = !!st.enabled;
     $("#lib-path").value = st.path || "";
     $("#lib-merge").disabled = !st.enabled;
@@ -308,11 +310,15 @@
   }
 
   async function setLibrary(path, enabled) {
+    const wasEnabled = libSaved.enabled;
     try {
       const r = await App.api.library_set(path, enabled);
       if (r && r.ok === false) { App.toast(r.error || "设置失败", "error", 6000); loadLibrary(); return; }
       renderLibrary(r);
-      App.toast(enabled ? "共享模型库已开启" + (r.note ? "，" + r.note : "") : "已关闭共享模型库", "ok", 5000);
+      if (r.changed === false) return;
+      const msg = enabled ? (wasEnabled ? "模型库位置已改为 " + r.path : "共享模型库已开启")
+        : (wasEnabled ? "已关闭共享模型库" : "已保存模型库位置（还没开启）");
+      App.toast(msg + (r.note ? "。" + r.note : ""), "ok", r.note ? 9000 : 5000);
       if (App.pages.models && App.pages.models.reloadAll) App.pages.models.reloadAll();
     } catch (e) { App.toast("设置失败：" + e.message, "error"); }
   }
@@ -362,6 +368,16 @@
         if (r && r.ok && r.path) setLibrary(r.path, $("#lib-enabled").checked || true);
       });
       $("#lib-merge").addEventListener("click", mergePreview);
+      // 直接在输入框里改路径：以前没有监听，改了只是显示变了、根本没保存，
+      // 切个页面又被刷回旧路径——这就是「有时候改了不生效」
+      const commitPath = () => {
+        const path = $("#lib-path").value.trim().replace(/^"|"$/g, "");
+        if (path === libSaved.path) return;
+        if (!path && libSaved.enabled) { App.toast("模型库位置不能为空；要停用请取消勾选「开启共享模型库」", "error"); $("#lib-path").value = libSaved.path; return; }
+        setLibrary(path, $("#lib-enabled").checked);
+      };
+      $("#lib-path").addEventListener("change", commitPath);
+      $("#lib-path").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); e.target.blur(); } });
 
       App.on("instances", "status", (e) => {
         const i = inst(e.iid);

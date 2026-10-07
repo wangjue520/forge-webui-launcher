@@ -3788,11 +3788,26 @@ def _api_library_set(self, path, enabled):
             root = (c.get("webui_root") or "").strip()
             if root and (_same_path(path, root) or os.path.abspath(path).startswith(os.path.abspath(root) + os.sep)):
                 return {"ok": False, "error": f"模型库不能放在实例「{name}」的目录里面，请选一个独立的文件夹"}
+    old_path = (self.cfg.get("model_library_path") or "").strip()
+    was_enabled = bool(self.cfg.get("model_library_enabled"))
     self.cfg["model_library_path"] = path
     self.cfg["model_library_enabled"] = bool(enabled)
     cm.save_config(self.cfg)
-    note = "正在运行的实例需要重启后才会用上模型库" if _any_instance_running(self) else ""
-    return {"ok": True, "note": note, **_api_library_status(self)}
+    # 之前生成的合并预览是按旧位置算的，位置/开关一变就作废，免得按旧计划往新库里搬
+    self._merge_plan = None
+    notes = []
+    changed = bool(enabled) != was_enabled or not _same_path(path or ".", old_path or ".")
+    # 换了位置：旧库里的模型不会跟过来，新库是空的 → 看起来像「改了不生效 / 模型全没了」
+    if enabled and was_enabled and old_path and path and not _same_path(path, old_path) \
+            and os.path.isdir(old_path) and next(ml._walk_models(old_path), None):
+        notes.append(f"旧模型库（{old_path}）里的模型不会自动搬过来，需要的话把里面的文件夹整体移到新位置")
+    # WebUI / ComfyUI 只在启动时读取模型目录参数，正在运行的实例要重启才认新位置
+    running = [n for iid, n, _c in _all_instance_cfgs(self)
+               if (r := self._runners.get(iid)) is not None and r.running()]
+    if changed and running:
+        notes.append(f"正在运行的「{'、'.join(running)}」要重启后才会用上新设置")
+    return {"ok": True, "note": "；".join(notes), "changed": changed,
+            "running": running if changed else [], **_api_library_status(self)}
 
 
 def _api_library_merge_plan(self):
@@ -3800,6 +3815,7 @@ def _api_library_merge_plan(self):
     if not lib:
         return {"ok": False, "error": "请先开启共享模型库"}
     plan = ml.plan_merge(_all_instance_cfgs(self), lib, cm.comfy_layout)
+    plan["lib"] = lib
     self._merge_plan = plan
     by_inst = {}
     names = {iid: n for iid, n, _c in _all_instance_cfgs(self)}
@@ -3817,6 +3833,9 @@ def _api_library_merge_start(self):
     lib = _library_path(self)
     if not plan or not lib:
         return {"ok": False, "error": "请先生成合并预览"}
+    if not _same_path(plan.get("lib") or "", lib):
+        self._merge_plan = None
+        return {"ok": False, "error": "模型库位置在预览之后改过了，请重新点「合并各实例已有模型」生成预览"}
     if _any_instance_running(self):
         return {"ok": False, "error": "有实例正在运行，模型文件可能被占用。请先停止所有实例再合并。"}
     self._merge_plan = None
