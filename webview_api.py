@@ -1356,8 +1356,14 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
             # torch 的话 Forge 不会自己换，先卸掉
             log(f"[部署] 显卡：AMD {amd_rocm.gfx_label(self._deploy_cfg.get('amd_gfx'))}，"
                 "使用 ROCm 版 torch\n")
-            _drop_non_rocm_torch(self, _forge_env_python(self._deploy_cfg, target),
-                                 target, log, make_env())
+            # 启动器先自己装好（大包断点续传），装好后 Forge 见到 torch 已在就跳过；
+            # 没装成也不要紧，Forge 首次运行会按 TORCH_COMMAND 再装一次
+            py = _forge_env_python(self._deploy_cfg, target) or _make_forge_venv(self, target, log, make_env())
+            if py:
+                if not _install_rocm_torch(self, py, self._deploy_cfg.get("amd_gfx"), target, log, make_env()):
+                    log("[部署] 启动器预装 ROCm 版 torch 没成功，交给 Forge 首次运行时再装一次\n")
+            else:
+                log("[部署] 将由 Forge 首次运行时安装 ROCm 版 torch\n")
         else:
             try:
                 import torch_bootstrap
@@ -2728,14 +2734,73 @@ def _uninstall_torch(self, py, cwd, log, env, with_rocm=True):
     self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y"] + names, cwd, log, env=env, timeout=1200)
 
 
-def _drop_non_rocm_torch(self, py, cwd, log, env):
-    """部署 A 卡时：环境里已经有 N 卡/CPU 版 torch 就先卸掉（Forge 见到 torch 已装不会自己换）"""
-    if not py:
-        return
-    info = amd_rocm.probe_torch(py, env=env)
-    if info.get("installed") and info.get("backend") != "rocm":
-        log(f"[部署] 环境里已有非 ROCm 版 torch（{info.get('version') or info.get('error')}），先卸载\n")
-        _uninstall_torch(self, py, cwd, log, env)
+def _predownload_rocm(self, py, gfx, nightly, log):
+    """
+    读 AMD 源算出 torch / rocm 一族的 wheel，用断点续传下到共享缓存（sha256 校验）。
+    返回 (plan, 本地路径列表)；任何失败返回 (None, None)，调用方退回普通 pip 安装。
+    """
+    import cuda_compat as cc
+    index = amd_rocm.ROCM_NIGHTLY_INDEX if nightly else amd_rocm.ROCM_INDEX
+    try:
+        pytag = cc.python_tag(py)
+        if not pytag:
+            raise amd_rocm.PlanError("无法确定目标 Python 的版本")
+        log(f"[环境] 读取 AMD 源索引，计算需要下载的安装包（{pytag}）...\n")
+        plan = amd_rocm.Planner(index, pytag, prerelease=nightly).plan(amd_rocm.root_requirements(gfx))
+        log("[环境] 需要：" + "、".join(f"{i['name']} {i['version']}" for i in plan) + "\n")
+        os.makedirs(ROCM_WHEEL_CACHE, exist_ok=True)
+        paths = []
+        for n, it in enumerate(plan, 1):
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            dest = os.path.join(ROCM_WHEEL_CACHE, it["filename"])
+            if os.path.isfile(dest) and (not it["sha256"] or
+                                         pe.sha256_file(dest).lower() == it["sha256"].lower()):
+                log(f"[环境] ({n}/{len(plan)}) {it['filename']} 已在缓存里，跳过下载\n")
+            else:
+                if os.path.isfile(dest):
+                    os.remove(dest)
+                log(f"[环境] ({n}/{len(plan)}) 下载 {it['filename']}（断点续传，断了会接着下）...\n")
+                pe.download_file(it["url"], dest,
+                                 progress_cb=lambda d, t: self._emit("deploy", "progress", downloaded=d, total=t),
+                                 cancel_flag=self._deploy_cancel.is_set, cfg=None,
+                                 log_cb=lambda m: log(m + "\n"))
+                self._emit("deploy", "progress", downloaded=0, total=0)
+                if it["sha256"]:
+                    try:
+                        pe.verify_downloaded_file(dest, it["sha256"], what=it["filename"])
+                    except pe.PortableEnvError:
+                        os.remove(dest)
+                        raise
+            paths.append(dest)
+        return plan, paths
+    except _DeployCancelled:
+        raise
+    except pe.PortableEnvError as e:
+        if "已取消" in str(e):
+            raise _DeployCancelled()
+        log(f"[环境] 预下载没成功（{e}），改用 pip 直接安装\n")
+    except Exception as e:
+        log(f"[环境] 预下载没成功（{e}），改用 pip 直接安装\n")
+    return None, None
+
+
+def _make_forge_venv(self, target, log, env):
+    """
+    Forge 走 venv（系统 Python）时，venv 本来要等 webui.bat 首次运行才建。A 卡要在那之前
+    先装 ROCm 版 torch，所以照 webui.bat 的做法（%PYTHON% -m venv venv）提前建好；
+    失败返回空串，交给 Forge 自己来
+    """
+    ov = cm.build_launch_env_overrides(self._deploy_cfg, target)
+    if ov.get("VENV_DIR") == "-":
+        return ""
+    base = (ov.get("PYTHON") or "").strip('"') or shutil.which("python") or ""
+    if not base:
+        return ""
+    log("[部署] 先创建 venv，以便提前安装 ROCm 版 torch\n")
+    if self._deploy_run_cmd(base, ["-m", "venv", os.path.join(target, "venv")], target, log, env=env) != 0:
+        return ""
+    return _forge_env_python(self._deploy_cfg, target)
 
 
 def _install_rocm_torch(self, py, gfx, cwd, log, env):
@@ -2750,10 +2815,20 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
     for nightly in (False, True):
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
-        log(f"\n[环境] 安装 ROCm 版 torch（{amd_rocm.gfx_label(gfx)}，"
-            f"{'nightly 源' if nightly else 'AMD 正式源'}）...\n")
-        rc = self._deploy_run_cmd(py, ["-m", "pip"] + amd_rocm.pip_install_args(gfx, nightly),
-                                  cwd, log, env=env, timeout=5400)
+        src = "nightly 源" if nightly else "AMD 正式源"
+        log(f"\n[环境] 安装 ROCm 版 torch（{amd_rocm.gfx_label(gfx)}，{src}）...\n")
+        plan, paths = _predownload_rocm(self, py, gfx, nightly, log)
+        rc = 1
+        if paths:
+            log("[环境] 大包已在本地，开始安装（其余小依赖由 pip 从 AMD 源补齐）...\n")
+            rc = self._deploy_run_cmd(
+                py, ["-m", "pip", "install"] + amd_rocm.pip_common_args(nightly, SHARED_CACHE_PIP)
+                + amd_rocm.local_install_args(plan, paths), cwd, log, env=env, timeout=5400)
+            if rc != 0 and not self._deploy_cancel.is_set():
+                log("[环境] 从本地文件安装没成功，改用 pip 直接从 AMD 源安装 ...\n")
+        if rc != 0:
+            rc = self._deploy_run_cmd(py, ["-m", "pip"] + amd_rocm.pip_install_args(gfx, nightly, SHARED_CACHE_PIP),
+                                      cwd, log, env=env, timeout=5400)
         if rc == 0:
             ok = True
             break
