@@ -70,6 +70,31 @@ def _parse_torch_spec(root_dir):
     return specs, tag
 
 
+def _parse_alt_torch_specs(root_dir):
+    """
+    launch_utils.py 里除主规格外、WebUI 自己写着的其它 torch 规格（按出现顺序），
+    比如 Neo 给 Nunchaku 用的 torch==2.11.0+cu130 torchvision==0.26.0+cu130。
+    驱动带不动主规格、而主规格在驱动支持的 CUDA 版本下又没有构建时，退到这些版本——
+    它们是 WebUI 作者自己验证过能跑的，比随便挑一个老版本可靠。
+    """
+    path = os.path.join(root_dir, "modules", "launch_utils.py")
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    out = []
+    for m in re.finditer(r'''TORCH_COMMAND["']\s*,\s*f?["']pip install ([^"']+)["']''', text):
+        specs = []
+        for tok in m.group(1).split():
+            pm = re.match(r"^([A-Za-z0-9_-]+)==([A-Za-z0-9.+!_]+)$", tok)
+            if pm:
+                specs.append((pm.group(1).lower(), pm.group(2)))
+        if specs and specs not in out:
+            out.append(specs)
+    return out[1:]
+
+
 def _python_tag(python_exe, log):
     """目标解释器的 wheel tag（如 cp311）和版本；拿不到返回 None"""
     try:
@@ -175,11 +200,13 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
         import mirror_manager as mm
         new_tag = cc.effective_tag(tag)
         if new_tag != tag:
-            cand = [f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"] + [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
+            def bases_for(t):
+                return [f"{mm.PYTORCH_OFFICIAL_WHL}/{t}"] + [f"{b}/{t}" for b in mm.PYTORCH_MIRROR_BASES]
             venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
             portable_py = os.path.join(root_dir, "python", "python.exe")
             pytag = cc.python_tag(venv_py if os.path.exists(venv_py) else portable_py)
-            new_specs, _base = cc.resolve_specs(specs, new_tag, cand, pytag)
+            new_specs, new_tag, _base = cc.resolve_compat(
+                [specs] + _parse_alt_torch_specs(root_dir), tag, bases_for, pytag)
             if not new_specs:
                 _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，这个 WebUI 需要的 torch "
                           "没有驱动能用的版本，请把显卡驱动升级到 580 以上；跳过预下载")

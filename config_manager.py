@@ -799,15 +799,21 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
     try:
         import mirror_manager as mm
         use_mirror = mm.resolve_mode(cfg)
-        official = f"{mm.PYTORCH_OFFICIAL_WHL}/{new_tag}"
-        mirrors = [f"{b}/{new_tag}" for b in mm.PYTORCH_MIRROR_BASES]
+        off_base, mirror_bases = mm.PYTORCH_OFFICIAL_WHL, list(mm.PYTORCH_MIRROR_BASES)
     except Exception:
-        use_mirror, official, mirrors = False, f"https://download.pytorch.org/whl/{new_tag}", []
-    bases = mirrors + [official] if use_mirror else [official] + mirrors
+        use_mirror, off_base, mirror_bases = False, "https://download.pytorch.org/whl", []
+
+    def bases_for(t):
+        official, mirrors = f"{off_base}/{t}", [f"{b}/{t}" for b in mirror_bases]
+        return mirrors + [official] if use_mirror else [official] + mirrors
+
     py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
     venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
     pytag = cc.python_tag(venv_py if os.path.isfile(venv_py) else py)
-    new_specs, base = cc.resolve_specs(specs, new_tag, bases, pytag)
+    # 同一个 CUDA 大版本里每个 tag 都试（2.12 起 CUDA 12 只有 cu126、没有 cu128），
+    # 实在没有再退到 WebUI 自己写着的备选 torch 版本
+    new_specs, new_tag, base = cc.resolve_compat(
+        [specs] + tb._parse_alt_torch_specs(root_dir), tag, bases_for, pytag, driver)
     if not new_specs:
         # 这个 WebUI 要的 torch 在驱动支持的 CUDA 版本下没有构建：硬装老 torch 只会更糟
         if notes is not None:
@@ -815,7 +821,7 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
                          f"{'、'.join(f'{n} {v}' for n, v in specs)} 没有驱动能用的版本，"
                          "请把显卡驱动升级到 580 以上（NVIDIA 官网或 GeForce Experience / NVIDIA App 更新）")
         return {}, False
-    index = base or bases[0]
+    index = base or bases_for(new_tag)[0]
     out = {
         "TORCH_INDEX_URL": index,
         "TORCH_COMMAND": "pip install " + " ".join(f"{n}=={v}" for n, v in new_specs)

@@ -29,7 +29,9 @@ _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 # 降级候选，由新到旧（cu129 只有个别版本有，不当候选）；cu118 之前的就不管了。
 # 同一个 CUDA 大版本内驱动是「小版本兼容」的：驱动显示 CUDA 12.2 照样能跑 cu128 的 torch，
-# 所以只按大版本降，12.x 驱动一律用 12 系最新的 cu128，不往更老的 tag 退。
+# 所以只按大版本降。但同一大版本里哪个 tag 有目标 torch 不一定：PyTorch 从 2.12 起
+# 不再发 cu128，CUDA 12 只剩 cu126（2.13 有 cu126、没有 cu128）——所以同大版本的
+# 每个 tag 都要试（candidate_tags / resolve_compat），不能只认最新的那个。
 FALLBACK_TAGS = ("cu128", "cu126", "cu124", "cu121", "cu118")
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -281,6 +283,60 @@ def is_legacy_gpu():
 
 
 LEGACY_TAG = "cu126"   # PyTorch 给老架构卡保留的最后一个 CUDA 系列（cu128 起已不含 sm_50/sm_60）
+
+
+# RTX 50 系（Blackwell，sm_120）只有 cu128 及以上才有内核，cu126 装上会报 no kernel image
+_BLACKWELL_RE = re.compile(r"RTX\s*50\d\d|RTX\s+PRO\s+\d+\s+Blackwell|Blackwell", re.IGNORECASE)
+
+
+def is_blackwell_gpu():
+    return any(_BLACKWELL_RE.search(n) for n in gpu_names())
+
+
+def candidate_tags(wanted_tag, driver=None):
+    """
+    驱动 / 显卡带不动 wanted_tag 时依次可以试的 tag（优先的在前）；带得动返回 [wanted_tag]。
+      · 老架构卡：只有 cu126
+      · 其余：驱动所在 CUDA 大版本里的所有候选（12.x 驱动 → cu128、cu126、cu124、cu121）
+      · RTX 50 系：去掉 cu128 以下的
+    """
+    first = effective_tag(wanted_tag, driver)
+    if first == wanted_tag:
+        return [wanted_tag]
+    if first == LEGACY_TAG and is_legacy_gpu():
+        return [LEGACY_TAG]
+    major = tag_cuda(first)[0]
+    need = tag_cuda(wanted_tag)
+    out = [t for t in FALLBACK_TAGS if tag_cuda(t)[0] == major and tag_cuda(t) < need]
+    if is_blackwell_gpu():
+        out = [t for t in out if tag_cuda(t) >= (12, 8)]
+    return out or [first]
+
+
+def resolve_compat(spec_sets, wanted_tag, bases_for, pytag=None, driver=None, log=None):
+    """
+    在候选 tag 里找第一个真有 wheel 的组合。
+    spec_sets：按优先顺序的 torch 规格列表（第一个是 WebUI 的主规格，后面是它代码里
+               自己写着的备选版本，比如 Neo 给 Nunchaku 用的 torch 2.11）
+    bases_for(tag) → 该 tag 的索引地址列表
+    先保证 torch 版本不变（主规格在所有候选 tag 上都试一遍），实在没有才退到备选版本。
+    返回 (specs, tag, base)；全部没有返回 (None, 首选 tag, 联上过的索引)；全部联不上（离线）
+    时按首选 tag 原样换版本号返回 (specs, tag, None)，和以前的行为一致。
+    """
+    tags = candidate_tags(wanted_tag, driver)
+    reached, offline = None, None
+    for specs in spec_sets:
+        for t in tags:
+            got, base = resolve_specs(specs, t, bases_for(t), pytag, log)
+            if got and base:
+                return got, t, base
+            if got and not base and offline is None:
+                offline = (got, t)       # 索引全都联不上
+            if base:
+                reached = base
+    if reached is None and offline:
+        return offline[0], offline[1], None
+    return None, tags[0], reached
 
 
 def effective_tag(wanted_tag, driver=None):
