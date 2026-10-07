@@ -103,6 +103,8 @@ https://civitai.com/models/12345/xxxx?modelVersionId=67890
 - 下完自动写入**封面图**和**触发词**（「模型管理」页能看到）
 - LoRA 开了「自动整理」的话会自动归类到子文件夹
 
+> ⚠ **C 站的类型标错时**：有些文本编码器、VAE 在 C 站被作者标成了「Checkpoint」，启动器会照着标签放进大模型文件夹。下载前看一眼「模型信息」里的类型和「保存位置」，不对就点「浏览…」改成正确的文件夹（对照 [模型放在哪个文件夹](04-要下哪些模型.md#四模型放在哪个文件夹)）。
+
 ### 第 4 步：在 WebUI 里用
 
 - 大模型：网页左上角 Checkpoint 下拉框旁边点 🔄 刷新，就能选到
@@ -168,7 +170,7 @@ https://civitai.com/models/12345/xxxx?modelVersionId=67890
 
 ## 六、不在 C 站 / liblib 的模型
 
-有些模型只发布在 **HuggingFace**（比如 Anima 的文本编码器和 VAE、Flux 官方文件）。启动器的「模型下载」页只认 C 站和 liblib 链接，HuggingFace 的文件这样下：
+有些模型只发布在 **HuggingFace**（比如 Flux 的官方文件；Anima 的文本编码器和 VAE 在 C 站也有搬运，见 [Anima 教程](05-Anima使用教程.md#二需要下载的-3-个文件)）。启动器的「模型下载」页只认 C 站和 liblib 链接，HuggingFace 的文件这样下：
 
 1. 国内把网址里的 `huggingface.co` 换成 **`hf-mirror.com`**，例如
    `https://hf-mirror.com/circlestone-labs/Anima/tree/main/split_files`

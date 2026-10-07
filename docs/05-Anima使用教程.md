@@ -26,37 +26,56 @@ Anima 是 CircleStone Labs 出的**二次元文生图模型**（2B 参数，基�
 
 ## 二、需要下载的 3 个文件
 
-| 文件 | 作用 | 大小 | 下载地址 |
+三个文件**都能在 C 站下载**，全程用启动器的「模型下载」页就行：
+
+| 文件 | 作用 | 大小 | C 站地址 |
 |---|---|---|---|
-| 主模型，如 `anima-aesthetic-v1.1.safetensors` | 画图本体 | 4.18GB | C 站 [Anima Official](https://civitai.com/models/2458426)（用启动器下载）/ HuggingFace |
-| `qwen_3_06b_base.safetensors` | 文本编码器（理解提示词） | 1.19GB | HuggingFace |
-| `qwen_image_vae.safetensors` | VAE（生成最终图片） | 254MB | HuggingFace |
+| 主模型，如 `anima-aesthetic-v1.1.safetensors` | 画图本体 | 约 4.2GB | [Anima Official](https://civitai.com/models/2458426) |
+| 文本编码器 `qwen_3_06b_base` | 理解提示词 | 约 1.2GB | [Qwen-3-0.6B base/anima](https://civitai.com/models/2400206/qwen-3-06b-baseanima?modelVersionId=2698710) |
+| VAE `qwen_image_vae` | 生成最终图片 | 约 250MB | [C 站 VAE 页面](https://civitai.com/models/1912333?modelVersionId=2164481) |
 
-### 下载主模型（用启动器）
+> C 站上的文件名可能和上表略有不同（作者重新命名过），不影响使用，在 WebUI 里认准名字里带 `qwen` 的那两个就行。
 
-1. 浏览器打开 C 站 https://civitai.com/models/2458426 ，点上面的版本标签选 Turbo 或 Aesthetic
-2. 复制地址栏网址 → 启动器「模型下载」页粘贴 →「获取信息」→「下载并放入对应文件夹」
-3. Forge Neo 会自动放进 `models\Stable-diffusion\`
+### 第 1 个：主模型
 
-### 下载文本编码器和 VAE（浏览器）
+1. 浏览器打开 https://civitai.com/models/2458426 ，点上面的版本标签选 Turbo 或 Aesthetic
+2. 复制地址栏网址 → 启动器「模型下载」页粘贴 →「获取信息」
+3. 「保存位置」自动是 `models\Stable-diffusion`，不用改 →「下载并放入对应文件夹」
 
-这两个只在 HuggingFace 上，启动器的「模型下载」页不支持，用浏览器直接下：
+### 第 2 个：文本编码器（⚠ 要改保存位置）
 
-**国内（hf-mirror 镜像，不用梯子）**：
+1. 复制这个链接：`https://civitai.com/models/2400206/qwen-3-06b-baseanima?modelVersionId=2698710`
+2. 启动器「模型下载」粘贴 →「获取信息」
+3. ⚠ **这个文件在 C 站上被标成了「Checkpoint（大模型）」类型**，启动器会按大模型把保存位置填成 `models\Stable-diffusion`——**这是错的**。点「保存位置」右边的「浏览…」，改成：
+   - Forge Neo：安装目录下的 `models\text_encoder`（没有这个文件夹就在选择窗口里新建一个）
+   - ComfyUI：`models\text_encoders`
+   - 开了共享模型库：模型库里的 `text_encoders`
+4. 「下载并放入对应文件夹」
+
+> 放错到 `Stable-diffusion` 里也不会坏事，只是它会出现在大模型下拉框里（别选它当大模型），并且 VAE / Text Encoder 框里找不到它。发现放错了，把文件挪到上面的文件夹即可。
+
+### 第 3 个：VAE
+
+1. 复制这个链接：`https://civitai.com/models/1912333?modelVersionId=2164481`
+2. 启动器「模型下载」粘贴 →「获取信息」
+3. **看一眼「保存位置」**：应该是 `models\VAE`（ComfyUI 是 `models\vae`）。如果不是，同样点「浏览…」改过来
+4. 「下载并放入对应文件夹」
+
+### 备用：HuggingFace 下载
+
+C 站打不开、又没有梯子时，三个文件也可以从 HuggingFace 的国内镜像用浏览器直接下：
+
 - 文本编码器：https://hf-mirror.com/circlestone-labs/Anima/resolve/main/split_files/text_encoders/qwen_3_06b_base.safetensors
 - VAE：https://hf-mirror.com/circlestone-labs/Anima/resolve/main/split_files/vae/qwen_image_vae.safetensors
+- 主模型（各版本）：https://hf-mirror.com/circlestone-labs/Anima/tree/main/split_files/diffusion_models
 
-**有梯子（官方）**：把上面网址里的 `hf-mirror.com` 换成 `huggingface.co`。
-
-主模型也可以在这里下：https://hf-mirror.com/circlestone-labs/Anima/tree/main/split_files/diffusion_models
-
-> 点链接就直接开始下载。浏览器下载很慢的话，把链接复制到 IDM / 迅雷 / Motrix 等下载工具里。
+点链接就开始下载（有梯子可以把 `hf-mirror.com` 换成 `huggingface.co`）。下好后按下一节放进对应文件夹。
 
 ---
 
 ## 三、放到正确的文件夹
 
-**这一步最容易错**。打开你的 Forge 安装目录（「一键启动」页的「根目录」），按下表放：
+用启动器按上一节下载并改好保存位置的，这一节**用来核对**；用浏览器下载的，按下表手动放。打开你的 Forge 安装目录（「一键启动」页的「根目录」）：
 
 ### Forge Neo
 
@@ -83,7 +102,7 @@ D:\AI\forge\
 
 | 文件 | 放到 |
 |---|---|
-| 主模型 | `models\diffusion_models\`（⚠ 不是 checkpoints！用启动器从 C 站下载的会被放进 `checkpoints`，要手动挪过去） |
+| 主模型 | `models\diffusion_models\`（⚠ 不是 checkpoints！用启动器下载时把「保存位置」改成这里） |
 | `qwen_3_06b_base.safetensors` | `models\text_encoders\` |
 | `qwen_image_vae.safetensors` | `models\vae\` |
 
@@ -177,7 +196,7 @@ worst quality, low quality, score_1, score_2, score_3, artist name, blurry, jpeg
 |---|---|
 | 出图是一片噪点 / 彩色雪花 | VAE 没选或选错了。VAE / Text Encoder 下拉框里选上 `qwen_image_vae` |
 | 报错 / 出的图跟提示词完全无关 | 文本编码器没选。下拉框里选上 `qwen_3_06b_base` |
-| 下拉框里找不到 qwen 那两个文件 | 文件夹放错了（看第三节），或者没点 🔄 刷新 |
+| 下拉框里找不到 qwen 那两个文件 | 文件夹放错了（最常见：从 C 站下载文本编码器时没改「保存位置」，被放进了 `Stable-diffusion`），挪到第三节的文件夹；或者没点 🔄 刷新 |
 | 画面发灰、糊 | Turbo 版 CFG 没设成 1；或者 Aesthetic / Base 版步数太少（< 25） |
 | 画师风格不生效 | 画师名前面没加 `@` |
 | 用了 SDXL / Illustrious 的 LoRA 没效果 | Anima 只能用 **Anima 的 LoRA**（C 站 Base Model 选 Anima） |
