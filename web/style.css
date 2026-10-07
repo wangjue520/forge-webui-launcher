@@ -1170,3 +1170,7 @@ textarea.ta-prompt {
   .h3-row { grid-template-columns: minmax(0, 1fr) auto; }
   .h3-row select { grid-column: 1 / -1; margin-left: 25px; }
 }
+
+/* 部署页：显卡类型 */
+.deploy-gpu-actions { margin: 10px 0 0; }
+.deploy-gpu-actions .hint { margin: 0; flex: 1; min-width: 220px; }

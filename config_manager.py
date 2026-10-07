@@ -85,6 +85,9 @@ DEFAULT_CONFIG = {
     "comfy_flash": False,         # --use-flash-attention
     "comfy_fast": False,          # --fast
     "comfy_enable_manager": True,  # 装了内置 ComfyUI-Manager 依赖时自动加 --enable-manager
+    # 显卡环境：""=NVIDIA（CUDA，默认）/ "rocm"=AMD（ROCm）；amd_gfx 是 A 卡架构（gfx1100 等），见 amd_rocm.py
+    "gpu_backend": "",
+    "amd_gfx": "",
     "deploy_comfy_nodes": None,    # 部署 ComfyUI 时顺带装的节点 id 列表；None = comfy_nodes 里的默认推荐
     # ---------------- V3：多实例 ----------------
     # 实例表：每个实例保存下面 INSTANCE_KEYS 里的全部键。顶层同名键始终是
@@ -119,6 +122,7 @@ INSTANCE_KEYS = (
     "reserve_vram_gb", "unet_precision", "vae_precision", "text_enc_precision",
     "attention_impl", "fast_fp16", "pin_shared_memory", "expandable_segments",
     "comfy_sage", "comfy_flash", "comfy_fast",
+    "gpu_backend", "amd_gfx",
 )
 
 KIND_LABELS = {"comfyui": "ComfyUI", "neo2": "Forge Neo", "neo": "Forge Neo",
@@ -765,12 +769,27 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
             # 当前版本要装的完全一致；提取不到就不注入，保持官方默认。
             # 用户自己在系统环境里设过 TORCH_COMMAND / TORCH_INDEX_URL 的
             # 不插手——用户显式配置优先级最高。
-            if "TORCH_COMMAND" not in os.environ and "TORCH_INDEX_URL" not in os.environ:
+            if "TORCH_COMMAND" not in os.environ and "TORCH_INDEX_URL" not in os.environ \
+                    and cfg.get("gpu_backend") != "rocm":
                 torch_mirror = mm.forge_torch_mirror_index(root_dir)
                 if torch_mirror:
                     overrides["TORCH_INDEX_URL"] = torch_mirror
     except Exception:
         pass  # 加速是锦上添花，任何异常都不该影响正常启动
+
+    if cfg.get("gpu_backend") == "rocm":
+        # A 卡：环境变量照 CS1o 教程；还没装 torch 时让 Forge 直接装 ROCm 版
+        # （Forge 执行 "<python>" -m <TORCH_COMMAND>，装完顺手 rocm-sdk init）
+        import amd_rocm
+        overrides.update(amd_rocm.ROCM_ENV)
+        gfx = (cfg.get("amd_gfx") or "").strip()
+        if gfx and "TORCH_COMMAND" not in os.environ:
+            if overrides.get("VENV_DIR") == "-" and overrides.get("PYTHON"):
+                scripts = os.path.join(os.path.dirname(overrides["PYTHON"].strip('"')), "Scripts")
+            else:
+                scripts = os.path.join(root_dir, "venv", "Scripts")
+            overrides["TORCH_COMMAND"] = amd_rocm.forge_torch_command(gfx, scripts)
+        return overrides
 
     # 显卡驱动带不动 Forge 默认的 torch（Neo 现在是 cu130，要 580+ 驱动）：
     # 换成驱动支持的 CUDA 版本；已经装了带不动的 torch 就让这次启动重装
@@ -1037,6 +1056,10 @@ def build_comfy_args(cfg):
             args += shlex.split(extra, posix=False)
         except ValueError:
             args += extra.split()
+    if cfg.get("gpu_backend") == "rocm":
+        # A 卡：去掉 N 卡专用参数（sage/flash/cuda-malloc 等），补上 ROCm 推荐参数
+        import amd_rocm
+        args = amd_rocm.apply_args(args, amd_rocm.COMFY_ARGS)
     return args
 
 
@@ -1060,6 +1083,9 @@ def build_comfy_env(cfg, root_dir):
             env["HF_ENDPOINT"] = mm.HF_MIRROR
     except Exception:
         pass
+    if cfg.get("gpu_backend") == "rocm":
+        import amd_rocm
+        env.update(amd_rocm.ROCM_ENV)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env["GIT_TERMINAL_PROMPT"] = "0"
@@ -1165,7 +1191,15 @@ def build_commandline_args(cfg):
     if extra:
         args.append(extra)
 
-    return " ".join(args)
+    out = " ".join(args)
+    if cfg.get("gpu_backend") == "rocm":
+        # A 卡：去掉 N 卡专用参数（--xformers/--sage/--flash/--cuda-malloc），补上 ROCm 推荐参数。
+        # 只有新版 Neo 有 --use-pytorch-cross-attention / --disable-smart-memory，老 Forge 用旧写法
+        import amd_rocm
+        out = amd_rocm.apply_args_str(
+            out, amd_rocm.FORGE_ARGS if uses_new_neo_args(cfg)
+            else ["--cuda-stream", "--attention-pytorch", "--pin-shared-memory"])
+    return out
 
 
 _BAT_LINE_RE = re.compile(r"^(set\s+COMMANDLINE_ARGS\s*=).*$", re.IGNORECASE)

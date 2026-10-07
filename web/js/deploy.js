@@ -12,6 +12,68 @@
     running = v;
     $("#deploy-start").disabled = v;
     $("#deploy-cancel").disabled = !v;
+    $("#deploy-gpu-switch").disabled = v;
+  }
+
+  /* ---------- 显卡类型（N 卡 CUDA / A 卡 ROCm） ---------- */
+  let gpuInfo = null;
+  function gpuSel() { return $("#deploy-gpu").value; }
+  function gfxSel() { return gpuSel() === "rocm" ? $("#deploy-gfx").value : ""; }
+  function syncGpu() {
+    const rocm = gpuSel() === "rocm";
+    $("#deploy-gfx").hidden = !rocm;
+    const hint = $("#deploy-gpu-hint");
+    const parts = [];
+    let status = "";
+    if (gpuInfo) {
+      const found = (gpuInfo.nvidia || []).concat((gpuInfo.amd || []).map((g) => g.name));
+      parts.push(found.length ? "本机显卡：" + found.join("、") : "没有检测到独立显卡（或没装显卡驱动）");
+    }
+    if (rocm) {
+      if ($("#deploy-branch").value === "classic") {
+        parts.push("Forge Classic 不支持 A 卡的 ROCm 版 torch，请改选 Neo 版或 ComfyUI");
+        status = "bad";
+      } else {
+        const t = (gpuInfo && gpuInfo.targets || []).find((x) => x.gfx === gfxSel());
+        if (t && t.experimental) { parts.push("这个型号是实验性支持，torch 有可能装不上"); status = "warn"; }
+        parts.push("A 卡会从 AMD 官方源安装 ROCm 版 torch（约 3~4 GB），启动时自动加上 A 卡推荐的参数和环境变量");
+      }
+    }
+    hint.textContent = parts.join("。");
+    hint.dataset.status = status;
+  }
+  async function loadGpu() {
+    try { gpuInfo = await App.api.deploy_gpu_detect(); } catch (e) { gpuInfo = null; }
+    const sel = $("#deploy-gfx");
+    sel.innerHTML = ((gpuInfo && gpuInfo.targets) || []).map((t) =>
+      `<option value="${App.esc(t.gfx)}">${App.esc(t.label)}（${App.esc(t.gfx)}${t.experimental ? "，实验性" : ""}）</option>`).join("");
+    // 默认：当前实例已经是 A 卡就沿用；否则按检测结果（只有 A 卡没有 N 卡 → 选 A 卡）
+    const sug = (gpuInfo && gpuInfo.suggest) || {};
+    if (App.cfg.gpu_backend === "rocm") {
+      $("#deploy-gpu").value = "rocm";
+      sel.value = App.cfg.amd_gfx || sug.gfx || sel.value;
+    } else {
+      $("#deploy-gpu").value = sug.backend || "";
+      if (sug.gfx) sel.value = sug.gfx;
+    }
+    syncGpu();
+  }
+  async function gpuSwitch() {
+    const target = $("#deploy-target").value.trim();
+    if (!target) { App.toast("请先在下面选好安装目录", "error"); return; }
+    if (running) return;
+    const rocm = gpuSel() === "rocm";
+    const label = rocm ? $("#deploy-gfx").selectedOptions[0].textContent : "NVIDIA 显卡（CUDA）";
+    const v = await App.modal("切换显卡环境",
+      App.esc(`把下面这个目录的环境切换成：${label}\n\n${target}\n\n` +
+        "会卸载现有的 torch 并重新安装" + (rocm ? " AMD 的 ROCm 版（约 3~4 GB）" : " CUDA 版（约 3 GB）") +
+        "；模型、插件、输出图片都不受影响。对应实例的启动参数会自动换成" + (rocm ? " A 卡" : " N 卡") + "的。"),
+      [{ id: "go", label: "开始切换", kind: "primary" }, { id: "cancel", label: "取消" }]);
+    if (v !== "go") return;
+    try {
+      const r = await App.api.gpu_switch(target, gpuSel(), gfxSel());
+      if (r && r.ok === false) App.toast(r.error || "无法切换", "error", 6000);
+    } catch (e) { App.toast("无法切换：" + e.message, "error"); }
   }
 
   async function envDetect() {
@@ -87,7 +149,7 @@
       const usePortable = $("#deploy-portable").checked;
 
       let pre;
-      try { pre = await App.api.deploy_precheck(target, branch, usePortable); }
+      try { pre = await App.api.deploy_precheck(target, branch, usePortable, gpuSel(), gfxSel()); }
       catch (e) { App.toast("检查失败：" + e.message, "error"); return; }
       if (!pre || typeof pre !== "object") {
         App.toast("检查失败：后端未返回有效结果", "error");
@@ -123,9 +185,8 @@
       }
 
       try {
-        const r = branch === "comfyui"
-          ? await App.api.deploy_start(target, branch, usePortable, selectedNodes())
-          : await App.api.deploy_start(target, branch, usePortable);
+        const r = await App.api.deploy_start(target, branch, usePortable,
+          branch === "comfyui" ? selectedNodes() : null, gpuSel(), gfxSel());
         if (r && r.ok === false) App.toast(r.error || "启动部署失败", "error");
       } catch (e) { App.toast("启动部署失败：" + e.message, "error"); }
     } catch (e) {
@@ -190,8 +251,12 @@
       // H3 是新分支，不当默认；只有当前实例本身就是 H3 才默认选中它
       sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch
         : (App.cfg.webui_branch === "neo2" && App.cfg.webui_variant === "h3" ? "neo2h3" : "neo2");
-      sel.addEventListener("change", syncNodesCard);
+      sel.addEventListener("change", () => { syncNodesCard(); syncGpu(); });
       syncNodesCard();
+      $("#deploy-gpu").addEventListener("change", syncGpu);
+      $("#deploy-gfx").addEventListener("change", syncGpu);
+      $("#deploy-gpu-switch").addEventListener("click", gpuSwitch);
+      loadGpu();
 
       if (App.cfg.webui_root) {
         $("#deploy-target").value = App.cfg.webui_root;
@@ -260,6 +325,16 @@
         ).then((v) => { if (v === "go") App.showPage("launch"); });
       });
       App.on("deploy", "cancelled", () => { setRunning(false); prog.hide(); App.toast("已取消部署"); });
+      App.on("deploy", "switch_done", async (e) => {
+        if (!e.ok) { App.toast("显卡环境切换没有完成，详情见下方日志", "error", 6000); return; }
+        App.toast("显卡环境已切换为 " + (e.backend === "rocm" ? "AMD（ROCm）" : "NVIDIA（CUDA）"), "ok", 5000);
+        try {
+          const st = await App.api.get_state();
+          App.state = st; App.cfg = st.config || {};
+          App.refreshConfigControls();
+          App.refreshCmdPreview(st.cmd_args);
+        } catch (err) { console.error(err); }
+      });
       App.on("deploy", "error", (e) => {
         setRunning(false); prog.hide();
         App.modal(e.title || "部署出错", App.esc(e.text || ""), [{ id: "ok", label: "知道了", kind: "primary" }]);

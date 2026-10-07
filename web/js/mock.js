@@ -168,6 +168,26 @@
         ],
       }),
       update_config: () => ok({ ok: true, cmd_args: "" }),
+      deploy_gpu_detect: () => {
+        const amd = /[?&]amd=1/.test(location.search);
+        const T = [["gfx1201", "RX 9070 / 9070 XT、AI PRO R9700"], ["gfx1200", "RX 9060 / 9060 XT"],
+          ["gfx1100", "RX 7900 XTX / 7900 XT / 7900 GRE、PRO W7900 / W7800"], ["gfx1101", "RX 7800 XT / 7700 XT、PRO W7700"],
+          ["gfx1102", "RX 7600 / 7600 XT / 7650 GRE / 7700S"], ["gfx1030", "RX 6950 XT / 6900 XT / 6800 XT / 6800、PRO W6800"],
+          ["gfx1031", "RX 6750 XT / 6700 XT / 6700、6800M"], ["gfx1032", "RX 6650 XT / 6600 XT / 6600、6800S / 6700S"],
+          ["gfx1034", "RX 6500 XT / 6400"], ["gfx1035", "Radeon 680M / 660M 核显"], ["gfx1010", "RX 5700 / 5700 XT / 5600"],
+          ["gfx1151", "Ryzen AI Max（Radeon 8060S / 8050S）", true], ["gfx1103", "Radeon 780M / 760M 核显", true]];
+        return ok({ ok: true, nvidia: amd ? [] : ["NVIDIA GeForce RTX 3090"],
+          amd: amd ? [{ name: "AMD Radeon RX 7900 XTX", gfx: "gfx1100" }] : [],
+          targets: T.map(([gfx, label, experimental]) => ({ gfx, label, experimental: !!experimental })),
+          suggest: amd ? { backend: "rocm", gfx: "gfx1100" } : { backend: "", gfx: "" } });
+      },
+      gpu_switch: (target, backend, gfx) => {
+        const ev = (type, d) => window.App.onEvent(Object.assign({ scope: "deploy", type }, d));
+        ev("state", { running: true });
+        ev("log", { text: `\n[环境] 把 ${target} 的环境切换为：${backend === "rocm" ? "AMD " + gfx : "NVIDIA（CUDA）"}\n` });
+        setTimeout(() => { ev("log", { text: "[环境] 切换完成！\n" }); ev("state", { running: false }); ev("switch_done", { ok: true, backend, gfx, target }); }, 1500);
+        return ok({ ok: true });
+      },
       h3_models_info: () => {
         if (!/[?&]h3=1/.test(location.search)) return ok({ ok: true, is_h3: false });
         const G = 1073741824;

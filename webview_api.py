@@ -48,6 +48,7 @@ import model_library as ml
 import output_index as oi
 import comfy_nodes
 import h3_models as h3m
+import amd_rocm
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -1006,7 +1007,7 @@ def _api_deploy_check_dir(self, target):
     return {"ok": True, "status": "ok", "message": "目录为空或不存在，可以直接克隆到这里"}
 
 
-def _api_deploy_precheck(self, target, branch, use_portable):
+def _api_deploy_precheck(self, target, branch, use_portable, gpu_backend=None, amd_gfx=None):
     branch, _variant = _split_deploy_key(branch)
     target = (target or "").strip()
     issues = []
@@ -1073,12 +1074,24 @@ def _api_deploy_precheck(self, target, branch, use_portable):
         issues.extend(pf.precheck_issues(target))
     except Exception:
         pass
+    if gpu_backend == "rocm":
+        # A 卡：N 卡驱动相关的提醒不适用，换成 A 卡自己的检查
+        issues = [i for i in issues if i.get("id") not in ("no_nvidia", "old_driver")]
+        issues.extend(_amd_precheck_issues(branch, amd_gfx))
+    elif any(i.get("id") == "no_nvidia" for i in issues):
+        amd = amd_rocm.detect_amd_gpus()
+        if amd:
+            for i in issues:
+                if i.get("id") == "no_nvidia":
+                    i["text"] = (f"检测到的是 AMD 显卡（{amd[0]['name']}），但上面「显卡」选的是 NVIDIA。"
+                                 "按 N 卡部署只能用 CPU 出图，非常慢——建议把「显卡」改成 AMD 再部署。")
 
     has_error = any(i["level"] == "error" for i in issues)
     return {"ok": not has_error, "issues": issues, "already_installed": already_installed}
 
 
-def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None):
+def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None,
+                      gpu_backend=None, amd_gfx=None):
     branch, variant = _split_deploy_key(branch)
     # 检查和置位必须原子，否则双击会并发跑两个部署线程
     with self._deploy_lock:
@@ -1096,6 +1109,13 @@ def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None):
         # 部署用一份独立配置：装到别的目录（= 新实例）时不能沿用当前实例的
         # Python/Git 路径和启动参数，也不能提前改掉当前实例的分支
         self._deploy_cfg = _deploy_cfg_for(self, target, branch)
+        if gpu_backend is not None:
+            # 部署页选的显卡类型优先（为空 = N 卡）
+            self._deploy_cfg["gpu_backend"] = "rocm" if gpu_backend == "rocm" else ""
+            self._deploy_cfg["amd_gfx"] = (amd_gfx or "") if gpu_backend == "rocm" else ""
+        if self._deploy_cfg.get("gpu_backend") == "rocm" and \
+                self._deploy_cfg.get("amd_gfx") not in amd_rocm.GFX_IDS:
+            return {"ok": False, "error": "请先在「显卡」里选择 A 卡的型号（gfx 架构）"}
         if branch == "comfyui" and isinstance(comfy_nodes_sel, list):
             # 记住这次的勾选，下次部署默认还是它
             self.cfg["deploy_comfy_nodes"] = [i for i in comfy_nodes_sel if comfy_nodes.find(i)]
@@ -1329,14 +1349,24 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
         # 启动器先自己把 wheel 拉下来（Range 续传 + sha256 校验 + 多个镜像
         # 按顺序试），本地装好后 Forge 检测到 torch 已存在就会跳过自己安装。
         # 任何失败都不阻断——Forge 的自装路径（已注入 TORCH_INDEX_URL）兜底。
-        try:
-            import torch_bootstrap
-            torch_bootstrap.ensure_torch(target, self._deploy_cfg, log, progress,
-                                         self._deploy_cancel)
-        except _DeployCancelled:
-            raise
-        except Exception as e:
-            log(f"[部署] torch 预下载异常（不影响继续，Forge 会自行安装）: {e}\n")
+        rocm = amd_rocm.is_rocm(self._deploy_cfg)
+        if rocm:
+            # A 卡不预下载 CUDA 版 torch：由 Forge 首次运行时按 TORCH_COMMAND 装 ROCm 版
+            # （见 config_manager.build_launch_env_overrides）。已有环境里装的是 N 卡
+            # torch 的话 Forge 不会自己换，先卸掉
+            log(f"[部署] 显卡：AMD {amd_rocm.gfx_label(self._deploy_cfg.get('amd_gfx'))}，"
+                "使用 ROCm 版 torch\n")
+            _drop_non_rocm_torch(self, _forge_env_python(self._deploy_cfg, target),
+                                 target, log, make_env())
+        else:
+            try:
+                import torch_bootstrap
+                torch_bootstrap.ensure_torch(target, self._deploy_cfg, log, progress,
+                                             self._deploy_cancel)
+            except _DeployCancelled:
+                raise
+            except Exception as e:
+                log(f"[部署] torch 预下载异常（不影响继续，Forge 会自行安装）: {e}\n")
 
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
@@ -1375,12 +1405,24 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
                 raise _DeployCancelled()
             log("\n[部署] 依赖安装或启动失败（上面的日志应有具体报错），"
                 "排查修复后可以重新点击「开始部署」继续（已完成的步骤会被跳过）\n")
+            if rocm:
+                log("[部署] A 卡提示：如果是 ROCm 版 torch 没装上或认不到显卡，可以点「显卡」里的"
+                    "「把安装目录的环境切换成所选显卡」重装（正式源失败会自动换 nightly 源），装好后再点「开始部署」\n")
             self._emit("deploy", "error", title="部署失败",
                        text="依赖安装或启动失败（部署日志里应有具体报错）。"
                             "排查修复后重新点击「开始部署」即可继续，已完成的步骤会自动跳过。\n\n"
                             + PAN_FALLBACK_TEXT)
             return
         log("\n[部署] WebUI 已能正常启动（验证用临时进程已停止），继续收尾 ...\n")
+        if rocm:
+            py = _forge_env_python(self._deploy_cfg, target)
+            if py:
+                info = amd_rocm.probe_torch(py, env=make_env())
+                if info.get("backend") == "rocm":
+                    log(f"[部署] torch {info.get('version')}（ROCm）识别到显卡：{info.get('name') or '未知'}\n")
+                else:
+                    log(f"[部署] 注意：环境里的 torch 不是 ROCm 版（{info.get('version') or info.get('error')}），"
+                        "可以在本页点「切换显卡环境」重装\n")
 
         # ---- 5. hashlib 兼容补丁（保险步骤，新版 Python 下补丁自动不生效）----
         # 有 venv 写 venv 里；走 VENV_DIR=-（没用 venv）时写进便携 Python 本体
@@ -2246,13 +2288,17 @@ def _deploy_register_instance(self, target, branch, log, variant=None):
       - 否则新建一个实例（实例数变成 2，多实例功能自动出现）
     """
     label = cm.kind_label(branch, variant)
+    gpu = {"gpu_backend": self._deploy_cfg.get("gpu_backend") or "",
+           "amd_gfx": self._deploy_cfg.get("amd_gfx") or ""}
     for inst in self.cfg.get("instances") or []:
         if inst.get("webui_root") and _same_path(inst["webui_root"], target):
             inst["webui_branch"] = branch
             inst["webui_variant"] = variant or ""
+            inst.update(gpu)
             if inst["id"] == self.cfg.get("active_instance"):
                 self.cfg["webui_branch"] = branch
                 self.cfg["webui_variant"] = variant or ""
+                self.cfg.update(gpu)
             cm.save_config(self.cfg)
             self._emit("instances", "changed")
             return inst["id"]
@@ -2260,16 +2306,19 @@ def _deploy_register_instance(self, target, branch, log, variant=None):
         self.cfg["webui_root"] = target
         self.cfg["webui_branch"] = branch
         self.cfg["webui_variant"] = variant or ""
+        self.cfg.update(gpu)
         inst = cm.active_instance(self.cfg)
         if inst is not None:
             inst["name"] = label or inst.get("name", "")
             inst["webui_variant"] = variant or ""
+            inst.update(gpu)
         cm.save_config(self.cfg)
         self._emit("instances", "changed")
         return self.cfg.get("active_instance")
     inst = cm.make_instance(None, webui_root=target, webui_branch=branch,
                             name=_unique_instance_name(self, label))
     inst["webui_variant"] = variant or ""
+    inst.update(gpu)
     self.cfg["instances"].append(inst)
     cm.save_config(self.cfg)
     log(f"[部署] 已添加为新实例「{inst['name']}」，可以在侧栏切换实例\n")
@@ -2480,11 +2529,18 @@ def _deploy_flow_comfy(self, target, use_portable):
             pass
 
         # ---- 4. torch（已装且 CUDA 可用就跳过；镜像失败自动换下一个源）----
+        if amd_rocm.is_rocm(dcfg):
+            log(f"[部署] 显卡：AMD {amd_rocm.gfx_label(dcfg.get('amd_gfx'))}，安装 ROCm 版 torch\n")
+            if not _install_rocm_torch(self, py, dcfg.get("amd_gfx"), target, log, env):
+                self._emit("deploy", "error", title="ROCm 版 torch 安装失败",
+                           text="AMD 的 ROCm 版 torch 没装上，请查看部署日志（常见原因：网络中断、显卡型号选错、"
+                                "这个型号暂时没有 Windows 版）。")
+                return
         probe = subprocess.run(
             [py, "-c", "import torch; print(torch.cuda.is_available())"],
             capture_output=True, text=True, creationflags=_NO_WINDOW)
-        has_torch = probe.returncode == 0
-        if has_torch and _nvidia_gpu_names() and "True" not in (probe.stdout or ""):
+        has_torch = probe.returncode == 0 or amd_rocm.is_rocm(dcfg)
+        if has_torch and not amd_rocm.is_rocm(dcfg) and _nvidia_gpu_names() and "True" not in (probe.stdout or ""):
             # 已装的 torch 是 CPU 版（国内镜像装歪的经典事故）：pip 见到同名包
             # 会认为"已满足"不肯换，必须先卸再装 CUDA 版
             log("[部署] 已安装的 torch 用不了 CUDA（是 CPU 版），卸载后重装 CUDA 版 ...\n")
@@ -2596,6 +2652,261 @@ def mm_official():
 
 def _looks_like_network_failure(tail_text):
     return bool(tail_text) and bool(_NETWORK_FAIL_RE.search(tail_text))
+
+
+# ============================================================
+# AMD 显卡（ROCm）：检测、预检、安装 ROCm 版 torch、N 卡 ⇄ A 卡环境切换
+# ============================================================
+
+def _api_deploy_gpu_detect(self):
+    """本机显卡 + A 卡可选型号表（部署页「显卡」卡片用）"""
+    nv = _nvidia_gpu_names()
+    amd = amd_rocm.detect_amd_gpus()
+    gfx = next((g["gfx"] for g in amd if g["gfx"]), "")
+    return {"ok": True, "nvidia": nv, "amd": amd,
+            "targets": [{"gfx": g, "label": label, "experimental": exp}
+                        for g, label, exp in amd_rocm.GFX_TARGETS],
+            "suggest": {"backend": "rocm" if (amd and not nv) else "", "gfx": gfx}}
+
+
+def _amd_precheck_issues(branch, gfx):
+    issues = []
+    if branch == "classic":
+        issues.append({"level": "error", "id": "amd_classic",
+                       "text": "Forge Classic（lllyasviel 官方仓库）用的是 Python 3.10 和老一套参数，"
+                               "AMD 的 ROCm 版 torch 不支持它。A 卡请选 Neo 版或 ComfyUI。"})
+    if gfx not in amd_rocm.GFX_IDS:
+        issues.append({"level": "error", "id": "amd_gfx",
+                       "text": "还没选 A 卡的型号（gfx 架构）。请在「显卡」里选择你的显卡型号。"})
+    elif any(g == gfx and exp for g, _l, exp in amd_rocm.GFX_TARGETS):
+        issues.append({"level": "warn", "id": "amd_experimental",
+                       "text": f"{amd_rocm.gfx_label(gfx)} 属于实验性支持：AMD 的 Windows 版 ROCm 对它的"
+                               "支持还不完整，torch 有可能装不上或跑不起来。"})
+    if os.name == "nt" and not amd_rocm.detect_amd_gpus():
+        issues.append({"level": "warn", "id": "amd_not_found",
+                       "text": "没有检测到 AMD 显卡。如果确实是 A 卡，请先到 AMD 官网安装最新的 Adrenalin 驱动。"})
+    issues.append({"level": "warn", "id": "amd_note",
+                   "text": "A 卡走 AMD 的 ROCm 版 torch（约 3~4 GB）：\n"
+                           "· 显卡驱动（Adrenalin）请先更新到最新版\n"
+                           "· ROCm 的 Windows 版还在快速迭代，第一次出图要编译内核，会比较慢\n"
+                           "· Forge Neo 作者不处理 A 卡相关的问题，遇到问题只能靠社区教程"})
+    return issues
+
+
+def _forge_env_python(cfg, target):
+    """Forge 实际用的 Python：VENV_DIR=- 时是自带的便携 Python，否则是 venv 里的；还没建出来返回空串"""
+    try:
+        ov = cm.build_launch_env_overrides(cfg, target)
+    except Exception:
+        ov = {}
+    if ov.get("VENV_DIR") == "-":
+        py = (ov.get("PYTHON") or "").strip('"')
+        return py if py and os.path.isfile(py) else ""
+    venv_py = os.path.join(target, "venv", "Scripts" if os.name == "nt" else "bin",
+                           "python.exe" if os.name == "nt" else "python")
+    return venv_py if os.path.isfile(venv_py) else ""
+
+
+def _work_env(base_env, target):
+    """装 torch 用的环境：临时目录挪到目标盘、pip 缓存共用（同部署流程）"""
+    env = dict(base_env)
+    try:
+        tmp_dir = os.path.join(target, ".launcher_tmp")
+        os.makedirs(tmp_dir, exist_ok=True)
+        env["TEMP"] = env["TMP"] = tmp_dir
+        env["PIP_CACHE_DIR"] = SHARED_CACHE_PIP
+    except OSError:
+        pass
+    return env
+
+
+def _uninstall_torch(self, py, cwd, log, env, with_rocm=True):
+    names = list(amd_rocm.UNINSTALL_BASE)
+    if with_rocm:
+        names += amd_rocm.installed_rocm_packages(py, env)
+    log("[环境] 卸载旧的 torch：" + "、".join(names) + "\n")
+    self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y"] + names, cwd, log, env=env, timeout=1200)
+
+
+def _drop_non_rocm_torch(self, py, cwd, log, env):
+    """部署 A 卡时：环境里已经有 N 卡/CPU 版 torch 就先卸掉（Forge 见到 torch 已装不会自己换）"""
+    if not py:
+        return
+    info = amd_rocm.probe_torch(py, env=env)
+    if info.get("installed") and info.get("backend") != "rocm":
+        log(f"[部署] 环境里已有非 ROCm 版 torch（{info.get('version') or info.get('error')}），先卸载\n")
+        _uninstall_torch(self, py, cwd, log, env)
+
+
+def _install_rocm_torch(self, py, gfx, cwd, log, env):
+    """装 ROCm 版 torch（AMD 正式源 → 失败换 nightly 源）+ rocm-sdk init，装完核验。成功返回 True"""
+    info = amd_rocm.probe_torch(py, env=env)
+    if info.get("backend") == "rocm" and info.get("ok"):
+        log(f"[环境] 已是 ROCm 版 torch {info.get('version')}（{info.get('name')}），跳过安装\n")
+        return True
+    if info.get("installed"):
+        _uninstall_torch(self, py, cwd, log, env)
+    ok = False
+    for nightly in (False, True):
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        log(f"\n[环境] 安装 ROCm 版 torch（{amd_rocm.gfx_label(gfx)}，"
+            f"{'nightly 源' if nightly else 'AMD 正式源'}）...\n")
+        rc = self._deploy_run_cmd(py, ["-m", "pip"] + amd_rocm.pip_install_args(gfx, nightly),
+                                  cwd, log, env=env, timeout=5400)
+        if rc == 0:
+            ok = True
+            break
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        log("[环境] 这个源没装上，" + ("换 nightly 源再试\n" if not nightly else "放弃\n"))
+    if not ok:
+        return False
+    exe = amd_rocm.rocm_sdk_exe(py)
+    rc = self._deploy_run_cmd(exe, ["init"], cwd, log, env=env, timeout=1800)
+    if rc != 0:
+        log("[环境] rocm-sdk init 没成功（上面有原因），torch 可能仍能用，继续核验\n")
+    info = amd_rocm.probe_torch(py, env=env, timeout=300)
+    if info.get("backend") != "rocm":
+        log(f"[环境] 核验失败：装上的不是 ROCm 版 torch（{info.get('version') or info.get('error')}）。"
+            "多半是这个显卡型号在 AMD 的源里没有对应的包\n")
+        return False
+    if info.get("ok"):
+        log(f"[环境] ROCm 版 torch {info.get('version')} 就绪，识别到显卡：{info.get('name') or '未知'}\n")
+    else:
+        log(f"[环境] ROCm 版 torch {info.get('version')} 已装好，但暂时没认到显卡："
+            "请确认 AMD 驱动是最新版、型号（gfx）没选错，装完驱动后重启电脑\n")
+    return True
+
+
+def _install_cuda_torch_comfy(self, py, cwd, log, env, cfg):
+    """ComfyUI 换回 N 卡：按驱动选 CUDA tag 装 torch（镜像优先、官方兜底）"""
+    tag = _pick_comfy_torch_tag(log)
+    indexes = [f"{mm_official()}/{tag}"]
+    try:
+        import mirror_manager as mm
+        if mm.resolve_mode(cfg, log):
+            indexes = [f"{b}/{tag}" for b in mm.PYTORCH_MIRROR_BASES] + indexes
+    except Exception:
+        pass
+    for idx in indexes:
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        log(f"[环境] 安装 CUDA 版 torch（{idx}）...\n")
+        if self._deploy_run_cmd(py, ["-m", "pip", "install", "torch", "torchvision", "torchaudio",
+                                     "--index-url", idx], cwd, log, env=env, timeout=5400) == 0:
+            return True
+    return False
+
+
+def _api_gpu_switch(self, target, backend, gfx=None):
+    """把某个安装目录的环境切换成 N 卡（CUDA）或 A 卡（ROCm）版 torch，并更新对应实例的设置"""
+    target = (target or "").strip()
+    kind = cm.detect_kind(target)
+    if not kind:
+        return {"ok": False, "error": "这个目录不是 WebUI / ComfyUI 安装目录，请先在上面选好安装目录"}
+    backend = "rocm" if backend == "rocm" else ""
+    gfx = (gfx or "") if backend == "rocm" else ""
+    if backend == "rocm" and gfx not in amd_rocm.GFX_IDS:
+        return {"ok": False, "error": "请先选择 A 卡的型号（gfx 架构）"}
+    iid = None
+    for inst in self.cfg.get("instances") or []:
+        if inst.get("webui_root") and _same_path(inst["webui_root"], target):
+            iid = inst["id"]
+            r = self._runners.get(iid)
+            if r is not None and r.running():
+                return {"ok": False, "error": f"实例「{inst.get('name', '')}」正在运行，请先停止再切换"}
+    if iid:
+        cfg = dict(cm.instance_cfg(self.cfg, iid))
+    else:
+        import install_finder
+        branch = "comfyui" if kind == "comfyui" else (install_finder.guess_forge_branch(target) or "neo2")
+        cfg = _deploy_cfg_for(self, target, branch)
+    if backend == "rocm" and kind != "comfyui" and cfg.get("webui_branch") == "classic":
+        return {"ok": False, "error": "Forge Classic 不支持 A 卡的 ROCm 版 torch，A 卡请用 Neo 版或 ComfyUI"}
+    cfg["gpu_backend"], cfg["amd_gfx"] = backend, gfx
+    with self._deploy_lock:
+        if self._deploy_running:
+            return {"ok": False, "error": "已有部署任务在进行中"}
+        self._deploy_cancel.clear()
+        self._deploy_running = True
+        self._deploy_cfg = cfg
+    self._emit("deploy", "state", running=True)
+    try:
+        self._spawn(lambda: _gpu_switch_flow(self, target, kind, cfg, iid), name="gpu-switch")
+    except Exception:
+        self._deploy_running = False
+        self._emit("deploy", "state", running=False)
+        return {"ok": False, "error": "无法启动切换线程"}
+    return {"ok": True}
+
+
+def _gpu_switch_flow(self, target, kind, cfg, iid):
+    log = lambda t: self._emit("deploy", "log", text=t)
+    progress = lambda d, t: self._emit("deploy", "progress", downloaded=d, total=t)
+    rocm = cfg.get("gpu_backend") == "rocm"
+    what = f"AMD {amd_rocm.gfx_label(cfg.get('amd_gfx'))}" if rocm else "NVIDIA（CUDA）"
+    ok = False
+    try:
+        log(f"\n[环境] 把 {target} 的环境切换为：{what}\n")
+        comfy = kind == "comfyui"
+        if comfy:
+            env = _work_env(cm.build_comfy_env(cfg, target), target)
+            py = cm.comfy_python(cfg, target).strip('"')
+            py = py if py and os.path.isfile(py) else ""
+        else:
+            env = _work_env(cm.build_subprocess_env(cfg, target), target)
+            py = _forge_env_python(cfg, target)
+        if not py:
+            if comfy:
+                log("[环境] 没找到这个 ComfyUI 的 Python，无法切换。请先在本页重新部署一次\n")
+                return
+            log("[环境] 这个 WebUI 还没装过依赖（没有 venv / 自带 Python），只更新设置："
+                "下次启动时 Forge 会自动安装 " + ("ROCm" if rocm else "CUDA") + " 版 torch\n")
+            ok = True
+        elif rocm:
+            ok = _install_rocm_torch(self, py, cfg.get("amd_gfx"), target, log, env)
+        else:
+            info = amd_rocm.probe_torch(py, env=env)
+            if info.get("backend") == "cuda":
+                log(f"[环境] 已经是 CUDA 版 torch {info.get('version')}，不用重装\n")
+            else:
+                if info.get("installed"):
+                    _uninstall_torch(self, py, target, log, env)
+                if comfy:
+                    if not _install_cuda_torch_comfy(self, py, target, log, env, cfg):
+                        log("[环境] CUDA 版 torch 没装上，请查看上面的日志\n")
+                        return
+                else:
+                    import torch_bootstrap
+                    if not torch_bootstrap.ensure_torch(target, cfg, log, progress, self._deploy_cancel):
+                        log("[环境] 预装没成功也没关系：下次启动时 Forge 会自己安装 CUDA 版 torch\n")
+            ok = True
+        if ok:
+            keys = {"gpu_backend": cfg["gpu_backend"], "amd_gfx": cfg["amd_gfx"]}
+            if iid:
+                inst = cm.find_instance(self.cfg, iid)
+                if inst is not None:
+                    inst.update(keys)
+                if iid == self.cfg.get("active_instance"):
+                    self.cfg.update(keys)
+                cm.save_config(self.cfg)
+                self._emit("instances", "changed")
+                log(f"[环境] 已更新实例设置：启动时自动使用 {'A 卡（ROCm）' if rocm else 'N 卡'}的参数和环境变量\n")
+            else:
+                log("[环境] 这个目录还没添加为实例：之后部署或添加实例时记得选同样的显卡类型\n")
+            log("\n[环境] 切换完成！\n")
+    except _DeployCancelled:
+        log("\n[环境] 已取消\n")
+    except Exception:
+        log(f"\n[环境] 发生未预期的错误:\n{traceback.format_exc()}\n")
+    finally:
+        self._deploy_running = False
+        self._deploy_proc = None
+        progress(0, 0)
+        self._emit("deploy", "state", running=False)
+        self._emit("deploy", "switch_done", ok=ok, backend=cfg.get("gpu_backend") or "",
+                   gfx=cfg.get("amd_gfx") or "", target=target)
 
 
 def _api_deploy_venv_check(self, target, branch):
@@ -5644,6 +5955,8 @@ for _name, _fn in {
     "deploy_precheck": _api_deploy_precheck,
     "deploy_start": _api_deploy_start,
     "deploy_cancel": _api_deploy_cancel,
+    "deploy_gpu_detect": _api_deploy_gpu_detect,
+    "gpu_switch": _api_gpu_switch,
     "deploy_venv_check": _api_deploy_venv_check,
     "deploy_venv_delete": _api_deploy_venv_delete,
     "deploy_patch_hashlib": _api_deploy_patch_hashlib,

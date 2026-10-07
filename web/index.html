@@ -394,6 +394,22 @@
           <div class="hint" id="deploy-branch-hint" data-status="warn" hidden>H3 视频版是新分支，还在快速迭代，原来的 Neo 照常可用、互不影响。跑视频生成需要显卡 ≥ 12GB 显存；内存 GGUF Q4 一套约占 33GB，建议 48GB 以上，64GB 最稳；部署完到「模型下载」页的「H3 视频模型一键下载」把模型配齐。</div>
         </div>
 
+        <div class="card" id="deploy-gpu-card">
+          <div class="card-title">显卡<span class="card-title-hint">决定装哪种 torch：N 卡用 CUDA 版，A 卡用 AMD 的 ROCm 版</span></div>
+          <div class="row">
+            <select id="deploy-gpu">
+              <option value="">NVIDIA 显卡（CUDA）</option>
+              <option value="rocm">AMD 显卡（ROCm）</option>
+            </select>
+            <select id="deploy-gfx" hidden></select>
+          </div>
+          <div class="hint" id="deploy-gpu-hint">正在检测显卡…</div>
+          <div class="action-row deploy-gpu-actions">
+            <button class="btn" id="deploy-gpu-switch">把安装目录的环境切换成所选显卡…</button>
+            <span class="hint">已经装好的 WebUI / ComfyUI 换了显卡用这个：只重装 torch，模型和插件都不动</span>
+          </div>
+        </div>
+
         <div class="card" id="deploy-nodes-card" hidden>
           <div class="card-title">随部署一起安装的常用节点<span class="card-title-hint">装进新实例的 custom_nodes，节点依赖一并装好；之后可在「常用插件」页增减</span></div>
           <div id="deploy-nodes"></div>

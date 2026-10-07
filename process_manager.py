@@ -53,6 +53,8 @@ _FATAL_HINTS = (
 
 def _driver_issue_forge(root, cfg):
     """WebUI：已装的 torch，或者还没装时 WebUI 要装的 torch，驱动带不动 → 启动前提示升级驱动"""
+    if cfg.get("gpu_backend") == "rocm":
+        return None   # A 卡环境：没有 NVIDIA 驱动这回事
     try:
         import cuda_compat as cc
         import torch_bootstrap as tb
@@ -70,6 +72,8 @@ def _driver_issue_forge(root, cfg):
 
 def _driver_issue_comfy(root, cfg, comfy_dir):
     """ComfyUI：看它的 Python 环境里装的 torch"""
+    if cfg.get("gpu_backend") == "rocm":
+        return None
     try:
         import cuda_compat as cc
         py = cm.comfy_python(cfg, root).strip('"')
@@ -82,8 +86,18 @@ def _driver_issue_comfy(root, cfg, comfy_dir):
         return None
 
 
-def _fatal_hint_for(text):
+_AMD_FATAL_HINT = (
+    "[启动器] 启动失败：torch 用不了 A 卡。常见原因：\n"
+    "  · 环境里还是 N 卡的 CUDA 版 torch：到「环境部署」页选 AMD 显卡，点「把这个目录的环境切换成所选显卡」\n"
+    "  · 显卡架构（gfx）选错了：同一个页面换成正确的型号再切换一次\n"
+    "  · 显卡驱动太旧：到 AMD 官网更新 Adrenalin 驱动后重启电脑")
+
+
+def _fatal_hint_for(text, rocm=False):
     low = (text or "").lower()
+    if rocm and any(k in low for k in ("pytorch is not able to access any compute device",
+                                        "torch is not able to use gpu", "hip error", "no hip gpus")):
+        return _AMD_FATAL_HINT
     for keys, hint in _FATAL_HINTS:
         if any(k in low for k in keys):
             return hint
@@ -755,7 +769,7 @@ class InstanceRunner:
                 combined = self.output_tail + text
                 self.output_tail = combined[-500:]
                 if not self.fatal_hint and not self.url:
-                    self.fatal_hint = _fatal_hint_for(combined)
+                    self.fatal_hint = _fatal_hint_for(combined, self.cfg.get("gpu_backend") == "rocm")
 
                 if not comfy and _BIND_ERROR_RE.search(combined) and not self.url:
                     self.set_status("starting",
