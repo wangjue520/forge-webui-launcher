@@ -3199,8 +3199,20 @@ def _api_civitai_fetch(self, text):
             info = cd.fetch_version_info(parsed, api_key)
             self._civitai_version_info = info
             self._download_source = "civitai"
-            folder = cd.guess_folder(info["model_type"], self.cfg.get("webui_branch", ""))
-            dest, folder = _download_dest(self, folder)
+            default_folder = cd.guess_folder(info["model_type"], self.cfg.get("webui_branch", ""))
+            # 一个版本里可能打包了主模型 + 文本编码器 + VAE：每个文件按 Civitai 给它标的
+            # 类型各放各的文件夹，不再整版都塞进大模型目录
+            files = []
+            for f in info["files"]:
+                role = cd.file_role(f, info["model_type"], info.get("base_model", ""))
+                fdest, ffolder = _role_dest(self, role, default_folder)
+                f["_auto_dest"] = fdest
+                files.append({"name": f["name"], "sizeKB": f.get("sizeKB") or 0,
+                              "primary": bool(f.get("primary")), "role": role or "",
+                              "role_label": cd.ROLE_LABELS.get(role, info["model_type"]),
+                              "folder": ffolder, "dest": fdest})
+            main = next((x for x in files if x["primary"]), files[0] if files else None)
+            dest, folder = (main["dest"], main["folder"]) if main else _download_dest(self, default_folder)
             subset = {
                 "source": "civitai",
                 "model_name": info["model_name"],
@@ -3209,8 +3221,7 @@ def _api_civitai_fetch(self, text):
                 "base_model": info.get("base_model", ""),
                 "page_url": f"https://civitai.com/models/{info['model_id']}"
                             f"?modelVersionId={info['version_id']}",
-                "files": [{"name": f["name"], "sizeKB": f.get("sizeKB") or 0,
-                           "primary": bool(f.get("primary"))} for f in info["files"]],
+                "files": files,
             }
             self._emit("civitai", "info", ok=True, info=subset, folder=folder, dest=dest)
         except (cd.CivitaiError, lc.LiblibError) as e:
@@ -3233,6 +3244,7 @@ def _fetch_liblib(self, text, log):
                                                  chosen["file_name"],
                                                  self.cfg.get("webui_branch", ""))
     dest, folder = _download_dest(self, folder)
+    self._liblib_auto_dest = dest
     subset = {
         "source": "liblib",
         "model_name": info["model_name"],
@@ -3279,6 +3291,8 @@ def _api_civitai_download(self, file_index, dest_dir):
             final_path, hash_ok = cd.download_file(
                 file_info, dest_dir, api_key,
                 progress_cb=lambda d, t: self._emit("civitai", "progress", downloaded=d, total=t))
+            if hash_ok is not False:
+                final_path = _relocate_by_content(self, final_path, file_info.get("_auto_dest"), dest_dir, log)
             cd.save_sidecar_metadata(final_path, info, file_info)
             cd.download_preview_image(final_path, info, api_key)
             log(f"下载完成: {final_path}")
@@ -3293,6 +3307,96 @@ def _api_civitai_download(self, file_index, dest_dir):
             self._emit("civitai", "done", ok=False, error=f"下载失败: {e}")
     self._spawn(work, name="civitai-download")
     return {"ok": True}
+
+
+def _role_dest(self, role, fallback_folder):
+    """
+    模型角色 → (绝对路径, 显示用的位置)。开了共享模型库放进库里对应分类。
+    只有 UNet/DiT 的扩散模型：ComfyUI 放 diffusion_models；WebUI 跟大模型放一起
+    （Classic 不认 diffusion_models 目录，放过去反而加载不到）。
+    """
+    branch = self.cfg.get("webui_branch", "")
+    if role == "DiffusionModel" and branch != "comfyui":
+        role = "Checkpoint"
+    lib = _library_path(self)
+    if lib and role:
+        key = ml.ROLE_TO_LIBRARY_KEY.get(role)
+        if key:
+            d = ml.library_dir(lib, key)
+            return d, f"共享模型库/{os.path.basename(d)}"
+    folder = (cd.folder_for_role(role, branch) if role else None) or fallback_folder
+    if not folder:
+        return "", ""
+    return _download_dest(self, folder)
+
+
+def _relocate_by_content(self, path, auto_dest, used_dest, log):
+    """
+    下载完读文件头判断真实类型，网站标错了（比如文本编码器标成 Model）就挪进对的文件夹，
+    .civitai.info / 预览图一起挪。只在用的是启动器自动填的保存位置时才动——
+    用户自己选的位置一律不碰。
+    """
+    try:
+        same = lambda a, b: os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+        if not path or not auto_dest or not used_dest or not same(auto_dest, used_dest):
+            return path
+        real = cd.classify_file(path)
+        if not real:
+            return path
+        want, label = _role_dest(self, real, None)
+        if not want or same(want, os.path.dirname(path)):
+            return path
+        new = cd.move_with_sidecars(path, want)
+        if new:
+            log(f"按文件内容识别为「{cd.ROLE_LABELS.get(real, real)}」，已自动移到 {label}：{new}")
+            return new
+        log(f"按文件内容识别为「{cd.ROLE_LABELS.get(real, real)}」，应该放在 {label}，"
+            "但那里已有同名文件，先留在原处")
+    except Exception as e:
+        log(f"（检查文件类型时出错，文件留在原处：{e}）")
+    return path
+
+
+def _api_civitai_download_all(self):
+    """一个版本里的全部文件依次下载，每个文件放进它自己类型对应的文件夹"""
+    info = self._civitai_version_info
+    if self._download_source != "civitai" or not info:
+        return {"ok": False, "error": "请先获取 Civitai 模型信息"}
+    files = [f for f in info["files"] if f.get("_auto_dest")]
+    if not files:
+        return {"ok": False, "error": "没有可自动确定保存位置的文件，请手动选择保存位置后逐个下载"}
+    api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
+
+    def work():
+        log = lambda t: self._emit("civitai", "log", text=t + "\n")
+        done, failed, last = [], [], ""
+        for i, f in enumerate(files, 1):
+            dest = f["_auto_dest"]
+            try:
+                log(f"（{i}/{len(files)}）开始下载: {f['name']} -> {dest}")
+                path, hash_ok = cd.download_file(
+                    f, dest, api_key,
+                    progress_cb=lambda d, t: self._emit("civitai", "progress", downloaded=d, total=t))
+                if hash_ok is False:
+                    failed.append(f["name"] + "（哈希校验未通过，已另存为 .broken）")
+                    continue
+                path = _relocate_by_content(self, path, dest, dest, log)
+                cd.save_sidecar_metadata(path, info, f)
+                cd.download_preview_image(path, info, api_key)
+                log(f"（{i}/{len(files)}）完成: {path}")
+                done.append(path)
+                last = path
+                _auto_organize_if_lora(self, [path])
+            except Exception as e:
+                log(f"（{i}/{len(files)}）失败: {f['name']}：{e}")
+                failed.append(f"{f['name']}（{e}）")
+        if failed:
+            self._emit("civitai", "done", ok=False,
+                       error=f"完成 {len(done)} 个，失败 {len(failed)} 个：" + "；".join(failed))
+        else:
+            self._emit("civitai", "done", ok=True, path=last, count=len(done), hash_ok=None)
+    self._spawn(work, name="civitai-download-all")
+    return {"ok": True, "count": len(files)}
 
 
 def _liblib_download_start(self, file_index, dest_dir):
@@ -3331,6 +3435,7 @@ def _liblib_download_start(self, file_index, dest_dir):
                                                     downloaded=d, total=t),
                 extra_headers=lc.download_headers(token))
             if hash_ok is not False:
+                final_path = _relocate_by_content(self, final_path, getattr(self, "_liblib_auto_dest", ""), dest_dir, log)
                 # 校验通过（或网站没给哈希）才写元数据；损坏的 .broken 不写，
                 # 免得模型管理器把一个坏文件当成已登记模型
                 lb = {
@@ -6763,6 +6868,7 @@ for _name, _fn in {
     "_deploy_run_webui_until_ready": _deploy_run_webui_until_ready,
     "civitai_fetch": _api_civitai_fetch,
     "civitai_download": _api_civitai_download,
+    "civitai_download_all": _api_civitai_download_all,
     "h3_models_info": _api_h3_models_info,
     "h3_models_download": _api_h3_models_download,
     "h3_models_cancel": _api_h3_models_cancel,

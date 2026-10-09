@@ -646,6 +646,7 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .ver-hist-row .ver-meta { flex: 1; flex-basis: auto; }
 #ver-target-warn { color: var(--warn); white-space: pre-line; }
 .ext-group.ver-sep { margin: 26px 0 14px; }
+.cv-role { margin-left: 10px; font: 11.5px var(--mono); color: var(--text-dim); }
 #ext-target-warn { white-space: pre-line; }
 .ext-name { font-weight: 700; font-size: 13px; }
 .ext-status { font: 10.5px var(--mono); color: var(--ink); background: var(--yel); padding: 1px 6px; margin-left: 8px; }

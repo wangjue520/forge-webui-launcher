@@ -19,6 +19,7 @@ import os
 import re
 import json
 import hashlib
+import shutil
 import requests
 from urllib.parse import urlparse, urljoin
 
@@ -357,6 +358,137 @@ def guess_folder(model_type, branch=""):
         except Exception:
             pass
     return MODEL_TYPE_FOLDER_MAP.get(model_type, DEFAULT_FOLDER)
+
+
+# ---------------------------------------------------------------------------
+# 按「文件」决定放哪：一个版本里常常打包了好几个文件（Anima base-v1.0 就是
+# 主模型 + 文本编码器 + VAE 三件套），以前整版都按模型类型（Checkpoint）
+# 放进大模型目录，文本编码器和 VAE 也跟着进去了，WebUI / ComfyUI 根本加载不到。
+# ---------------------------------------------------------------------------
+
+ROLE_LABELS = {
+    "Checkpoint": "大模型", "DiffusionModel": "扩散模型（UNet / DiT）", "LoRA": "LoRA",
+    "Embedding": "Embedding", "VAE": "VAE", "TextEncoder": "文本编码器",
+    "ControlNet": "ControlNet", "Upscaler": "放大模型",
+}
+
+_TE_NAME_HINTS = ("text_encoder", "text-encoder", "textencoder", "t5xxl", "umt5", "clip_l", "clip_g",
+                  "qwen3", "qwen_3", "gemma")
+
+
+# 这些底模的「大模型」只有 DiT 本体（文本编码器 / VAE 要另外下），
+# ComfyUI 里得放 diffusion_models；按 Civitai 的 baseModel 提前判断，界面上一开始就显示对的位置
+_DIT_BASE_HINTS = ("anima", "flux", "wan video", "qwen", "hidream", "lumina", "chroma", "hunyuan",
+                   "ltxv", "cosmos", "z-image", "zimage")
+
+
+def file_role(file_info, model_type, base_model=""):
+    """
+    下载前的判断：先信 Civitai 给每个文件标的类型（Model / VAE / Text Encoder），
+    非主文件类型没写清楚时再按文件名兜底（anima_baseV10_txt、xxx_vae 这类）。
+    认不出返回模型类型对应的角色（可能是 None）。
+    """
+    t = re.sub(r"[\s_-]", "", str(file_info.get("type") or "")).lower()
+    name = str(file_info.get("name") or "").lower()
+    if t == "vae":
+        return "VAE"
+    if t == "textencoder":
+        return "TextEncoder"
+    base = _TYPE_TO_ROLE.get(model_type)
+    if base == "Checkpoint" and t in ("", "model", "prunedmodel") \
+            and any(h in str(base_model or "").lower() for h in _DIT_BASE_HINTS) \
+            and not (any(h in name for h in _TE_NAME_HINTS) or "vae" in name):
+        base = "DiffusionModel"
+    if t in ("", "model", "prunedmodel") and not file_info.get("primary"):
+        if any(h in name for h in _TE_NAME_HINTS) or re.search(r"(^|[_.\-])(txt|te)([_.\-]|$)", name):
+            return "TextEncoder"
+        if re.search(r"(^|[_.\-])vae([_.\-]|$)", name) or name.startswith("vae") or "_vae" in name:
+            return "VAE"
+    return base
+
+
+def classify_file(path):
+    """
+    下载后按 safetensors 里的张量键名判断真实类型，用来纠正网站标错的情况：
+      LoRA / Checkpoint（整合了 VAE 或文本编码器的完整大模型）/
+      DiffusionModel（只有 UNet / DiT：Anima、Flux、Wan 这类）/ VAE / TextEncoder
+    不是 safetensors 或认不出时返回 None（这时不挪文件）。
+    """
+    if not str(path).lower().endswith(".safetensors"):
+        return None
+    try:
+        import safetensors_meta as sm
+        r = sm.read_safetensors_header(path)
+    except Exception:
+        r = None
+    if not r:
+        return None
+    _meta, keys = r
+    if not keys:
+        return None
+
+    def has(sub):
+        return any(sub in k for k in keys)
+
+    def starts(*pre):
+        return any(k.startswith(pre) for k in keys)
+
+    if has("lora_") or has(".lora_A.") or has(".lora_down.") or has(".lora_up.") or has(".hada_w1_"):
+        return "LoRA"
+    if starts("model.diffusion_model."):
+        bundled = starts("first_stage_model.", "conditioner.", "cond_stage_model.", "text_encoders.", "vae.")
+        return "Checkpoint" if bundled else "DiffusionModel"
+    # T5 的键也是 encoder.* 开头，必须先于 VAE 判断
+    if has("embed_tokens") or starts("text_model.", "token_embedding", "transformer.resblocks") \
+            or "shared.weight" in keys:
+        return "TextEncoder"
+    enc_dec = sum(1 for k in keys if k.startswith(("encoder.", "decoder.", "quant_conv", "post_quant_conv")))
+    if enc_dec >= 0.85 * len(keys):
+        return "VAE"
+    if starts("net.blocks.", "double_blocks.", "single_blocks.", "blocks.", "transformer_blocks.", "joint_blocks.",
+              "input_blocks.", "layers."):
+        return "DiffusionModel"
+    return None
+
+
+def folder_for_role(role, branch=""):
+    """角色 → 实例里的相对目录。只有 UNet/DiT 的扩散模型：ComfyUI 放 diffusion_models
+    （checkpoints 里的加载器读不了它），WebUI（Forge / Neo）和大模型放一起"""
+    if role == "DiffusionModel":
+        if str(branch or "").lower() in ("comfyui", "comfy"):
+            return "models/diffusion_models"
+        role = "Checkpoint"
+    try:
+        import image_meta_core as imc
+        folder = imc.role_folder(role, branch)
+        if folder:
+            return folder
+    except Exception:
+        pass
+    return None
+
+
+SIDECAR_SUFFIXES = (".civitai.info", ".preview.png", ".preview.jpg", ".preview.jpeg", ".preview.webp",
+                    ".preview.mp4", ".json", ".txt")
+
+
+def move_with_sidecars(path, dest_dir):
+    """把模型文件和同名附属文件（.civitai.info / 预览图）一起挪进 dest_dir。
+    目标已有同名文件时不挪，返回 None；成功返回新路径。"""
+    os.makedirs(dest_dir, exist_ok=True)
+    target = os.path.join(dest_dir, os.path.basename(path))
+    if os.path.exists(target):
+        return None
+    shutil.move(path, target)
+    stem_src = os.path.splitext(path)[0]
+    stem_dst = os.path.splitext(target)[0]
+    for suf in SIDECAR_SUFFIXES:
+        if os.path.exists(stem_src + suf) and not os.path.exists(stem_dst + suf):
+            try:
+                shutil.move(stem_src + suf, stem_dst + suf)
+            except OSError:
+                pass
+    return target
 
 
 def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_flag=None,

@@ -565,7 +565,7 @@
         </div>
 
         <div class="card">
-          <div class="card-title">保存位置<span class="card-title-hint">获取信息后会按模型类型自动填入对应文件夹</span></div>
+          <div class="card-title">保存位置<span class="card-title-hint">获取信息后按选中文件的类型自动填入对应文件夹（主模型 / 文本编码器 / VAE 各放各的）；手动改过就以你填的为准</span></div>
           <div class="row">
             <input type="text" id="cv-dest" placeholder="选择/获取信息后会自动填入根目录下对应的模型文件夹">
             <button class="btn" id="cv-browse">浏览…</button>
@@ -576,6 +576,7 @@
           <button class="btn btn-accent btn-lg" id="cv-download" disabled>
             <svg class="btn-icon"><use href="#i-download"/></svg>下载并放入对应文件夹
           </button>
+          <button class="btn btn-lg" id="cv-download-all" hidden title="一个版本里打包了多个文件（比如 Anima 三件套）时，一次全部下载，各自放进对应文件夹">全部下载（各自放进对应文件夹）</button>
         </div>
         <div class="progress" id="cv-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
 

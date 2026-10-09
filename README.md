@@ -176,6 +176,10 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 
 粘贴 Civitai / 哩布哩布链接（版本链接、纯 ID 也认）→「获取信息」→ 选文件 → 下载。断点续传；SHA256 校验不过的文件改名 `.broken` 保留，不会被当正常模型加载。
 
+- **每个文件各放各的文件夹**：一个版本里打包了多个文件（比如 Anima base-v1.0 = 主模型 + 文本编码器 + VAE）时，按 Civitai 给每个文件标的类型分别放进 `Stable-diffusion` / `text_encoder` / `VAE`，选哪个文件保存位置就跟着变；「全部下载」一次把整套下完。
+- **下载后按文件内容核对**：读 safetensors 头判断真实类型（大模型 / 只有 DiT 的扩散模型 / VAE / 文本编码器 / LoRA），网站标错了就自动挪到正确文件夹，封面和 `.civitai.info` 一起挪；只在用的是自动填的保存位置时才挪。
+- **ComfyUI**：Anima / Flux / Wan 这类只有 DiT 本体的主模型放 `models/diffusion_models`（ComfyUI 的大模型加载器读不了），开了共享模型库则放库里的 `diffusion_models`。
+
 ### 模型管理
 
 按类别浏览（大模型/LoRA/VAE/Embedding/ControlNet…），关键字过滤、基础模型筛选、表头排序；悬停行内直接 定位文件/复制名称/复制 LoRA 调用格式；「哈希查询补全信息」按 SHA-256 精准匹配 Civitai（查不到再查 liblib）写回触发词和封面；详情区可手动编辑触发词（手动填的永远不会被站点查询覆盖）。**支持把模型文件直接拖进页面上传**。

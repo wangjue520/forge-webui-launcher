@@ -12,6 +12,9 @@
 
   let pendingFetch = null;    // 自动获取信息的 Promise 回调
 
+  // 保存位置是不是用户自己改过：没改过就跟着选中的文件自动换（主模型 / 文本编码器 / VAE 各放各的）
+  let destManual = false;
+
   function setDownloading(v) {
     downloading = v;
     $("#cv-fetch").disabled = v;
@@ -20,6 +23,7 @@
   function updateDownloadBtn() {
     // 不再要求先点「获取信息」：直接点下载会自动先获取
     $("#cv-download").disabled = downloading;
+    $("#cv-download-all").disabled = downloading;
   }
 
   function fetchInfo(text) {
@@ -33,12 +37,16 @@
 
   function renderInfo(info, folder, dest) {
     currentInfo = info;
+    destManual = false;
     const isLb = info.source === "liblib";
+    const files = info.files || [];
+    const multiRole = !isLb && new Set(files.map((f) => f.folder)).size > 1;
     $("#cv-info-card").hidden = false;
     const rows = [
       ["来源", isLb ? "liblib（哩布哩布）" : "Civitai"],
       ["模型", info.model_name],
-      ["类型", info.model_type + (folder ? `（建议放入 ${folder}）` : "")],
+      ["类型", info.model_type + (multiRole ? "（这个版本打包了多个文件，每个文件会按自己的类型放进对应文件夹）"
+        : folder ? `（建议放入 ${folder}）` : "")],
       ["版本", info.version_name + (isLb && (info.files || []).length > 1 ? "（下方可切换其他版本）" : "")],
       ["基础模型", info.base_model || "未知"],
     ];
@@ -65,9 +73,12 @@
         `<input type="radio" name="cv-file" value="${i}"><span class="radio-dot"></span>` +
         `<span>${App.esc(title)}${f.primary ? '<span class="primary-tag">' + (isLb ? "当前版本" : "主文件") + '</span>' : ""}` +
         (f.unavailable ? '<span style="color:var(--accent)">　无直接下载地址</span>' : "") +
-        `　<span style="color:var(--text-faint)">${App.fmtBytes((f.sizeKB || 0) * 1024)}</span></span>`;
+        `　<span style="color:var(--text-faint)">${App.fmtBytes((f.sizeKB || 0) * 1024)}</span>` +
+        (!isLb && f.folder ? `<span class="cv-role">→ ${App.esc(f.role_label || "")} · ${App.esc(f.folder)}</span>` : "") +
+        `</span>`;
       label.addEventListener("click", () => {
         selectedFile = i;
+        if (!destManual && f.dest) $("#cv-dest").value = f.dest;
         box.querySelectorAll(".radio-row").forEach((r) => r.classList.remove("checked"));
         label.classList.add("checked");
         label.querySelector("input").checked = true;
@@ -89,7 +100,8 @@
       box.appendChild(btn);
     }
 
-    if (dest) $("#cv-dest").value = dest;
+    if (dest && !(files[selectedFile] && files[selectedFile].dest)) $("#cv-dest").value = dest;
+    $("#cv-download-all").hidden = isLb || files.length < 2;
     updateDownloadBtn();
   }
 
@@ -304,7 +316,22 @@
 
       $("#cv-browse").addEventListener("click", async () => {
         const r = await App.api.choose_directory("选择保存位置", $("#cv-dest").value || App.cfg.webui_root || "");
-        if (r && r.ok && r.path) $("#cv-dest").value = r.path;
+        if (r && r.ok && r.path) { $("#cv-dest").value = r.path; destManual = true; }
+      });
+      $("#cv-dest").addEventListener("input", () => { destManual = true; });
+
+      $("#cv-download-all").addEventListener("click", async () => {
+        const files = (currentInfo && currentInfo.files) || [];
+        const ok = await App.confirm("全部下载",
+          `将依次下载这个版本的 ${files.length} 个文件，每个文件放进它自己类型对应的文件夹：\n\n` +
+          files.map((f) => `· ${f.name}\n   → ${f.dest || "（无法自动确定，跳过）"}`).join("\n") +
+          "\n\n下载完还会按文件内容核对一遍类型，网站标错了会自动挪到正确的文件夹。", "开始下载");
+        if (!ok) return;
+        setDownloading(true);
+        try {
+          const r = await App.api.civitai_download_all();
+          if (r && r.ok === false) { App.toast(r.error || "下载失败", "error"); setDownloading(false); }
+        } catch (e) { App.toast("下载失败：" + e.message, "error"); setDownloading(false); }
       });
 
       $("#cv-download").addEventListener("click", async () => {
@@ -347,6 +374,8 @@
         if (e.ok && e.hash_ok === false) {
           // 校验失败：文件已被改名成 .broken，不会被当成正常模型加载
           App.toast("下载完成但哈希校验未通过！文件已另存为 .broken，请删除后重新下载：" + e.path, "error", 9000);
+        } else if (e.ok && e.count) {
+          App.toast(`全部下载完成：${e.count} 个文件，已各自放进对应文件夹`, "ok", 6000);
         } else if (e.ok) {
           App.toast("下载完成：" + e.path, "ok", 5000);
         } else {

@@ -363,7 +363,7 @@ def library_categories(lib_path):
 ROLE_TO_LIBRARY_KEY = {
     "Checkpoint": "checkpoints", "LoRA": "loras", "Embedding": "embeddings", "VAE": "vae",
     "ControlNet": "controlnet", "Upscaler": "upscale_models", "TextEncoder": "text_encoders",
-    "Hypernetwork": "hypernetworks",
+    "Hypernetwork": "hypernetworks", "DiffusionModel": "diffusion_models",
 }
 
 # LIBRARY_CATEGORIES 里没列出、但下载器会给出的旧式目录名
