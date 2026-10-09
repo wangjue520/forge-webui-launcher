@@ -1,4 +1,8 @@
-/* versions.js — 版本管理页（WebUI / ComfyUI 本体）+ 版本选择列表（插件页的「版本…」弹窗共用）
+/* versions.js — 版本管理（WebUI / ComfyUI 本体）+ 版本选择列表（插件页的「版本…」弹窗共用）
+ *
+ * 不单独占侧栏：界面放在「环境部署」页顶部（#ver-section），多实例时也可以从
+ * 「实例管理」每个实例的「版本管理…」按钮直接跳过来（App.openVersions）。
+ * 还没有任何可用实例的新用户整块隐藏，不打扰第一次部署。
  *
  * 所有切换都是原地 git 检出：只换源码，venv / 模型 / 插件 / 输出不动，不用重装。
  * 每次切换前的版本由后端记进 launcher_data/version_history.json，「切换记录」一键回滚。
@@ -207,6 +211,7 @@
       const list = (App.instances && App.instances.instances) || [];
       if (targetId && !list.some((i) => i.id === targetId)) targetId = "";
       info = await App.api.ver_info(targetId || null);
+      $("#ver-section").hidden = !(info && info.has_root) && !list.some((i) => i.root);
       if (info && info.busy && !busy) setBusy(true);
       renderTarget();
       renderCurrent();
@@ -292,8 +297,27 @@
         }
         refresh();
       });
+      // 跟着「环境部署」页一起刷新（本模块没有自己的页面）
+      const deploy = App.pages.deploy;
+      if (deploy) {
+        const orig = deploy.onShow;
+        deploy.onShow = function () {
+          if (orig) orig.apply(this, arguments);
+          if (!busy) refresh();
+        };
+      }
       refresh();
     },
-    onShow() { if (!busy) refresh(); },
+  };
+
+  /* 从别的页面（实例管理）直接打开某个实例的版本管理 */
+  App.openVersions = function (iid) {
+    targetId = iid || "";
+    App.showPage("deploy");
+    // showPage 里的 onShow 已经刷新过一次，这里只负责滚动到版本管理区块
+    setTimeout(() => {
+      const sec = $("#ver-section");
+      if (sec && !sec.hidden) sec.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   };
 })();

@@ -2201,8 +2201,7 @@ def _api_set_multi_ui(self, on):
 
 
 def _api_set_hidden_pages(self, pages):
-    allowed = {"settings", "launcher", "deploy", "versions", "civitai", "models", "extensions", "wd14", "meta",
-               "outputs"}
+    allowed = {"settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta", "outputs"}
     self.cfg["hidden_pages"] = [p for p in (pages or []) if p in allowed]
     cm.save_config(self.cfg)
     return {"ok": True, "hidden_pages": self.cfg["hidden_pages"]}

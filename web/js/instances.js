@@ -203,6 +203,7 @@
           ${isRunning(i)
             ? '<button class="btn btn-sm" data-act="stop">停止</button>'
             : `<button class="btn btn-sm btn-primary" data-act="start"${i.root ? "" : " disabled"}>启动</button>`}
+          <button class="btn btn-sm" data-act="versions"${i.root ? "" : " disabled"} title="更新 / 切换 / 回滚这个实例的 WebUI 或 ComfyUI 版本（在「环境部署」页）">版本管理…</button>
           <button class="btn btn-sm btn-danger-text" data-act="remove"${App.instances.instances.length <= 1 ? " disabled" : ""}>移除实例</button>
           <span class="hint">移除只是从启动器里去掉，不会删除任何文件</span>
         </div>
@@ -230,6 +231,7 @@
     if (!i) return;
     if (act === "switch") return switchTo(id);
     if (act === "start" || act === "stop") return cardAction(act, id);
+    if (act === "versions") { if (App.openVersions) App.openVersions(id); return; }
     if (act === "root") {
       const r = await App.api.choose_directory("选择实例根目录", i.root || "");
       if (r && r.ok && r.path) update(id, { webui_root: r.path });

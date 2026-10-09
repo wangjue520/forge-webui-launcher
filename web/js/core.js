@@ -305,8 +305,7 @@
     instances: "实例管理",
     settings: "高级选项",
     launcher: "启动器设置",
-    deploy: "环境部署",
-    versions: "版本管理",
+    deploy: "环境部署 · 版本管理",
     civitai: "模型下载 · Civitai / liblib",
     models: "模型管理",
     outputs: "输出管理",
@@ -317,7 +316,7 @@
 
   // 页头上方的英文编号（终末地风格的等宽标注）
   const PAGE_CODES = {
-    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY", versions: "VERSIONS",
+    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY",
     civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
     wd14: "WD14 TAGGER", meta: "IMAGE META",
   };
