@@ -306,6 +306,7 @@
     settings: "高级选项",
     launcher: "启动器设置",
     deploy: "环境部署",
+    versions: "版本管理",
     civitai: "模型下载 · Civitai / liblib",
     models: "模型管理",
     outputs: "输出管理",
@@ -316,7 +317,7 @@
 
   // 页头上方的英文编号（终末地风格的等宽标注）
   const PAGE_CODES = {
-    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY",
+    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY", versions: "VERSIONS",
     civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
     wd14: "WD14 TAGGER", meta: "IMAGE META",
   };
@@ -537,7 +538,7 @@
     // 内置 HTTP 服务器偶发丢请求（见 webview_main.py 的 backlog 补丁），个别
     // js 没加载上时对应页面的按钮会完全没反应。缺模块就自动刷新一次——此时
     // 浏览器缓存已热，第二次几乎必好；用 sessionStorage 保证只刷一次不死循环
-    const EXPECTED_PAGES = ["launch", "settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta",
+    const EXPECTED_PAGES = ["launch", "settings", "launcher", "deploy", "versions", "civitai", "models", "extensions", "wd14", "meta",
                             "instances", "outputs"];
     const missing = EXPECTED_PAGES.filter((p) => !App.pages[p]);
     if (missing.length) {

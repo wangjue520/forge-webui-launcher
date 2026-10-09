@@ -355,7 +355,7 @@
       App.pages.launcher.syncMulti = syncMulti;
 
       // 功能开关：把用不上的页面从侧栏藏起来
-      const PAGES = [["settings", "高级选项"], ["deploy", "环境部署"], ["civitai", "模型下载"],
+      const PAGES = [["settings", "高级选项"], ["deploy", "环境部署"], ["versions", "版本管理"], ["civitai", "模型下载"],
         ["models", "模型管理"], ["outputs", "输出管理"], ["extensions", "常用插件"],
         ["wd14", "WD14 反推"], ["meta", "图片信息"]];
       const box = $("#s-pages");

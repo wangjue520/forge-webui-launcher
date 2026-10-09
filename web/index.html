@@ -87,6 +87,7 @@
     <symbol id="i-models" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4z"/><path d="M4 8l8 4 8-4M12 12v8"/></symbol>
     <symbol id="i-puzzle" viewBox="0 0 24 24"><path d="M9 4h4v3a2 2 0 104 0h3v4h-3a2 2 0 100 4h3v4h-4v-3a2 2 0 10-4 0v3H9v-3a2 2 0 10-4 0v3H4v-4h3a2 2 0 100-4H4V7h3a2 2 0 104 0z" transform="scale(0.9) translate(1.3 1.3)"/></symbol>
     <symbol id="i-tag" viewBox="0 0 24 24"><path d="M3 12V4h8l9 9-8 8-9-9z"/><circle cx="8" cy="9" r="1.6"/></symbol>
+    <symbol id="i-branch" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="7" r="2"/><path d="M6 7v10M18 9c0 5-7 4-11 8.5"/></symbol>
     <symbol id="i-stack" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="11" width="16" height="5" rx="1"/><path d="M7 20h10"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
@@ -116,6 +117,7 @@
       <button class="nav-item" data-page="settings"><svg><use href="#i-settings"/></svg><span>高级选项</span></button>
       <button class="nav-item" data-page="launcher"><svg><use href="#i-wrench"/></svg><span>启动器设置</span></button>
       <button class="nav-item" data-page="deploy"><svg><use href="#i-deploy"/></svg><span>环境部署</span></button>
+      <button class="nav-item" data-page="versions"><svg><use href="#i-branch"/></svg><span>版本管理</span></button>
       <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站·liblib</em></button>
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
@@ -603,6 +605,51 @@
         </div>
       </section>
 
+      <!-- ======== 版本管理（WebUI / ComfyUI 本体） ======== -->
+      <section class="page" id="page-versions">
+        <div class="card ext-target-card">
+          <div class="card-title">管理对象<span class="card-title-hint" id="ver-target-hint"></span></div>
+          <div class="ext-target">
+            <span class="ic-kind" id="ver-target-kind"></span>
+            <b class="ext-target-name" id="ver-target-name">—</b>
+            <select id="ver-target-sel" hidden></select>
+          </div>
+          <div class="ext-target-path" id="ver-target-path"></div>
+          <div class="hint" id="ver-target-warn" data-status="warn" hidden></div>
+        </div>
+        <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「常用插件」页管理。</div>
+
+        <div class="card">
+          <div class="card-title">当前版本<span class="card-title-hint" id="ver-check-hint"></span></div>
+          <div class="kv-table" id="ver-current"></div>
+          <div class="hint" id="ver-status"></div>
+          <div class="action-row">
+            <button class="btn btn-accent" id="ver-update"><svg class="btn-icon"><use href="#i-download"/></svg>更新到最新</button>
+            <button class="btn" id="ver-check">检查更新 / 选择版本</button>
+            <button class="btn" id="ver-adopt" hidden>接管为 Git 管理…</button>
+            <button class="btn" id="ver-cancel" disabled>取消</button>
+          </div>
+        </div>
+
+        <div class="card" id="ver-pick-card" hidden>
+          <div class="card-title">选择版本<span class="card-title-hint">「最近提交」是当前分支最新的 40 个提交；「版本标签」是作者发布的正式版本号</span></div>
+          <div id="ver-pick"></div>
+          <div class="action-row">
+            <button class="btn btn-primary" id="ver-apply" disabled>切换到所选版本</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">切换记录<span class="card-title-hint">每次切换前的版本都会记在这里，点「回到这个版本」就能回滚</span></div>
+          <div id="ver-history"></div>
+        </div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>日志</span><button class="btn btn-xs" id="ver-log-clear">清空</button></div>
+          <pre class="console console-sm" id="ver-log"></pre>
+        </div>
+      </section>
+
       <!-- ======== 常用插件 ======== -->
       <section class="page" id="page-extensions">
         <div class="card ext-target-card">
@@ -623,6 +670,9 @@
           <button class="btn btn-accent" id="ext-install">
             <svg class="btn-icon"><use href="#i-download"/></svg>安装选中项
           </button>
+          <button class="btn" id="ext-check-upd" title="联网检查每个插件有没有新版本，不会改动任何文件">检查插件更新</button>
+          <button class="btn" id="ext-update-all" hidden>全部更新</button>
+          <button class="btn" id="ext-open-dir">打开插件目录</button>
           <button class="btn" id="ext-cancel" disabled>取消</button>
         </div>
         <div class="console-wrap">
@@ -919,6 +969,7 @@
 <script src="js/civitai.js"></script>
 <script src="js/models.js"></script>
 <script src="js/extensions.js"></script>
+<script src="js/versions.js"></script>
 <script src="js/wd14.js"></script>
 <script src="js/imgcontainer.js"></script>
 <script src="js/meta.js"></script>

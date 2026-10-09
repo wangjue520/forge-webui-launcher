@@ -143,7 +143,31 @@ def manager_pip_installed(py):
     return any(os.path.isdir(os.path.join(sp, "comfyui_manager")) for sp in site_packages_dirs(py))
 
 
-def is_installed(node, comfy_dir, py):
+def _node_keys(node):
+    """一个目录项可能对应的 (仓库 slug 集合, 文件夹键集合)"""
+    import version_manager as vm
+    slugs, keys = set(), set()
+    if node["url"]:
+        slugs.add(vm.repo_slug(node["url"]))
+        keys.add(vm.folder_key(vm.repo_name(node["url"])))
+    for f in [node.get("folder")] + list(node.get("aliases") or []):
+        if f:
+            keys.add(vm.folder_key(f))
+    return slugs, keys
+
+
+def match_installed(node, scanned):
+    """
+    在 scan_repos() 的结果里找这个节点：git 远程地址是同一个仓库，或者文件夹名对得上
+    （忽略大小写、.disabled、zip 解压自带的 -main/-master）。用户自己在 ComfyUI 里
+    用 Manager / git clone / 下载 zip 装的都能认出来。
+    """
+    # 文件夹名对上但仓库不同（别人的分叉）也算装了：同名目录在，再 clone 也会失败
+    slugs, keys = _node_keys(node)
+    return [r for r in scanned if (r["slug"] and r["slug"] in slugs) or r["key"] in keys]
+
+
+def is_installed(node, comfy_dir, py, scanned=None):
     if not comfy_dir:
         return False
     cn = custom_nodes_dir(comfy_dir)
@@ -153,20 +177,25 @@ def is_installed(node, comfy_dir, py):
         if manager_builtin_supported(comfy_dir):
             return manager_pip_installed(py)
         return any(os.path.isdir(os.path.join(cn, f)) for f in ("comfyui-manager", "ComfyUI-Manager"))
-    if os.path.isdir(os.path.join(cn, node["folder"])):
-        return True
-    # 被 Manager 停用的节点会改名成 xxx.disabled 或挪进 .disabled/
-    return os.path.isdir(os.path.join(cn, node["folder"] + ".disabled")) or \
-        os.path.isdir(os.path.join(cn, ".disabled", node["folder"]))
+    if scanned is None:
+        import version_manager as vm
+        scanned = vm.scan_repos(cn)
+    return bool(match_installed(node, scanned))
 
 
 def list_status(comfy_dir, py):
+    import version_manager as vm
+    scanned = vm.scan_repos(custom_nodes_dir(comfy_dir)) if comfy_dir else []
     out = []
     for n in CATALOG:
+        hits = [] if n["id"] == MANAGER_ID else match_installed(n, scanned)
+        installed = is_installed(n, comfy_dir, py, scanned)
         out.append({"id": n["id"], "name": n["name"], "desc": n["desc"], "group": n["group"],
-                    "default": bool(n.get("default")),
-                    "installed": is_installed(n, comfy_dir, py)})
-    return out
+                    "default": bool(n.get("default")), "installed": installed,
+                    "folders": [h["folder"] for h in hits],
+                    "disabled": bool(hits) and all(h["disabled"] for h in hits),
+                    "url": n["url"], "folder": n["folder"]})
+    return out, scanned
 
 
 def _filtered_requirement_lines(req_path, gh_prefix):
@@ -228,14 +257,157 @@ def _torch_constraints(py, env):
     return path
 
 
-def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: False,
-            gh_proxies=(), pip_mirror_argsets=None):
+class DepInstaller:
     """
-    装一组节点。
+    往某个 ComfyUI 的 Python 里装依赖（节点安装、节点换版本、ComfyUI 本体换版本共用）。
       run(program, args, cwd, env, timeout) -> 退出码（调用方负责流式日志 / 取消 / 超时）
       gh_proxies: GitHub 加速代理前缀列表（如 "https://ghfast.top"），按顺序尝试，最后直连
       pip_mirror_argsets: pip 镜像参数组列表（如 [["-i", 清华], ["-i", 阿里]]），
         按顺序尝试，官方源永远自动兜底
+    用完调用 close() 删掉临时的 torch 约束文件。
+    """
+
+    def __init__(self, py, run, log, env=None, cancelled=lambda: False,
+                 gh_proxies=(), pip_mirror_argsets=None):
+        self.py, self.run, self.log, self.cancelled = py, run, log, cancelled
+        self.env = env
+        self.sources = [p.rstrip("/") + "/https://github.com/" for p in gh_proxies] + [""]
+        self.mirrors = [list(a) for a in (pip_mirror_argsets or [])]
+        self.pins = _torch_constraints(py, env)
+
+    def close(self):
+        if self.pins:
+            try:
+                os.remove(self.pins)
+            except OSError:
+                pass
+            self.pins = None
+
+    def ok(self):
+        return bool(self.py and os.path.isfile(self.py))
+
+    def pip(self, args, cwd, what):
+        if not self.ok():
+            return 1
+        base = [self.py, "-s", "-m", "pip", "install", "--disable-pip-version-check"]
+        if self.pins:
+            base += ["-c", self.pins]
+        # 逐个镜像试，官方源永远兜底：单个镜像缺包/同步延迟/限速时
+        # 不至于直接整批失败（国内部署最常见的死因）
+        attempts = self.mirrors + [[]]
+        rc = 1
+        for i, extra in enumerate(attempts):
+            if self.cancelled():
+                break
+            if i > 0:
+                self.log(f"[节点] {what}：这个源装不上，换下一个源重试 ...\n")
+            rc = self.run(base[0], base[1:] + list(args) + extra, cwd, self.env, 3600)
+            if rc == 0:
+                break
+        return rc
+
+    def requirements(self, req, cwd, label):
+        """装一份 requirements.txt（去掉 torch 系）。返回装不上的依赖列表"""
+        lines, has_gh = _filtered_requirement_lines(req, "")
+        if not lines:
+            return []
+        log, cancelled = self.log, self.cancelled
+        # 含 git+ 依赖的：每个代理重生成一份改写后的清单逐个试；
+        # 纯 PyPI 依赖的只有一份，失败直接进逐行安装
+        prefixes = self.sources if has_gh else [""]
+        for prefix in prefixes:
+            if cancelled():
+                return []
+            attempt = _filtered_requirement_lines(req, prefix)[0] if prefix else lines
+            tmp = _write_temp_req(attempt)
+            try:
+                log(f"[节点] 安装 {label} 的依赖 ...\n")
+                if self.pip(["-r", tmp], cwd, label) == 0:
+                    return []
+                if prefix != prefixes[-1]:
+                    log(f"[节点] {label}：经该地址安装失败，换下一个地址重试 ...\n")
+            finally:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        if cancelled():
+            return []
+        # 整份 requirements 里只要有一行装不上（比如要现场编译的包），
+        # pip 会整批放弃；退回逐行装，能装的尽量装上
+        log(f"[节点] {label}：整体安装失败，改为逐个安装依赖 ...\n")
+        bad = []
+        for line in lines:
+            if cancelled():
+                break
+            if self.pip([line], cwd, label) != 0:
+                bad.append(line)
+        if bad:
+            log(f"[节点] {label}：这些依赖没装上：{'、'.join(bad)}\n")
+        return bad
+
+    def node_deps(self, node_dir, label):
+        """装节点依赖（requirements.txt + install.py）。返回 None = 全部装好；否则返回失败原因列表"""
+        problems = []
+        req = os.path.join(node_dir, "requirements.txt")
+        if os.path.isfile(req):
+            problems.extend(self.requirements(req, node_dir, label))
+        if self.cancelled():
+            return problems or None
+        inst_py = os.path.join(node_dir, "install.py")
+        if os.path.isfile(inst_py) and self.ok():
+            self.log(f"[节点] 运行 {label} 的 install.py ...\n")
+            if self.run(self.py, ["-s", "install.py"], node_dir, self.env, 1800) != 0:
+                problems.append("install.py 执行失败")
+        return problems or None
+
+
+def node_env(comfy_dir, env=None):
+    """装节点 / 节点依赖时用的环境变量"""
+    env = dict(env or os.environ)
+    env.setdefault("COMFYUI_PATH", comfy_dir)
+    env.setdefault("COMFYUI_MODEL_PATH", os.path.join(comfy_dir, "models"))
+    env["SAM2_BUILD_CUDA"] = "0"           # Impact Pack 依赖的 sam2：不编译 CUDA 扩展（Windows 上没有编译器会失败）
+    env["SAM2_BUILD_ALLOW_ERRORS"] = "1"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
+def sync_comfy_requirements(comfy_dir, py, run, log, env=None, cancelled=lambda: False,
+                            gh_proxies=(), pip_mirror_argsets=None):
+    """
+    ComfyUI 本体换版本后补装依赖：ComfyUI 启动时不会自己装（新版前端包
+    comfyui-frontend-package 的版本号每个版本都会变，不装就是旧界面甚至打不开）。
+    已经装了内置 Manager 的，manager_requirements.txt 也一起更新。返回装不上的依赖列表
+    """
+    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_proxies, pip_mirror_argsets)
+    try:
+        if not dep.ok():
+            log("[版本] 找不到这个 ComfyUI 用的 Python，依赖没法自动补装\n")
+            return ["（找不到 Python）"]
+        bad = dep.requirements(os.path.join(comfy_dir, "requirements.txt"), comfy_dir, "ComfyUI")
+        mreq = os.path.join(comfy_dir, "manager_requirements.txt")
+        if os.path.isfile(mreq) and manager_pip_installed(py) and not cancelled():
+            bad += dep.requirements(mreq, comfy_dir, "ComfyUI-Manager")
+        return bad
+    finally:
+        dep.close()
+
+
+def install_node_deps(node_dir, comfy_dir, py, run, log, env=None, cancelled=lambda: False,
+                      gh_proxies=(), pip_mirror_argsets=None):
+    """节点换版本后重装它的依赖。返回 None = 全部装好；否则返回失败原因列表"""
+    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_proxies, pip_mirror_argsets)
+    try:
+        return dep.node_deps(node_dir, os.path.basename(node_dir))
+    finally:
+        dep.close()
+
+
+def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: False,
+            gh_proxies=(), pip_mirror_argsets=None):
+    """
+    装一组节点。参数含义见 DepInstaller。
     返回 {"ok": [...], "failed": [(id, 原因)], "skipped": [...]}
     """
     res = {"ok": [], "failed": [], "skipped": []}
@@ -246,84 +418,11 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
         log("[节点] 找不到这个 ComfyUI 用的 Python，节点依赖装不了（节点本身照样下载）\n")
     cn = custom_nodes_dir(comfy_dir)
     os.makedirs(cn, exist_ok=True)
-    env = dict(env or os.environ)
-    env.setdefault("COMFYUI_PATH", comfy_dir)
-    env.setdefault("COMFYUI_MODEL_PATH", os.path.join(comfy_dir, "models"))
-    env["SAM2_BUILD_CUDA"] = "0"           # Impact Pack 依赖的 sam2：不编译 CUDA 扩展（Windows 上没有编译器会失败）
-    env["SAM2_BUILD_ALLOW_ERRORS"] = "1"
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    sources = [p.rstrip("/") + "/https://github.com/" for p in gh_proxies] + [""]
-    pins = _torch_constraints(py, env)
-
-    def pip(args, cwd, what):
-        if not py or not os.path.isfile(py):
-            return 1
-        base = [py, "-s", "-m", "pip", "install", "--disable-pip-version-check"]
-        if pins:
-            base += ["-c", pins]
-        # 逐个镜像试，官方源永远兜底：单个镜像缺包/同步延迟/限速时
-        # 不至于直接整批失败（国内部署最常见的死因）
-        attempts = [list(a) for a in (pip_mirror_argsets or [])] + [[]]
-        rc = 1
-        for i, extra in enumerate(attempts):
-            if cancelled():
-                break
-            if i > 0:
-                log(f"[节点] {what}：这个源装不上，换下一个源重试 ...\n")
-            rc = run(base[0], base[1:] + list(args) + extra, cwd, env, 3600)
-            if rc == 0:
-                break
-        return rc
-
-    def install_deps(node_dir, label):
-        """装节点依赖。返回 None = 全部装好；否则返回失败原因列表"""
-        problems = []
-        req = os.path.join(node_dir, "requirements.txt")
-        if os.path.isfile(req):
-            lines, has_gh = _filtered_requirement_lines(req, "")
-            if lines:
-                done = False
-                # 含 git+ 依赖的：每个代理重生成一份改写后的清单逐个试；
-                # 纯 PyPI 依赖的只有一份，失败直接进逐行安装
-                prefixes = sources if has_gh else [""]
-                for prefix in prefixes:
-                    if cancelled():
-                        break
-                    attempt = _filtered_requirement_lines(req, prefix)[0] if prefix else lines
-                    tmp = _write_temp_req(attempt)
-                    try:
-                        log(f"[节点] 安装 {label} 的依赖 ...\n")
-                        if pip(["-r", tmp], node_dir, label) == 0:
-                            done = True
-                            break
-                        if prefix != prefixes[-1]:
-                            log(f"[节点] {label}：经该地址安装失败，换下一个地址重试 ...\n")
-                    finally:
-                        try:
-                            os.remove(tmp)
-                        except OSError:
-                            pass
-                if not done and not cancelled():
-                    # 整份 requirements 里只要有一行装不上（比如要现场编译的包），
-                    # pip 会整批放弃；退回逐行装，能装的尽量装上
-                    log(f"[节点] {label}：整体安装失败，改为逐个安装依赖 ...\n")
-                    bad = []
-                    for line in lines:
-                        if cancelled():
-                            break
-                        if pip([line], node_dir, label) != 0:
-                            bad.append(line)
-                    if bad:
-                        problems.extend(bad)
-                        log(f"[节点] {label}：这些依赖没装上：{'、'.join(bad)}\n")
-        if cancelled():
-            return problems or None
-        inst_py = os.path.join(node_dir, "install.py")
-        if os.path.isfile(inst_py) and py and os.path.isfile(py):
-            log(f"[节点] 运行 {label} 的 install.py ...\n")
-            if run(py, ["-s", "install.py"], node_dir, env, 1800) != 0:
-                problems.append("install.py 执行失败")
-        return problems or None
+    env = node_env(comfy_dir, env)
+    dep = DepInstaller(py, run, log, env, cancelled, gh_proxies, pip_mirror_argsets)
+    sources = dep.sources
+    pip = dep.pip
+    install_deps = dep.node_deps
 
     for nid in ids:
         if cancelled():
@@ -398,11 +497,7 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
             # 节点文件已经在了，只是依赖没装全：ComfyUI 启动时该节点可能导入失败，
             # 之后可以用 Manager 的「修复」或重新点安装（先删掉文件夹）
             res["failed"].append((nid, "依赖没装全（节点已下载）：" + "、".join(problems)))
-    if pins:
-        try:
-            os.remove(pins)
-        except OSError:
-            pass
+    dep.close()
     return res
 
 

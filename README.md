@@ -4,6 +4,8 @@
 一个启动器同时管理 **ComfyUI** 和 **Forge WebUI**（Neo / Classic），支持多实例同时运行；只用一个的话界面和以前一样简单。
 界面用 HTML/CSS/JS 实现（WebView2 渲染），可切换界面风格（默认"终末地 · 工业终端"，另有"极简"）。
 
+📘 **图文教程（PDF，77 页）**：[WWY 启动器 × Anima 完全上手教程](docs/WWY启动器_Anima_完全上手教程.pdf)——从下载、部署、下模型到提示词、参数、LoRA、启动器全部功能和常见问题。
+
 > **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `start一键启动.bat` (or place `启动WWY启动器.bat` next to the folder and use that), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
 
 ---
@@ -31,13 +33,14 @@
 - **共享模型库**：所有实例共用一份模型（ComfyUI 走 extra_model_paths，WebUI 走 --ckpt-dir 等），合并按内容去重、可撤销
 - **一键部署**：Forge Neo（推荐）/ Classic / ComfyUI，便携 Python + Git + 源码 + torch 预下载全自动
 - **一键更新**：启动器本体在「启动器设置」里一键升级（git 增量 / ZIP 覆盖自动选择），配置和环境全部保留
+- **版本管理（热更新）**：WebUI / ComfyUI 本体一键更新、任选历史版本或版本标签、一键回滚；只换源码不重装环境，改过的 webui-user.bat 自动保留；整合包也能「接管」成可更新的 git 安装
 - **启动管理**：一键启动/停止（整棵进程树干净退出）、实时日志、就绪自动开浏览器、端口占用/残留进程预检
 - **输出管理器**：所有实例的出图统一索引（阵列图 grids 不收录），按时间、角色、LoRA、模型、tag、来源实例筛选，支持收藏夹、多选删除
 - **模型工具**：Civitai / 哩布哩布链接下载（断点续传 + SHA256 校验）、模型管理、哈希查询补全信息、拖拽上传
 - **LoRA 自动整理**：按底模/类型自动分进子文件夹，同步修正 ComfyUI 已保存工作流里的路径，可撤销
 - **WD14 反推**：图片自动打标签，独立环境不污染主环境
 - **图片信息**：读取/编辑 A1111、ComfyUI、NovelAI 等来源的生成参数，可检测并补齐缺失模型
-- **常用插件一键安装**：按分支自动适配兼容版本；ComfyUI 实例装专用节点并自动装依赖，部署 ComfyUI 时推荐节点随部署自动安装
+- **常用插件一键安装与版本管理**：按分支自动适配兼容版本；自己以前装的插件（文件夹名不同、zip 下载、另一个分支的版本）也能认出来；已装插件可检查更新、一键全部更新、换任意版本或回滚；ComfyUI 实例装专用节点并自动装依赖，部署 ComfyUI 时推荐节点随部署自动安装
 - **国内网络优化**：按 IP 归属地自动判断走 GitHub 加速代理 / PyPI 镜像 / HF 镜像，失败自动回退官方源
 
 ---
@@ -157,6 +160,18 @@ D:\forge-launcher\
 Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv 里记录的旧路径。
 多实例模式下本页从侧栏收进「实例管理」页，功能完全一样。
 
+### 版本管理
+
+管理 WebUI / ComfyUI **本体**的版本（插件的版本在「常用插件」页管）。顶部可以选择管理哪个实例。
+
+- **更新到最新**：在原目录里 git 拉取所在分支的最新代码。只换源码，`venv` / `python` / 模型 / 插件 / 出图都不动，不用重装。
+- **检查更新 / 选择版本**：联网列出「最近提交」（当前分支最新 40 个）、「版本标签」（正式版本号）、「之前用过」的版本，选中后「切换到所选版本」。选 tag 或某个提交 = 固定在这个版本，之后点「更新到最新」会回到分支最新。
+- **切换记录**：每次切换前的版本都会记下来，「回到这个版本」一键回滚。
+- **本地修改**：切换前把改过的源码文件备份到 `launcher_data/version_backup/`，切换后自动把改动合并回去；合并不了的会提示，`webui-user.bat` 无论如何都保留你的版本。
+- **依赖**：ComfyUI 切换后启动器会用它自己的 Python 补装新版依赖（跳过 torch 系，不会把显卡版 torch 换掉）；WebUI 下次启动时会自己补装。
+- **接管为 Git 管理**：整合包（解压出来的，没有 `.git`）点这个后会初始化 git 并检出官方最新版，跟官方不一致的源码文件先完整备份，之后就能正常更新 / 切换 / 回滚。
+- 实例运行中不能切换（文件被占用）；联网走「下载加速」的 GitHub 代理，远程地址始终记成 GitHub 原地址，代理挂了不影响以后更新。
+
 ### 模型下载（C 站 · liblib）
 
 粘贴 Civitai / 哩布哩布链接（版本链接、纯 ID 也认）→「获取信息」→ 选文件 → 下载。断点续传；SHA256 校验不过的文件改名 `.broken` 保留，不会被当正常模型加载。
@@ -174,6 +189,9 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 页面顶部「安装到」写明装给哪个实例、装进哪个目录；有多个实例时可以直接在这里换安装目标，不用先切换当前实例。
 
 - **WebUI 实例**：勾选 →「安装选中项」→ 装完重启 WebUI 生效。列表按实例的分支自动适配（Neo 上不能用的隐藏，需要专门分支的自动换源）。
+- **认得出你自己装的插件**：按 git 远程地址和文件夹名（忽略大小写、zip 下载自带的 `-main`/`-master`、`.disabled`）双重匹配，所以先自己用 WebUI / Manager 装过插件、后来才用启动器的，也会正确显示「已安装」。装的是另一个分支的版本（比如 Neo 上装了原版 ADetailer）会提示，并可以「换成推荐版本」（旧文件夹挪进 `launcher_data/version_backup/replaced/`，可恢复）。WebUI 里停用的扩展标「已停用」。
+- **插件版本管理**：已装插件下方显示当前版本；「检查插件更新」联网检查全部插件（不改文件），有更新的显示「更新」按钮，也可以「全部更新」（固定了版本的会跳过）；「版本…」可以选任意提交 / 版本标签 / 之前用过的版本，切换前的版本自动记录、随时回滚。不在清单里的插件放在「其他已装插件」里，同样能更新和换版本。ComfyUI 节点换版本后自动重装依赖。
+- **作者自制**：[中文标签补全 sd-webui-zh-tag-autocomplete](https://github.com/wangjue520/sd-webui-zh-tag-autocomplete)——提示词框直接打中文出 Danbooru 英文标签，Alt+T 一键中译英，可以和 Tag Autocomplete 一起装。
 - **ComfyUI 实例**：显示 ComfyUI 专用节点清单（分「推荐 / 按需 / 作者自制」三组）。节点 clone 进 `custom_nodes`，并用该实例自己的 Python 把依赖一起装好（跳过 torch 系并锁定现有 torch 版本，不会被换成 CPU 版；整批装失败时逐个装）。因为要装依赖，实例运行中不能安装。
 - **ComfyUI-Manager** 已并入 ComfyUI 本体：这里装的是它的 pip 依赖，装好后启动 ComfyUI 时自动加 `--enable-manager`（老版本 ComfyUI 退回 clone 到 custom_nodes）。
 - 「环境部署」新装 ComfyUI 时会默认一起装「推荐」组：Manager、rgthree、Custom-Scripts、Impact Pack + Subpack（FaceDetailer）、UltimateSDUpscale、VideoHelperSuite、KJNodes；部署页可以增减，勾选会被记住。
@@ -339,7 +357,7 @@ forge-webui-launcher/
 ├─ start一键启动.bat     ← 文件夹内的启动入口（自动准备 Python + 依赖）
 ├─ .venv/               ← 启动器自己的运行环境（首次自动创建，删了自动重建）
 ├─ python/              ← 自动下载的便携 Python 3.13（没有才建）
-├─ launcher_data/       ← 运行期数据：输出索引、缩略图、下载缓存、移动记录（更新时保留）
+├─ launcher_data/       ← 运行期数据：输出索引、缩略图、下载缓存、移动记录、版本切换记录与备份（更新时保留）
 ├─ webview_main.py      ← 入口：创建窗口、关闭前确认
 ├─ webview_api.py       ← JS ↔ Python 桥接层：所有页面逻辑、事件推送
 ├─ process_manager.py   ← 每个实例一个启动器（进程树/端口/就绪判定）
@@ -348,6 +366,8 @@ forge-webui-launcher/
 ├─ config_manager.py    ← 配置读写、实例管理、命令行参数生成、环境检测
 ├─ portable_env.py      ← 便携 Python/Git 下载、venv 检测、hashlib 补丁
 ├─ updater.py           ← 启动器自更新（版本号管理、GitHub 检查、增量升级）
+├─ version_manager.py   ← WebUI / ComfyUI / 插件的 git 版本管理（检查更新、切换、回滚、接管整合包）
+├─ comfy_nodes.py       ← ComfyUI 常用节点清单、安装与依赖
 ├─ version.json         ← 当前版本号（每次更新自动重写）
 ├─ mirror_manager.py    ← 国内镜像加速
 ├─ civitai_downloader.py / liblib_client.py / safetensors_meta.py / image_meta_core.py

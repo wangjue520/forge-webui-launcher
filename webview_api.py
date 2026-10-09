@@ -47,6 +47,7 @@ import updater
 import model_library as ml
 import output_index as oi
 import comfy_nodes
+import version_manager as vm
 import h3_models as h3m
 import amd_rocm
 import netspeed
@@ -125,9 +126,10 @@ SETTINGS_BRANCH_OPTIONS = [
     ("ComfyUI", "comfyui"),
 ]
 
-# 常用扩展目录：每一项 (显示名, 简介, url_by_branch, folder_by_branch)
+# 常用扩展目录：每一项 (显示名, 简介, url_by_branch, folder_by_branch[, 附加信息])
 # url/folder 可以是字符串（两分支通用）或 {"classic":..,"neo":..} 字典；
-# 某个分支给 None 表示该分支不可用（列表里会直接隐藏）
+# 某个分支给 None 表示该分支不可用（列表里会直接隐藏）。
+# 附加信息：{"author": True} = 作者自制（列表里打标）
 EXTENSION_CATALOG = [
     (
         "简体中文汉化 (zh_CN)",
@@ -171,6 +173,17 @@ EXTENSION_CATALOG = [
             "neo": "https://github.com/eduardoabreu81/sd-webui-tagcomplete-neo.git",
         },
         {"classic": "a1111-sd-webui-tagcomplete", "neo": "sd-webui-tagcomplete-neo"},
+    ),
+    (
+        "中文标签补全（zh Tag Autocomplete）",
+        "在提示词框直接打中文，弹出对应的 Danbooru 英文标签（收录 12.5 万个常用标签，带中文名和同义词）；"
+        "点「中→英」或按 Alt+T 把整段中文提示词一键转成标签，权重和 LoRA 写法保持不变；"
+        "提示词框下方实时显示每个标签的中文意思。拼音输入法也适配好了。"
+        "可以和上面的 Tag Autocomplete 一起装：英文输入交给它，中文输入由本插件负责，两个弹窗不会抢按键。"
+        "不需要额外的 Python 依赖，Classic / Neo 都能用。",
+        "https://github.com/wangjue520/sd-webui-zh-tag-autocomplete.git",
+        "sd-webui-zh-tag-autocomplete",
+        {"author": True},
     ),
     (
         "Model Keyword（触发词库）",
@@ -512,6 +525,13 @@ class LauncherApi:
         self._ext_thread = None
         self._ext_cancel = False
         self._ext_proc = None
+        self._ext_updates = {}      # 插件目录 -> 最近一次检查更新的结果
+
+        # WebUI / ComfyUI 本体版本管理
+        self._ver_thread = None
+        self._ver_cancel = False
+        self._ver_proc = None
+        self._ver_checks = {}       # 源码目录 -> 最近一次检查更新的结果
 
         # WD14
         self._wd14_model_dir = None
@@ -2181,7 +2201,8 @@ def _api_set_multi_ui(self, on):
 
 
 def _api_set_hidden_pages(self, pages):
-    allowed = {"settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta", "outputs"}
+    allowed = {"settings", "launcher", "deploy", "versions", "civitai", "models", "extensions", "wd14", "meta",
+               "outputs"}
     self.cfg["hidden_pages"] = [p for p in (pages or []) if p in allowed]
     cm.save_config(self.cfg)
     return {"ok": True, "hidden_pages": self.cfg["hidden_pages"]}
@@ -4846,39 +4867,132 @@ def _pip_mirror_argsets(cfg, log=None):
     return []
 
 
+VERSION_HISTORY_PATH = os.path.join(APP_DIR, "launcher_data", "version_history.json")
+VERSION_BACKUP_DIR = os.path.join(APP_DIR, "launcher_data", "version_backup")
+
+
+def _ext_busy(self):
+    return bool((self._ext_thread and self._ext_thread.is_alive()) or getattr(self, "_ext_sync_busy", False))
+
+
+def _ver_busy(self):
+    return bool((self._ver_thread and self._ver_thread.is_alive()) or getattr(self, "_ver_sync_busy", False))
+
+
+def _ext_entries(branch):
+    """EXTENSION_CATALOG 按分支展开成 dict（该分支不可用的跳过）。
+    all_urls / all_folders 收齐了各分支的写法：用户自己装的可能是另一个分支的版本"""
+    out = []
+    for t in EXTENSION_CATALOG:
+        name, desc, url_raw, folder_raw = t[:4]
+        extra = t[4] if len(t) > 4 else {}
+        url = _resolve_by_branch(url_raw, branch)
+        folder = _resolve_by_branch(folder_raw, branch)
+        if not url or not folder:
+            continue  # 该分支不可用的扩展直接不显示
+        all_urls = [u for u in (url_raw.values() if isinstance(url_raw, dict) else [url_raw]) if u]
+        all_folders = [f for f in (folder_raw.values() if isinstance(folder_raw, dict) else [folder_raw]) if f]
+        out.append({"name": name, "desc": desc, "url": url, "folder": folder,
+                    "all_urls": all_urls, "all_folders": all_folders, "author": bool(extra.get("author"))})
+    return out
+
+
+def _ext_match(entry, scanned):
+    """
+    在 extensions/ 里找这个扩展。以前只认「推荐文件夹名」，用户先自己装了 WebUI、
+    后来才用启动器的就会对不上——比如 Neo 上装的是原版 ADetailer（文件夹 adetailer，
+    启动器找的是 ADetailer-Neo），或者用 zip 下载的（文件夹带 -main 后缀）。
+    现在 git 远程地址是同一个仓库、或者文件夹名（忽略大小写 / -main / .disabled）
+    跟任何一个分支的写法对得上，都算已安装。
+    """
+    slugs = {vm.repo_slug(u) for u in entry["all_urls"]}
+    keys = {vm.folder_key(f) for f in entry["all_folders"]} | \
+        {vm.folder_key(vm.repo_name(u)) for u in entry["all_urls"]}
+    return [r for r in scanned if (r["slug"] and r["slug"] in slugs) or r["key"] in keys]
+
+
+def _webui_disabled_exts(root):
+    """WebUI 自己的「扩展」页里停用的扩展（config.json 的 disabled_extensions）"""
+    try:
+        with open(os.path.join(root, "config.json"), "r", encoding="utf-8") as f:
+            data = json.load(f)
+        names = {str(n).lower() for n in (data.get("disabled_extensions") or [])}
+        return names, str(data.get("disable_all_extensions") or "none")
+    except (OSError, ValueError, AttributeError):
+        return set(), "none"
+
+
+def _ext_repo_payload(self, r, disabled_names=()):
+    """扫描到的一个插件目录 → 前端要的版本信息"""
+    upd = self._ext_updates.get(os.path.normcase(r["path"])) or {}
+    return {"folder": r["folder"], "rel": r["rel"], "is_git": r["is_git"],
+            "branch": r.get("branch", ""), "short": (r.get("commit") or "")[:7],
+            "pinned": bool(r["is_git"] and r.get("commit") and not r.get("branch")),
+            "remote": r["remote"],
+            "disabled": r["disabled"] or r["folder"].lower() in disabled_names,
+            "update": upd}
+
+
 def _api_ext_list(self, iid=None):
     cfg, info, comfy_dir = _ext_target(self, iid)
     root = info["root"]
     has_root = bool(root and os.path.isdir(root))
     if info["kind"] == "comfyui":
         py = cm.comfy_python(cfg, root)
-        items = comfy_nodes.list_status(comfy_dir, py) if comfy_dir else []
-        return {"ok": True, "items": items, "has_root": has_root and bool(comfy_dir),
+        items, scanned = comfy_nodes.list_status(comfy_dir, py) if comfy_dir else ([], [])
+        by_path = {}
+        for it in items:
+            node = comfy_nodes.find(it["id"])
+            hits = comfy_nodes.match_installed(node, scanned) if node and node["url"] else []
+            it["repos"] = [_ext_repo_payload(self, h) for h in hits]
+            for h in hits:
+                by_path[h["path"]] = True
+            if hits and node["url"] and not any(h["slug"] == vm.repo_slug(node["url"]) for h in hits) \
+                    and any(h["slug"] for h in hits):
+                it["variant_hint"] = "装的是别人分叉的版本（不是这里推荐的仓库）"
+        others = [_ext_repo_payload(self, r) for r in scanned if r["path"] not in by_path]
+        return {"ok": True, "items": items, "others": others, "has_root": has_root and bool(comfy_dir),
                 "comfy": True, "target": info, "groups": comfy_nodes.GROUP_LABELS,
                 "manager_builtin": comfy_nodes.manager_builtin_supported(comfy_dir)}
     branch = cfg.get("webui_branch", "neo2")
     ext_dir = info["target_dir"]
-    items = []
-    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
-        folder = _resolve_by_branch(folder_raw, branch)
-        if not folder or not _resolve_by_branch(url_raw, branch):
-            continue  # 该分支不可用的扩展直接不显示
-        installed = bool(ext_dir) and os.path.isdir(os.path.join(ext_dir, folder))
-        items.append({"id": name, "name": name, "desc": desc, "installed": installed})
-    return {"ok": True, "items": items, "has_root": has_root, "comfy": False, "target": info}
+    scanned = vm.scan_repos(ext_dir) if ext_dir else []
+    disabled_names, disable_all = _webui_disabled_exts(root) if has_root else (set(), "none")
+    items, matched = [], set()
+    for e in _ext_entries(branch):
+        hits = _ext_match(e, scanned)
+        matched.update(h["path"] for h in hits)
+        it = {"id": e["name"], "name": e["name"], "desc": e["desc"], "installed": bool(hits),
+              "author": e["author"], "url": e["url"], "folder": e["folder"],
+              "repos": [_ext_repo_payload(self, h, disabled_names) for h in hits]}
+        want = vm.repo_slug(e["url"])
+        if hits and any(h["slug"] for h in hits) and not any(h["slug"] == want for h in hits):
+            other = next(h for h in hits if h["slug"])
+            known = {vm.repo_slug(u) for u in e["all_urls"]}
+            if other["slug"] in known and len(e["all_urls"]) > 1:
+                it["variant_hint"] = ("装的是 Classic 版本，Neo 下可能报错，建议换成 Neo 专用版"
+                                      if branch in _NEO_KEYS else "装的是 Neo 专用版，Classic 下建议换回原版")
+            else:
+                it["variant_hint"] = "装的是别人分叉的版本（不是这里推荐的仓库）"
+            it["can_replace"] = True
+        items.append(it)
+    others = [_ext_repo_payload(self, r, disabled_names) for r in scanned if r["path"] not in matched]
+    return {"ok": True, "items": items, "others": others, "has_root": has_root, "comfy": False,
+            "target": info, "disable_all": disable_all}
 
 
-def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
-    """「常用插件」页跑命令：流式写日志、可取消、有超时（加速代理卡死时不至于永远等）"""
-    log = lambda t: self._emit("ext", "log", text=t)
+def _stream_cmd(self, scope, program, args, cwd, env=None, timeout=None, cancelled=lambda: False,
+                set_proc=lambda p: None):
+    """跑命令：流式写日志到 scope、可取消、有超时（加速代理卡死时不至于永远等）"""
+    log = lambda t: self._emit(scope, "log", text=t)
     try:
         proc = subprocess.Popen([program] + list(args), cwd=cwd, env=env,
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 stdin=subprocess.DEVNULL, creationflags=_NO_WINDOW)
     except OSError as e:
-        log(f"[插件] 无法启动 {program}: {e}\n")
+        log(f"无法启动 {program}: {e}\n")
         return 1
-    self._ext_proc = proc
+    set_proc(proc)
     q = queue.Queue()
 
     def reader():
@@ -4893,7 +5007,7 @@ def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
         finally:
             q.put(None)
 
-    threading.Thread(target=reader, daemon=True, name="ext-cmd-reader").start()
+    threading.Thread(target=reader, daemon=True, name=f"{scope}-cmd-reader").start()
     t0 = time.monotonic()
     while True:
         try:
@@ -4904,9 +5018,9 @@ def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
             break
         if data:
             log(cm.decode_process_output(data))
-        if self._ext_cancel or (timeout and time.monotonic() - t0 > timeout):
-            if not self._ext_cancel:
-                log(f"\n[插件] 超过 {timeout} 秒没完成，已中止\n")
+        if cancelled() or (timeout and time.monotonic() - t0 > timeout):
+            if not cancelled():
+                log(f"\n超过 {timeout} 秒没完成，已中止\n")
             kill_process_tree(proc.pid)
             break
     try:
@@ -4915,9 +5029,47 @@ def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
         return -9
 
 
+def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
+    """「常用插件」页跑命令"""
+    def set_proc(p):
+        self._ext_proc = p
+    return _stream_cmd(self, "ext", program, args, cwd, env, timeout,
+                       lambda: self._ext_cancel, set_proc)
+
+
+def _quiet_run(program, args, cwd, env=None, timeout=None):
+    """不要日志的短命令（批量检查更新时并发跑，日志会搅成一团）"""
+    try:
+        p = subprocess.run([program] + list(args), cwd=cwd, env=env, capture_output=True,
+                           stdin=subprocess.DEVNULL, timeout=timeout or 300, creationflags=_NO_WINDOW)
+        return p.returncode
+    except (OSError, subprocess.SubprocessError):
+        return -1
+
+
+def _ext_env(cfg, info):
+    if info["kind"] == "comfyui":
+        return cm.build_comfy_env(cfg, info["root"])
+    e = dict(os.environ)
+    e["GIT_TERMINAL_PROMPT"] = "0"
+    return e
+
+
+def _ext_resolve_repo(info, rel):
+    """前端传来的相对路径 → 插件目录（必须在插件目录里面，防止越界）"""
+    base = info.get("target_dir") or ""
+    if not base or not rel:
+        return None
+    p = os.path.normpath(os.path.join(base, rel))
+    if os.path.normcase(os.path.dirname(p)) not in (os.path.normcase(os.path.normpath(base)),
+                                                    os.path.normcase(os.path.join(base, ".disabled"))):
+        return None
+    return p if os.path.isdir(p) else None
+
+
 def _api_ext_install(self, names, iid=None):
-    if self._ext_thread and self._ext_thread.is_alive():
-        return {"ok": False, "error": "已有安装任务在进行中"}
+    if _ext_busy(self):
+        return {"ok": False, "error": "已有插件任务在进行中"}
     cfg, info, comfy_dir = _ext_target(self, iid)
     root = info["root"]
     if not root or not info["target_dir"]:
@@ -4967,17 +5119,14 @@ def _api_ext_install(self, names, iid=None):
 
     ext_dir = info["target_dir"]
     branch = cfg.get("webui_branch", "neo2")
+    scanned = vm.scan_repos(ext_dir)
     selected = []
-    for name, desc, url_raw, folder_raw in EXTENSION_CATALOG:
-        if name not in names:
+    for e in _ext_entries(branch):
+        if e["name"] not in names:
             continue
-        folder = _resolve_by_branch(folder_raw, branch)
-        url = _resolve_by_branch(url_raw, branch)
-        if not folder or not url:
-            continue  # 该分支不可用
-        if os.path.isdir(os.path.join(ext_dir, folder)):
-            continue  # 已安装的自动跳过
-        selected.append((name, url, folder))
+        if _ext_match(e, scanned):
+            continue  # 已安装的（包括用户自己装的、文件夹名不一样的）自动跳过
+        selected.append((e["name"], e["url"], e["folder"]))
     if not selected:
         return {"ok": False, "error": "请先勾选要安装的扩展（已安装的会自动跳过）"}
 
@@ -4988,26 +5137,32 @@ def _api_ext_install(self, names, iid=None):
         try:
             log(f"[插件] 安装到：{info['name']}（{ext_dir}）\n")
             os.makedirs(ext_dir, exist_ok=True)
-            use_mirror = bool(_gh_proxies(cfg, lambda m: log(m + "\n")))
+            sources = vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n")))
+            env = _ext_env(cfg, info)
             for name, url, folder in selected:
                 if self._ext_cancel:
                     break
-                u = url
-                if use_mirror:
-                    try:
-                        import mirror_manager as mm
-                        u = mm.github_url(url, True, 0)
-                    except Exception:
-                        pass
                 log(f"\n[插件] 正在安装: {name}\n")
-                rc = _ext_run_cmd(self, git_exe, ["clone", u, os.path.join(ext_dir, folder)],
-                                  ext_dir, None, 900)
+                dest = os.path.join(ext_dir, folder)
+                rc = 1
+                # 代理逐个试，最后直连；远程地址始终记成 GitHub 原地址，以后更新不依赖某个代理
+                for i, prefix in enumerate(sources):
+                    if self._ext_cancel:
+                        break
+                    if i:
+                        log("[插件] 这个地址没连上，换下一个重试 ...\n")
+                    args = (["-c", f"url.{prefix}.insteadOf=https://github.com/"] if prefix else []) + \
+                        ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60", "clone", url, dest]
+                    rc = _ext_run_cmd(self, git_exe, args, ext_dir, env, 900)
+                    if rc == 0:
+                        break
+                    shutil.rmtree(dest, ignore_errors=True)
                 if self._ext_cancel:
-                    shutil.rmtree(os.path.join(ext_dir, folder), ignore_errors=True)
+                    shutil.rmtree(dest, ignore_errors=True)
                     break
                 if rc != 0:
-                    shutil.rmtree(os.path.join(ext_dir, folder), ignore_errors=True)
-                    log(f"[插件] 「{name}」安装返回非零退出码 ({rc})，跳过继续下一个\n")
+                    shutil.rmtree(dest, ignore_errors=True)
+                    log(f"[插件] 「{name}」安装失败（退出码 {rc}），跳过继续下一个\n")
             if self._ext_cancel:
                 log("\n[插件] 已取消\n")
             else:
@@ -5019,6 +5174,435 @@ def _api_ext_install(self, names, iid=None):
 
     self._emit("ext", "state", running=True)
     self._ext_thread = self._spawn(work, name="ext-install")
+    return {"ok": True}
+
+
+def _ext_task_guard(self, iid):
+    """插件版本操作的共同前置检查。返回 (cfg, info, comfy_dir, git_exe, error)"""
+    if _ext_busy(self):
+        return None, None, None, None, "已有插件任务在进行中，等它结束再操作"
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    if not info["root"] or not info["target_dir"]:
+        return None, None, None, None, f"实例「{info['name']}」还没有设置正确的根目录"
+    git_exe = _git_for(cfg, info["root"])
+    if not git_exe:
+        return None, None, None, None, "未检测到 Git，没法管理插件版本"
+    return cfg, info, comfy_dir, git_exe, None
+
+
+def _api_ext_repo_versions(self, rel, iid=None):
+    """「版本…」弹窗：某个插件的当前版本 + 远程可选版本（会联网，几秒到十几秒）"""
+    cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
+    if err:
+        return {"ok": False, "error": err}
+    repo = _ext_resolve_repo(info, rel)
+    if not repo:
+        return {"ok": False, "error": "找不到这个插件的目录（刷新一下列表再试）"}
+    env = _ext_env(cfg, info)
+    local = vm.local_info(git_exe, repo, env)
+    if not local.get("is_git"):
+        return {"ok": True, "local": local, "remote": None, "history": []}
+    log = lambda t: self._emit("ext", "log", text=t)
+    log(f"\n[插件] 获取「{os.path.basename(repo)}」的版本列表 ...\n")
+    self._ext_cancel = False
+    self._ext_sync_busy = True     # 这次调用跑完前别的插件任务进不来
+    try:
+        return _ext_repo_versions_body(self, cfg, info, git_exe, repo, env, local, log)
+    finally:
+        self._ext_sync_busy = False
+
+
+def _ext_repo_versions_body(self, cfg, info, git_exe, repo, env, local, log):
+    remote = vm.check(lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t), git_exe, repo,
+                      local.get("remote"), vm.net_sources(_gh_proxies(cfg)), log, env)
+    if remote.get("ok"):
+        self._ext_updates[os.path.normcase(repo)] = _update_summary(remote)
+        log("[插件] 版本列表已更新\n")
+    else:
+        log(f"[插件] {remote.get('error')}\n")
+    return {"ok": True, "local": local, "remote": remote,
+            "history": vm.load_history(VERSION_HISTORY_PATH, repo)}
+
+
+def _update_summary(chk):
+    latest = chk.get("latest") or {}
+    return {"behind": chk.get("behind"), "pinned": chk.get("pinned"), "branch": chk.get("branch"),
+            "latest_short": latest.get("short", ""), "latest_date": latest.get("date", ""),
+            "checked": time.strftime("%H:%M")}
+
+
+def _api_ext_check_updates(self, iid=None):
+    """检查这个实例所有 git 插件有没有更新（并发 4 个，不改动任何文件）"""
+    cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
+    if err:
+        return {"ok": False, "error": err}
+    repos = [r for r in vm.scan_repos(info["target_dir"]) if r["is_git"] and r["remote"]]
+    if not repos:
+        return {"ok": False, "error": "这个实例里没有可检查的 git 插件"}
+    self._ext_cancel = False
+
+    def work():
+        from concurrent.futures import ThreadPoolExecutor
+        log = lambda t: self._emit("ext", "log", text=t)
+        env = _ext_env(cfg, info)
+        sources = vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n")))
+        log(f"\n[插件] 检查 {len(repos)} 个插件的更新 ...\n")
+        quiet = lambda p, a, c, e, t: -1 if self._ext_cancel else _quiet_run(p, a, c, e, t)
+        n_upd = [0]
+
+        def one(r):
+            if self._ext_cancel:
+                return
+            chk = vm.check(quiet, git_exe, r["path"], r["remote"], sources, lambda t: None, env,
+                           cancelled=lambda: self._ext_cancel)
+            key = os.path.normcase(r["path"])
+            if chk.get("ok"):
+                s = _update_summary(chk)
+                self._ext_updates[key] = s
+                if s["behind"]:
+                    n_upd[0] += 1
+                    log(f"[插件] {r['folder']}：有更新（落后 {s['behind']} 个提交，最新 {s['latest_date']}）\n")
+            else:
+                self._ext_updates[key] = {"error": chk.get("error"), "checked": time.strftime("%H:%M")}
+                log(f"[插件] {r['folder']}：检查失败（{chk.get('error')}）\n")
+            self._emit("ext", "update_status", rel=r["rel"], update=self._ext_updates[key])
+
+        try:
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                list(pool.map(one, repos))
+            log("\n[插件] 已取消\n" if self._ext_cancel else
+                f"\n[插件] 检查完成：{n_upd[0]} 个插件有更新\n")
+            self._emit("ext", "done")
+        finally:
+            self._emit("ext", "state", running=False)
+
+    self._emit("ext", "state", running=True)
+    self._ext_thread = self._spawn(work, name="ext-check")
+    return {"ok": True}
+
+
+def _api_ext_switch(self, rels, target=None, iid=None):
+    """
+    切换插件版本。rels: 一个或多个插件目录（相对插件目录）；target 见 vm.switch，
+    缺省 = 更新到最新。批量「全部更新」时跳过固定了版本的插件。
+    ComfyUI 节点换完版本会重装依赖（ComfyUI 不会自己装），Forge 扩展的依赖
+    由 WebUI 下次启动时自己装。
+    """
+    cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
+    if err:
+        return {"ok": False, "error": err}
+    if isinstance(rels, str):
+        rels = [rels]
+    target = target or {"kind": "latest"}
+    batch = len(rels) > 1
+    repos = [p for p in (_ext_resolve_repo(info, r) for r in rels or []) if p]
+    if not repos:
+        return {"ok": False, "error": "没有选中要更新的插件"}
+    comfy = info["kind"] == "comfyui"
+    if comfy and info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行。节点换版本后要重装依赖，"
+                                      "运行中文件被占用会失败——请先停止这个实例。"}
+    self._ext_cancel = False
+
+    def work():
+        log = lambda t: self._emit("ext", "log", text=t)
+        run = lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t)
+        env = _ext_env(cfg, info)
+        proxies = _gh_proxies(cfg, lambda m: log(m + "\n"))
+        sources = vm.net_sources(proxies)
+        py = cm.comfy_python(cfg, info["root"]) if comfy else None
+        ok = fail = 0
+        try:
+            for repo in repos:
+                if self._ext_cancel:
+                    break
+                name = os.path.basename(repo)
+                local = vm.local_info(git_exe, repo, env, with_dirty=False)
+                if not local.get("is_git"):
+                    log(f"\n[插件] {name}：不是 git 安装的（zip 解压 / Manager 注册表版），没法用这里更新\n")
+                    continue
+                if batch and not local.get("branch"):
+                    log(f"\n[插件] {name}：固定在 {local.get('short')}，批量更新跳过（要更新请单独点它的「版本」）\n")
+                    continue
+                log(f"\n[插件] ===== {name} =====\n")
+                res = vm.switch(run, git_exe, repo, target, local.get("remote"), sources, log, env,
+                                backup_root=os.path.join(VERSION_BACKUP_DIR, "plugins", name),
+                                cancelled=lambda: self._ext_cancel)
+                if not res.get("ok"):
+                    fail += 1
+                    log(f"[插件] {name}：{res.get('error')}\n")
+                    continue
+                ok += 1
+                self._ext_updates.pop(os.path.normcase(repo), None)
+                if res.get("unchanged"):
+                    continue
+                vm.record_history(VERSION_HISTORY_PATH, repo, res["from"], vm.version_label(local))
+                log(f"[插件] {name}：{res['from'][:7]} → {res['to'][:7]}\n")
+                if comfy and not self._ext_cancel:
+                    bad = comfy_nodes.install_node_deps(
+                        repo, comfy_dir, py, run, log, env, lambda: self._ext_cancel,
+                        proxies, _pip_mirror_argsets(cfg))
+                    if bad:
+                        log(f"[插件] {name}：有依赖没装上：{'、'.join(bad)}\n")
+            if self._ext_cancel:
+                log("\n[插件] 已取消\n")
+            else:
+                log(f"\n[插件] 完成：成功 {ok} 个" + (f"，失败 {fail} 个" if fail else "") +
+                    f"。重启 {'ComfyUI' if comfy else 'WebUI'} 后生效。\n")
+            self._emit("ext", "done")
+        finally:
+            self._ext_proc = None
+            self._emit("ext", "state", running=False)
+
+    self._emit("ext", "state", running=True)
+    self._ext_thread = self._spawn(work, name="ext-switch")
+    return {"ok": True}
+
+
+def _api_ext_replace(self, name, iid=None):
+    """
+    已装的是另一个分支 / 别人分叉的版本时换成推荐版本：旧文件夹整个挪到
+    launcher_data/version_backup/replaced/ 下（想回去可以挪回来），再装推荐版。
+    """
+    cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
+    if err:
+        return {"ok": False, "error": err}
+    if info["kind"] == "comfyui":
+        return {"ok": False, "error": "ComfyUI 节点请在 ComfyUI-Manager 里换版本"}
+    entry = next((e for e in _ext_entries(cfg.get("webui_branch", "neo2")) if e["name"] == name), None)
+    if not entry:
+        return {"ok": False, "error": "这个分支没有该扩展"}
+    hits = _ext_match(entry, vm.scan_repos(info["target_dir"]))
+    if not hits:
+        return {"ok": False, "error": "没有找到已安装的旧版本"}
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dest_root = os.path.join(VERSION_BACKUP_DIR, "replaced", stamp)
+    moved = []
+    for h in hits:
+        try:
+            os.makedirs(dest_root, exist_ok=True)
+            shutil.move(h["path"], os.path.join(dest_root, h["folder"]))
+            moved.append(h["folder"])
+        except OSError as e:
+            return {"ok": False, "error": f"移走旧版本「{h['folder']}」失败（{e}）。"
+                                          "WebUI 正在运行的话请先停止。"}
+    self._emit("ext", "log", text=f"\n[插件] 旧版本 {'、'.join(moved)} 已移到 {dest_root}\n")
+    return _api_ext_install(self, [name], iid)
+
+
+def _api_ext_open_dir(self, rel=None, iid=None):
+    cfg, info, _ = _ext_target(self, iid)
+    p = _ext_resolve_repo(info, rel) if rel else info.get("target_dir")
+    if not p or not os.path.isdir(p):
+        return {"ok": False, "error": "目录不存在"}
+    try:
+        os.startfile(p)  # noqa: S606  # 本机插件目录
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+# ============================================================
+# WebUI / ComfyUI 本体版本管理
+# ============================================================
+
+def _ver_target(self, iid=None):
+    """返回 (cfg, info)。info 带 repo（要管理的源码目录）、官方仓库地址和分支"""
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    if info["kind"] == "comfyui":
+        repo = comfy_dir or ""
+        url, branch, keep = COMFY_REPO, COMFY_REF, ()
+    else:
+        repo = info["root"]
+        if cfg.get("webui_variant") == "h3":
+            url, branch = H3_REPO, H3_BRANCH
+        elif cfg.get("webui_branch", "neo2") in _NEO_KEYS:
+            url, branch = NEO_REPO, NEO_BRANCH
+        else:
+            url, branch = CLASSIC_REPO, "main"
+        keep = vm.WEBUI_KEEP_FILES
+    info = dict(info, repo=repo, official_url=url, official_branch=branch, keep=keep, comfy_dir=comfy_dir)
+    return cfg, info
+
+
+def _ver_env(cfg, info):
+    return _ext_env(cfg, info)
+
+
+def _api_ver_info(self, iid=None):
+    cfg, info = _ver_target(self, iid)
+    repo = info["repo"]
+    if not repo or not os.path.isdir(repo):
+        return {"ok": True, "target": info, "has_root": False}
+    git_exe = _git_for(cfg, info["root"])
+    local = vm.local_info(git_exe, repo, _ver_env(cfg, info)) if git_exe else \
+        {"is_git": bool(vm.git_dir_of(repo)), "error": "没有可用的 git"}
+    local["label"] = vm.version_label(local)
+    if info["kind"] == "comfyui":
+        local["app_version"] = _comfy_existing_version(repo)
+    remote_slug = vm.repo_slug(local.get("remote", ""))
+    return {"ok": True, "target": info, "has_root": True, "has_git": bool(git_exe), "local": local,
+            "official": remote_slug == vm.repo_slug(info["official_url"]) if remote_slug else None,
+            "history": vm.load_history(VERSION_HISTORY_PATH, repo),
+            "check": self._ver_checks.get(os.path.normcase(repo)),
+            "running": info["running"], "busy": _ver_busy(self)}
+
+
+def _ver_run(self, program, args, cwd, env=None, timeout=None):
+    def set_proc(p):
+        self._ver_proc = p
+    return _stream_cmd(self, "ver", program, args, cwd, env, timeout, lambda: self._ver_cancel, set_proc)
+
+
+def _api_ver_check(self, iid=None):
+    """检查更新 + 列出可选版本（联网；只拉版本信息，不改动任何文件）"""
+    if _ver_busy(self):
+        return {"ok": False, "error": "已有版本任务在进行中"}
+    cfg, info = _ver_target(self, iid)
+    git_exe = _git_for(cfg, info["root"])
+    if not git_exe or not info["repo"]:
+        return {"ok": False, "error": "没有可用的 git 或实例目录不对"}
+    log = lambda t: self._emit("ver", "log", text=t)
+    self._ver_cancel = False
+    self._ver_sync_busy = True     # 这次调用跑完前别的版本任务进不来
+    try:
+        return _ver_check_body(self, cfg, info, git_exe, log)
+    finally:
+        self._ver_sync_busy = False
+
+
+def _ver_check_body(self, cfg, info, git_exe, log):
+    log(f"\n[版本] 检查「{info['name']}」的更新 ...\n")
+    env = _ver_env(cfg, info)
+    remote = vm.local_info(git_exe, info["repo"], env, with_dirty=False).get("remote") or info["official_url"]
+    chk = vm.check(lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t), git_exe, info["repo"], remote,
+                   vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n"))), log, env,
+                   cancelled=lambda: self._ver_cancel)
+    self._ver_proc = None
+    if chk.get("ok"):
+        chk["checked"] = time.strftime("%Y-%m-%d %H:%M")
+        self._ver_checks[os.path.normcase(info["repo"])] = chk
+        b = chk.get("behind")
+        log("[版本] 已经是最新版\n" if b == 0 else
+            f"[版本] 有新版本：落后 {b if b is not None else '40+'} 个提交\n")
+    else:
+        log(f"[版本] {chk.get('error')}\n")
+    return chk
+
+
+def _api_ver_switch(self, target=None, iid=None):
+    """更新 / 切换 / 回滚 WebUI 或 ComfyUI 本体（原地换源码，不重装环境）"""
+    if _ver_busy(self):
+        return {"ok": False, "error": "已有版本任务在进行中"}
+    cfg, info = _ver_target(self, iid)
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，请先在「一键启动」页停止它再切换版本"}
+    git_exe = _git_for(cfg, info["root"])
+    repo = info["repo"]
+    if not git_exe or not repo or not vm.git_dir_of(repo):
+        return {"ok": False, "error": "这个实例不是 git 安装的，请先「接管为 Git 管理」"}
+    target = target or {"kind": "latest"}
+    self._ver_cancel = False
+
+    def work():
+        log = lambda t: self._emit("ver", "log", text=t)
+        run = lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t)
+        env = _ver_env(cfg, info)
+        proxies = _gh_proxies(cfg, lambda m: log(m + "\n"))
+        res = {}
+        try:
+            local = vm.local_info(git_exe, repo, env, with_dirty=False)
+            log(f"\n[版本] 「{info['name']}」当前版本：{vm.version_label(local)}\n")
+            res = vm.switch(run, git_exe, repo, target, local.get("remote") or info["official_url"],
+                            vm.net_sources(proxies), log, env, keep_files=info["keep"],
+                            backup_root=os.path.join(VERSION_BACKUP_DIR, "app", info["id"] or "default"),
+                            cancelled=lambda: self._ver_cancel)
+            if res.get("ok") and not res.get("unchanged"):
+                vm.record_history(VERSION_HISTORY_PATH, repo, res["from"], vm.version_label(local))
+                self._ver_checks.pop(os.path.normcase(repo), None)
+                new = vm.local_info(git_exe, repo, env, with_dirty=False)
+                log(f"[版本] 已切换到：{vm.version_label(new)}（{new.get('date', '')}）\n")
+                if info["kind"] == "comfyui" and not self._ver_cancel:
+                    log("[版本] 补装新版本需要的依赖（ComfyUI 不会自己装）...\n")
+                    bad = comfy_nodes.sync_comfy_requirements(
+                        repo, cm.comfy_python(cfg, info["root"]), run, log, env,
+                        lambda: self._ver_cancel, proxies, _pip_mirror_argsets(cfg))
+                    res["deps_failed"] = bad
+                    log("[版本] 依赖已更新\n" if not bad else
+                        f"[版本] 这些依赖没装上：{'、'.join(bad)}（可以稍后再点一次更新重试）\n")
+                elif info["kind"] != "comfyui":
+                    log("[版本] 下次启动时 WebUI 会自动补装新版本需要的依赖，第一次启动会慢一点\n")
+            elif not res.get("ok"):
+                log(f"[版本] 切换失败：{res.get('error')}\n")
+        finally:
+            self._ver_proc = None
+            self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
+                       backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
+
+    self._emit("ver", "state", running=True)
+    self._ver_thread = self._spawn(work, name="ver-switch")
+    return {"ok": True}
+
+
+def _api_ver_adopt(self, iid=None):
+    """整合包（没有 .git）接管为 git 管理：检出官方最新版，被覆盖的源码文件先备份"""
+    if _ver_busy(self):
+        return {"ok": False, "error": "已有版本任务在进行中"}
+    cfg, info = _ver_target(self, iid)
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，请先停止它"}
+    git_exe = _git_for(cfg, info["root"])
+    repo = info["repo"]
+    if not git_exe:
+        return {"ok": False, "error": "未检测到 Git。可以先在「环境部署」页部署便携环境"}
+    if not repo or not os.path.isdir(repo) or vm.git_dir_of(repo):
+        return {"ok": False, "error": "目录不对，或者已经是 git 仓库了"}
+    self._ver_cancel = False
+
+    def work():
+        log = lambda t: self._emit("ver", "log", text=t)
+        run = lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t)
+        env = _ver_env(cfg, info)
+        res = {}
+        try:
+            log(f"\n[版本] 接管「{info['name']}」：{repo}\n")
+            res = vm.adopt(run, git_exe, repo, info["official_url"], info["official_branch"],
+                           vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n"))), log, env,
+                           keep_files=info["keep"], cancelled=lambda: self._ver_cancel)
+            if res.get("ok"):
+                log("[版本] 接管完成，以后可以直接在这里更新 / 切换版本\n")
+                if info["kind"] == "comfyui" and not self._ver_cancel:
+                    comfy_nodes.sync_comfy_requirements(
+                        repo, cm.comfy_python(cfg, info["root"]), run, log, env,
+                        lambda: self._ver_cancel, _gh_proxies(cfg), _pip_mirror_argsets(cfg))
+            else:
+                log(f"[版本] 接管失败：{res.get('error')}\n")
+        finally:
+            self._ver_proc = None
+            self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
+                       backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
+
+    self._emit("ver", "state", running=True)
+    self._ver_thread = self._spawn(work, name="ver-adopt")
+    return {"ok": True}
+
+
+def _api_ver_cancel(self):
+    self._ver_cancel = True
+    if self._ver_proc and self._ver_proc.poll() is None:
+        kill_process_tree(self._ver_proc.pid)
+    return {"ok": True}
+
+
+def _api_ver_open_backup(self, path):
+    root = os.path.normcase(os.path.abspath(VERSION_BACKUP_DIR))
+    p = os.path.abspath(path or VERSION_BACKUP_DIR)
+    if not os.path.normcase(p).startswith(root) or not os.path.isdir(p):
+        return {"ok": False, "error": "备份目录不存在"}
+    try:
+        os.startfile(p)  # noqa: S606
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
     return {"ok": True}
 
 
@@ -6213,6 +6797,17 @@ for _name, _fn in {
     "ext_list": _api_ext_list,
     "ext_install": _api_ext_install,
     "ext_cancel": _api_ext_cancel,
+    "ext_repo_versions": _api_ext_repo_versions,
+    "ext_check_updates": _api_ext_check_updates,
+    "ext_switch": _api_ext_switch,
+    "ext_replace": _api_ext_replace,
+    "ext_open_dir": _api_ext_open_dir,
+    "ver_info": _api_ver_info,
+    "ver_check": _api_ver_check,
+    "ver_switch": _api_ver_switch,
+    "ver_adopt": _api_ver_adopt,
+    "ver_cancel": _api_ver_cancel,
+    "ver_open_backup": _api_ver_open_backup,
     "comfy_node_catalog": _api_comfy_node_catalog,
     "wd14_models": _api_wd14_models,
     "wd14_load_model": _api_wd14_load_model,

@@ -609,7 +609,43 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
   transition: border-color .12s, box-shadow .12s;
 }
 .ext-item:hover { border-color: var(--ink); box-shadow: inset 3px 0 0 var(--yel); }
-.ext-item.installed { opacity: .6; }
+.ext-item.installed .ext-name, .ext-item.installed .ext-desc { opacity: .6; }
+.ext-body { flex: 1; min-width: 0; }
+/* 已装插件的版本行 */
+.ext-ver {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 7px; border-top: 1px dashed var(--line);
+  font: 11.5px var(--mono); color: var(--text-dim);
+}
+.ext-other .ext-ver { margin-top: 0; padding-top: 0; border-top: 0; }
+.ext-ver-txt { flex: 1; min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.ext-ver-txt b { color: var(--ink); }
+.ext-ver-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.ext-folder { color: var(--ink); font-weight: 700; margin-right: 4px; word-break: break-all; }
+.ext-ver-na { color: var(--text-faint); }
+.ext-ver .ext-status { margin-left: 0; }
+.ext-status.ext-upd { background: var(--warn); color: #fff; }
+.ext-status.ext-off { background: transparent; color: var(--text-dim); outline: 1px dashed var(--text-dim); outline-offset: -1px; }
+.ext-upd-ok { color: var(--ok); }
+.ext-upd-err { color: var(--bad); cursor: help; }
+.ext-variant { margin-top: 6px; font-size: 12px; color: var(--warn); }
+.ext-other { padding: 9px 14px; }
+/* 版本选择列表（版本管理页 / 插件「版本…」弹窗） */
+.ver-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.ver-list { max-height: 340px; overflow-y: auto; border: 1px solid var(--line); padding: 4px 10px; }
+.ver-row { align-items: flex-start; padding: 5px 0; margin: 0; border-bottom: 1px dotted var(--line); }
+.ver-row:last-child { border-bottom: 0; }
+.ver-row > span { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
+.ver-row.is-cur { cursor: default; }
+.ver-name { font: 700 12px var(--mono); }
+.ver-meta { flex-basis: 100%; font-size: 11.5px; color: var(--text-faint); word-break: break-all; }
+.ver-row .ext-status { margin-left: 0; }
+.ext-ver-pick .ver-list { max-height: 300px; }
+.ver-hist-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-bottom: 1px dotted var(--line); }
+.ver-hist-row:last-child { border-bottom: 0; }
+.ver-hist-row .ver-meta { flex: 1; flex-basis: auto; }
+#ver-target-warn { color: var(--warn); white-space: pre-line; }
+#ext-target-warn { white-space: pre-line; }
 .ext-name { font-weight: 700; font-size: 13px; }
 .ext-status { font: 10.5px var(--mono); color: var(--ink); background: var(--yel); padding: 1px 6px; margin-left: 8px; }
 .ext-desc { color: var(--text-faint); font-size: 12px; line-height: 1.6; margin-top: 3px; }
