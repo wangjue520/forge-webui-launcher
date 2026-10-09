@@ -4,7 +4,7 @@
 一个启动器同时管理 **ComfyUI** 和 **Forge WebUI**（Neo / Classic），支持多实例同时运行；只用一个的话界面和以前一样简单。
 界面用 HTML/CSS/JS 实现（WebView2 渲染），可切换界面风格（默认"终末地 · 工业终端"，另有"极简"）。
 
-📘 **图文教程（PDF，77 页）**：[WWY 启动器 × Anima 完全上手教程](docs/WWY启动器_Anima_完全上手教程.pdf)——从下载、部署、下模型到提示词、参数、LoRA、启动器全部功能和常见问题。
+📘 **图文教程（PDF，77 页）**：[WWY 启动器 × Anima 完全上手教程](教程Tutorial/WWY启动器_Anima_完全上手教程.pdf)——从下载、部署、下模型到提示词、参数、LoRA、启动器全部功能和常见问题。
 
 > **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `start一键启动.bat` (or place `启动WWY启动器.bat` next to the folder and use that), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
 
