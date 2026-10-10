@@ -394,6 +394,12 @@ def find_local_model_file(webui_root, role, name, branch="", extra_dirs=()):
         for alt in ("embeddings", "models/embeddings"):
             if alt not in folders:
                 folders.append(alt)
+    if role == "Checkpoint":
+        # Anima / Flux / H3 这类只有 DiT 的主模型：ComfyUI 放 diffusion_models（老版叫 unet），
+        # 只看 checkpoints 会误报「缺失」再重复下载一份
+        for alt in ("models/diffusion_models", "models/unet"):
+            if alt not in folders:
+                folders.append(alt)
     if not folders and not extra_dirs:
         return None
 

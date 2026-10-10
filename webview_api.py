@@ -3243,7 +3243,12 @@ def _fetch_liblib(self, text, log):
     folder, type_label = lc.guess_folder_by_size(chosen["file_size"],
                                                  chosen["file_name"],
                                                  self.cfg.get("webui_branch", ""))
-    dest, folder = _download_dest(self, folder)
+    if ml.library_key_for_folder(folder) == "checkpoints" and cd.is_dit_base(chosen.get("base_model")):
+        # Anima / Flux / H3 这类底模的「大模型」只有 DiT 本体：ComfyUI 和共享库要放 diffusion_models
+        dest, folder = _role_dest(self, "DiffusionModel", folder)
+        type_label = cd.ROLE_LABELS["DiffusionModel"] + "（按底模判断）"
+    else:
+        dest, folder = _download_dest(self, folder)
     self._liblib_auto_dest = dest
     subset = {
         "source": "liblib",
@@ -3312,15 +3317,19 @@ def _api_civitai_download(self, file_index, dest_dir):
 def _role_dest(self, role, fallback_folder):
     """
     模型角色 → (绝对路径, 显示用的位置)。开了共享模型库放进库里对应分类。
-    只有 UNet/DiT 的扩散模型：ComfyUI 放 diffusion_models；WebUI 跟大模型放一起
-    （Classic 不认 diffusion_models 目录，放过去反而加载不到）。
+    只有 UNet/DiT 的扩散模型（Anima / Flux / H3…）：
+      - 开了共享库：放库里的 diffusion_models（ComfyUI 只认这里；WebUI 启动时用 --ckpt-dirs
+        挂上它也能读）。旧版先按当前实例改成 Checkpoint 再查库，当前实例是 WebUI 时就落进
+        库的 checkpoints，同一个库挂到 ComfyUI 上就看不到。
+        只有当前 WebUI 实例挂不上库的 diffusion_models（Classic）才退回 checkpoints。
+      - 没开库：ComfyUI 放 diffusion_models；WebUI 跟大模型放一起
+        （Classic 不认 diffusion_models 目录，放过去反而加载不到）。
     """
     branch = self.cfg.get("webui_branch", "")
-    if role == "DiffusionModel" and branch != "comfyui":
-        role = "Checkpoint"
     lib = _library_path(self)
     if lib and role:
-        key = ml.ROLE_TO_LIBRARY_KEY.get(role)
+        key = (ml.dit_library_key(lib, self.cfg) if role == "DiffusionModel"
+               else ml.ROLE_TO_LIBRARY_KEY.get(role))
         if key:
             d = ml.library_dir(lib, key)
             return d, f"共享模型库/{os.path.basename(d)}"
@@ -3476,16 +3485,66 @@ def _is_h3_instance(cfg):
     return cfg.get("webui_branch") == "neo2" and cfg.get("webui_variant") == "h3"
 
 
-def _h3_dirs(self, folder):
-    """(下载目录, 显示用位置, 判断「已存在」时要找的目录)：开了共享模型库时库里和实例里都找一遍"""
-    dest, disp = _download_dest(self, folder)
+def _h3_dirs(self, it):
+    """
+    H3 清单里的一项 → (下载目录, 显示用位置, 判断「已存在」时要找的目录)。
+    有 role 的按角色走 _role_dest（开了共享库时主模型进 diffusion_models，ComfyUI 也能用）；
+    找「已存在」时库里和实例里都找一遍，还要找旧版启动器放错的位置（库里的 checkpoints），
+    免得已经下好的 20GB 被当成没下载。
+    """
+    folder, role = it["folder"], it.get("role")
+    dest, disp = _role_dest(self, role, folder) if role else _download_dest(self, folder)
+    if not dest:
+        dest, disp = _download_dest(self, folder)
     root = (self.cfg.get("webui_root") or "").strip()
     look = [dest]
     if root:
-        inst = os.path.join(root, *folder.split("/"))
-        if os.path.normcase(os.path.abspath(inst)) != os.path.normcase(os.path.abspath(dest)):
-            look.append(inst)
-    return dest, disp, look
+        look.append(os.path.join(root, *folder.split("/")))
+    lib = _library_path(self)
+    if lib:
+        keys = [ml.library_key_for_folder(folder)]
+        if role == "DiffusionModel":
+            keys += ["diffusion_models", "checkpoints"]
+        for k in keys:
+            if k:
+                look += ml.library_dir_variants(lib, k)
+    out, seen = [], set()
+    for d in look:
+        n = os.path.normcase(os.path.abspath(d))
+        if n not in seen:
+            seen.add(n)
+            out.append(d)
+    return dest, disp, out
+
+
+def _h3_relocate(self, found, dest, log):
+    """
+    已下好的文件在共享库的另一个分类里（旧版放进了库的 checkpoints），挪到现在该在的
+    diffusion_models。只挪库里的：实例自己目录里的 Neo 本来就读得到，不碰。
+    挪不动（同名已存在 / 被占用）就原地用，返回实际路径。
+    """
+    lib = _library_path(self)
+    if not lib or not found:
+        return found
+    lib_n = os.path.normcase(os.path.abspath(lib))
+    src_dir = os.path.normcase(os.path.abspath(os.path.dirname(found)))
+    dest_n = os.path.normcase(os.path.abspath(dest))
+    if src_dir == dest_n or not (src_dir + os.sep).startswith(lib_n + os.sep) \
+            or not (dest_n + os.sep).startswith(lib_n + os.sep):
+        return found
+    try:
+        new = cd.move_with_sidecars(found, dest)
+    except OSError as e:
+        log(f"[H3] {os.path.basename(found)} 想挪到模型库的「{os.path.basename(dest)}」但没挪成（{e}），"
+            "先留在原处；停掉正在运行的实例后再点一次下载即可")
+        return found
+    if new:
+        log(f"[H3] {os.path.basename(found)} 原来在模型库的「{os.path.basename(os.path.dirname(found))}」里，"
+            f"ComfyUI 读不到，已挪到「{os.path.basename(dest)}」")
+        return new
+    log(f"[H3] {os.path.basename(found)} 应该放在模型库的「{os.path.basename(dest)}」，"
+        "但那里已有同名文件，先留在原处")
+    return found
 
 
 def _h3_hw():
@@ -3530,7 +3589,7 @@ def _api_h3_models_info(self):
                ram_q4_gb=h3m.RAM_Q4_GB, quant_defaults=h3m.default_quants(ram_gb))
     items = []
     for it in h3m.CATALOG:
-        dest, disp, look = _h3_dirs(self, it["folder"])
+        dest, disp, look = _h3_dirs(self, it)
         files = []
         variants = h3m.quant_options(it) or [{"q": None, "size": it["size"], "note": ""}]
         for v in variants:
@@ -3546,7 +3605,7 @@ def _api_h3_models_info(self):
                       "where": disp, "quant_default": it.get("quant_default"),
                       "files": files})
     out["items"] = items
-    ck_dest = _h3_dirs(self, "models/Stable-diffusion")[0]
+    ck_dest = _h3_dirs(self, h3m.CATALOG_BY_ID["fl2va"])[0]
     out["disk_free"] = _disk_free(ck_dest)
     return out
 
@@ -3565,7 +3624,7 @@ def _api_h3_models_download(self, selection):
             it, path, name, size = h3m.resolve(sel.get("id"), sel.get("q"))
         except h3m.H3ModelError as e:
             return {"ok": False, "error": str(e)}
-        dest, disp, look = _h3_dirs(self, it["folder"])
+        dest, disp, look = _h3_dirs(self, it)
         plan.append({"id": it["id"], "label": it["label"], "repo": it["repo"], "path": path,
                      "name": name, "size": size, "sha": None, "dest": dest, "where": disp,
                      "look": look})
@@ -3600,6 +3659,7 @@ def _api_h3_models_download(self, selection):
                 found, size_ok = h3m.existing_file(p["look"], p["name"], p["size"])
                 if found and size_ok:
                     skipped += 1
+                    found = _h3_relocate(self, found, p["dest"], log)
                     log(f"[H3] 已存在，跳过：{p['name']}（{found}）")
                     item(p, "ok")
                     continue
@@ -3952,7 +4012,7 @@ def _api_models_categories(self):
     lib = _library_path(self)
     if lib:
         # 开启共享模型库后，模型管理页管的是模型库（所有实例共用）
-        cats = [{"label": c["label"], "path": c["path"], "is_lora": c["is_lora"]}
+        cats = [{"label": c["label"], "path": c["path"], "is_lora": c["is_lora"], "key": c["key"]}
                 for c in ml.library_categories(lib)]
         self._models_categories = cats
         return {"ok": True, "root": lib, "library": True, "categories":
@@ -3961,7 +4021,7 @@ def _api_models_categories(self):
         dirs = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
         for k, label, is_lora, *_ in ml.LIBRARY_CATEGORIES:
             if k in dirs:
-                cats.append({"label": label, "path": dirs[k], "is_lora": is_lora})
+                cats.append({"label": label, "path": dirs[k], "is_lora": is_lora, "key": k})
         base = cm.comfy_layout(root)[0]
         models_dir = os.path.join(base, "models") if base else ""
         if models_dir and os.path.isdir(models_dir):
@@ -3974,7 +4034,8 @@ def _api_models_categories(self):
                 except OSError:
                     has_model = False
                 if has_model:
-                    cats.append({"label": f"其他: {name}", "path": sub, "is_lora": "lora" in name.lower()})
+                    cats.append({"label": f"其他: {name}", "path": sub, "is_lora": "lora" in name.lower(),
+                                 "key": ml.library_key_for_folder("models/" + name)})
         self._models_categories = cats
         return {"ok": True, "root": root, "categories":
                 [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
@@ -3982,7 +4043,8 @@ def _api_models_categories(self):
         for label, rel, is_lora in BASE_CATEGORIES:
             path = os.path.join(root, rel.replace("/", os.sep))
             if os.path.isdir(path):
-                cats.append({"label": label, "path": path, "is_lora": is_lora})
+                cats.append({"label": label, "path": path, "is_lora": is_lora,
+                             "key": ml.library_key_for_folder(rel)})
         models_dir = os.path.join(root, "models")
         if os.path.isdir(models_dir):
             for name in sorted(os.listdir(models_dir)):
@@ -3998,7 +4060,8 @@ def _api_models_categories(self):
                     has_model = False
                 if has_model:
                     cats.append({"label": f"其他: {name}", "path": sub,
-                                 "is_lora": "lora" in name.lower()})
+                                 "is_lora": "lora" in name.lower(),
+                                 "key": ml.library_key_for_folder("models/" + name)})
     self._models_categories = cats
     return {"ok": True, "root": root, "categories":
             [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
@@ -4261,21 +4324,52 @@ def _api_models_delete(self, path):
     return {"ok": True, "deleted": deleted}
 
 
+# 拖拽上传识别出的类型 → 显示名
+_KIND_LABELS = {
+    "lora": "LoRA",
+    "full": "大模型（Checkpoint）",
+    "dit": "只有 DiT 本体的扩散模型（Anima / Flux / Wan / H3 这类）",
+    "te": "文本编码器",
+}
+# 会主动给建议的目标分类：这几类放错了一定用不了。VAE / 嵌入 / ControlNet 这些
+# 键名跟别的类型有重叠，宁可不提醒也不误报（只有 LoRA 放进去时照旧提醒）
+_SUGGEST_CATS = {"loras", "checkpoints", "diffusion_models", "text_encoders"}
+
+
+def _dit_key_here(self):
+    """当前模型管理页下，只有 DiT 的扩散模型该进哪个分类"""
+    lib = _library_path(self)
+    if lib:
+        return ml.dit_library_key(lib, self.cfg)
+    return "diffusion_models" if cm.is_comfy(self.cfg) else "checkpoints"
+
+
 def _import_suggest(self, cat, counts):
-    """拖进来的文件和当前分类明显不符时，给出应该去的分类下标（没有则 None）"""
-    lora, full = counts.get("lora", 0), counts.get("full", 0)
-    want_lora = None
-    if cat["is_lora"] and full and not lora:
-        want_lora = False
-    elif not cat["is_lora"] and lora and not full:
-        want_lora = True
-    if want_lora is None:
-        return None
+    """
+    拖进来的文件和当前分类明显不符时 → (应该去的分类下标, 识别出的类型)，没有则 (None, "")。
+    只在拖进来的文件都是同一类、且对应分类存在时才建议。
+    以前只分 LoRA / 大模型两种：Anima、H3 GGUF 这类只有 DiT 的扩散模型被当成大模型，
+    在 ComfyUI / 共享模型库里拖进「扩散模型」分类反而提示「放到 Checkpoint」，
+    拖进 Checkpoint 却不提醒——放进去 ComfyUI 的 UNet 加载器根本看不到。
+    """
+    want_by_kind = {"lora": "loras", "full": "checkpoints", "dit": _dit_key_here(self),
+                    "te": "text_encoders"}
+    kinds = [k for k in want_by_kind if counts.get(k)]
+    if len(kinds) != 1:
+        return None, ""
+    kind = kinds[0]
+    want = want_by_kind[kind]
+    here = cat.get("key")
+    if here == want:
+        return None, ""
+    if here not in _SUGGEST_CATS and kind != "lora":
+        return None, ""
+    if here is None and kind == "lora" and cat.get("is_lora"):
+        return None, ""        # 「其他: xxx_lora」这类自定义 LoRA 目录
     for i, c in enumerate(self._models_categories):
-        # 大模型只建议去第一个非 LoRA 分类（即 Checkpoint），不往 VAE 之类里塞
-        if c["is_lora"] == want_lora:
-            return i
-    return None
+        if c.get("key") == want:
+            return i, kind
+    return None, ""
 
 
 def _api_models_import_plan(self, cat_index, paths):
@@ -4295,7 +4389,7 @@ def _api_models_import_plan(self, cat_index, paths):
             self._emit("models", "import_scan", i=i, n=n, name=name)
     plan = ml.plan_import(cat["path"], paths, progress=scan_progress)
     items = plan["items"]
-    sug = _import_suggest(self, cat, plan["counts"])
+    sug, sug_kind = _import_suggest(self, cat, plan["counts"])
     free = plan["free_bytes"]
     return {
         "ok": True,
@@ -4312,6 +4406,7 @@ def _api_models_import_plan(self, cat_index, paths):
         "free_text": _fmt_size(free) if free is not None else "",
         "suggest_index": sug,
         "suggest_label": self._models_categories[sug]["label"] if sug is not None else "",
+        "suggest_kind": _KIND_LABELS.get(sug_kind, ""),
     }
 
 
@@ -4469,13 +4564,18 @@ def _api_library_merge_plan(self):
     self._merge_plan = plan
     by_inst = {}
     names = {iid: n for iid, n, _c in _all_instance_cfgs(self)}
+    names[""] = "共享模型库（分类放错的）"     # 库里 checkpoints → diffusion_models 归位
     for mv in plan["moves"]:
         d = by_inst.setdefault(mv["iid"], {"name": names.get(mv["iid"], ""), "move": 0, "dup": 0})
         d["dup" if mv["dup"] else "move"] += 1
+    # 换了分类的排前面，预览里先看到
+    sample = sorted(plan["moves"], key=lambda mv: not mv.get("recat"))[:40]
     return {"ok": True, "count": plan["count"], "total_text": _fmt_size(plan["total_bytes"]),
             "dup_text": _fmt_size(plan["dup_bytes"]), "cross_text": _fmt_size(plan["cross_bytes"]),
             "cross": plan["cross_bytes"] > 0, "by_instance": list(by_inst.values()),
-            "sample": [{"from": mv["src"], "to": mv["dst"], "dup": mv["dup"]} for mv in plan["moves"][:40]]}
+            "recat": plan.get("recat", 0),
+            "sample": [{"from": mv["src"], "to": mv["dst"], "dup": mv["dup"], "recat": bool(mv.get("recat"))}
+                       for mv in sample]}
 
 
 def _api_library_merge_start(self):
@@ -6070,9 +6170,12 @@ def _api_meta_scan_missing(self):
     for idx, ref in enumerate(self._meta_refs):
         row = {"idx": idx, "role": ref["role"], "name": ref["name"]}
         lib_key = ml.ROLE_TO_LIBRARY_KEY.get(ref["role"]) if lib else None
+        extra = ml.library_dir_variants(lib, lib_key) if lib_key else []
+        if lib and ref["role"] == "Checkpoint":
+            extra = extra + ml.library_dir_variants(lib, "diffusion_models")   # 只有 DiT 的主模型
         local_path = imc.find_local_model_file(
             root, ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
-            extra_dirs=ml.library_dir_variants(lib, lib_key) if lib_key else ())
+            extra_dirs=extra)
         if local_path:
             row["state"] = "local"
         elif not ref.get("hash"):
@@ -6171,10 +6274,16 @@ def _api_meta_download(self, indexes):
             continue
         ref = self._meta_refs[idx]
         folder = imc.role_folder(ref["role"], self.cfg.get("webui_branch", "")) or "models/Other"
-        dest_dir, _where = _download_dest(self, folder)
-        if not os.path.isabs(dest_dir):
+        vi, fi = result["version_info"], result["file_info"]
+        role = ref["role"]
+        if role == "Checkpoint":
+            # 图里记的是「大模型」，但 Anima / Flux / H3 这类只有 DiT 本体，ComfyUI 和共享库要放 diffusion_models
+            role = cd.file_role(fi, vi.get("model_type") or "Checkpoint", vi.get("base_model", "")) or role
+        dest_dir, _where = (_role_dest(self, role, folder) if role != ref["role"]
+                            else _download_dest(self, folder))
+        if not dest_dir or not os.path.isabs(dest_dir):
             continue   # 没开库、也没设根目录的类型：无处可放
-        items.append((idx, result["version_info"], result["file_info"], dest_dir))
+        items.append((idx, vi, fi, dest_dir))
     if not items:
         return {"ok": False, "error": "请先在列表里勾选要下载的模型"}
 
@@ -6194,6 +6303,11 @@ def _api_meta_download(self, indexes):
                         "meta", "dl_progress", idx=i, downloaded=d, total=t),
                     cancel_flag=lambda: self._meta_dl_cancel,
                 )
+                if _hash_ok is not False:
+                    # 和模型下载页一样：按文件内容核对类型，放错了就挪到对的分类
+                    final_path = _relocate_by_content(
+                        self, final_path, dest_dir, dest_dir,
+                        lambda t: self._emit("meta", "dl_log", idx=idx, text=t))
                 cd.save_sidecar_metadata(final_path, version_info, file_info)
                 cd.download_preview_image(final_path, version_info, api_key)
                 self._emit("meta", "dl_item", idx=idx, ok=True,

@@ -413,8 +413,9 @@
     let target = curCat;
     if (plan.suggest_index != null) {
       const isLora = !!(plan.counts && plan.counts.lora);
+      const kind = plan.suggest_kind || (isLora ? "LoRA" : "大模型（Checkpoint）");
       const v = await App.modal("放到哪个分类？",
-        `拖进来的 ${plan.count} 个文件看起来是<b>${isLora ? " LoRA " : "大模型（Checkpoint）"}</b>，` +
+        `拖进来的 ${plan.count} 个文件看起来是<b> ${App.esc(kind)} </b>，` +
         `但当前分类是「${App.esc(plan.target_label)}」。`,
         [
           { id: "suggest", label: `放到「${plan.suggest_label}」`, kind: "primary" },
