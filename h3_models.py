@@ -42,32 +42,38 @@ _QUANT_NOTES = {
 }
 
 # 每一项：id、显示名、说明、仓库、仓库内路径（{q} 换成量化档位）、放到实例的哪个目录、
-# 是否必需、默认勾选、量化档位表（None 表示只有一个文件）
+# 模型角色、是否必需、默认勾选、量化档位表（None 表示只有一个文件）
+#
+# folder 是 Neo H3 实例自己的目录（没开共享模型库时就放这里）。role 决定开了共享库时
+# 进库里哪个分类：主模型 FL2VA / Ref2VA 是只有 DiT 的扩散模型（GGUF），角色是
+# DiffusionModel——进库的 diffusion_models 而不是 checkpoints，否则同一个库挂到 ComfyUI
+# 上，GGUF 加载器（只扫 diffusion_models / unet）就找不到它。ControlNet 补丁没有 role：
+# 库里没有 model_patches 分类，始终放实例自己的目录。
 CATALOG = [
     {"id": "fl2va", "label": "主模型 FL2VA", "desc": "文生视频 / 图生视频 / 首尾帧 / ControlNet",
      "repo": GGUF_REPO, "path": "minimax_h3_fl2va_pruned-{q}.gguf",
-     "folder": "models/Stable-diffusion", "required": True, "default": True,
+     "folder": "models/Stable-diffusion", "role": "DiffusionModel", "required": True, "default": True,
      "sizes": _FL2VA_SIZES, "quant_default": "Q4_K"},
     {"id": "te", "label": "文本编码器 Qwen3-VL-32B", "desc": "必需，所有模式都要",
      "repo": GGUF_REPO, "path": "qwen3vl_32b_minimax_h3-{q}.gguf",
-     "folder": "models/text_encoder", "required": True, "default": True,
+     "folder": "models/text_encoder", "role": "TextEncoder", "required": True, "default": True,
      "sizes": _TE_SIZES, "quant_default": "Q4_K_M"},
     {"id": "vae_video", "label": "视频 VAE", "desc": "必需",
      "repo": GGUF_REPO, "path": "vae/minimax_h3_video_vae_fp16.safetensors",
-     "folder": "models/VAE", "required": True, "default": True, "size": 5207808496},
+     "folder": "models/VAE", "role": "VAE", "required": True, "default": True, "size": 5207808496},
     {"id": "vae_audio", "label": "音频 VAE", "desc": "必需（H3 同时生成立体声音轨）",
      "repo": GGUF_REPO, "path": "vae/minimax_h3_audio_vae_fp32.safetensors",
-     "folder": "models/VAE", "required": True, "default": True, "size": 605254808},
+     "folder": "models/VAE", "role": "VAE", "required": True, "default": True, "size": 605254808},
     {"id": "turbo_fl2v", "label": "Turbo LoRA · FL2V 8 步", "desc": "可选，强烈推荐：8 步出片，速度快好几倍",
      "repo": TURBO_REPO, "path": "minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-     "folder": "models/Lora", "required": False, "default": True, "size": 1956193000},
+     "folder": "models/Lora", "role": "LoRA", "required": False, "default": True, "size": 1956193000},
     {"id": "ref2va", "label": "主模型 Ref2VA", "desc": "可选：参考图 / 参考视频 / 参考音频生视频才需要",
      "repo": GGUF_REPO, "path": "minimax_h3_ref2va_pruned-{q}.gguf",
-     "folder": "models/Stable-diffusion", "required": False, "default": False,
+     "folder": "models/Stable-diffusion", "role": "DiffusionModel", "required": False, "default": False,
      "sizes": _REF2VA_SIZES, "quant_default": "Q4_K"},
     {"id": "turbo_ref2v", "label": "Turbo LoRA · Ref2V 8 步", "desc": "可选：配合 Ref2VA 用",
      "repo": TURBO_REPO, "path": "minimax_h3_ref2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors",
-     "folder": "models/Lora", "required": False, "default": False, "size": 1956193000},
+     "folder": "models/Lora", "role": "LoRA", "required": False, "default": False, "size": 1956193000},
     {"id": "controlnet", "label": "ControlNet Union 2.0（int8）", "desc": "可选：上传普通视频做姿态 / 深度 / 线稿控制、视频局部重绘",
      "repo": COMFY_REPO, "path": "model_patches/minimax_h3_fun_controlnet_union_2.0_pruned_int8_convrot.safetensors",
      "folder": "models/model_patches", "required": False, "default": False, "size": 4531220608},

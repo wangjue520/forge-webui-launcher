@@ -334,10 +334,13 @@
     const rows = (p.by_instance || []).map((b) =>
       `<tr><td>${App.esc(b.name)}</td><td>${b.move}</td><td>${b.dup}</td></tr>`).join("");
     const sample = (p.sample || []).map((s) =>
-      `<div class="pv-line">${s.dup ? '<em class="pv-dup">重复→回收站</em>' : ""}${App.esc(s.from)}</div>`).join("");
+      `<div class="pv-line">${s.dup ? '<em class="pv-dup">重复→回收站</em>' : ""}` +
+      `${s.recat && !s.dup ? '<em class="pv-dup">→ 扩散模型</em>' : ""}${App.esc(s.from)}</div>`).join("");
     const v = await App.modal("合并各实例已有模型",
       `<div>要移动 <b>${p.count}</b> 个文件（${App.esc(p.total_text)}），其中重复可省下 <b>${App.esc(p.dup_text)}</b>。</div>` +
       (p.cross ? `<div class="pv-warn">有 ${App.esc(p.cross_text)} 在别的磁盘上，跨盘移动是真复制，会比较慢。</div>` : "") +
+      (p.recat ? `<div class="hint">其中 <b>${p.recat}</b> 个是只有 DiT 本体的扩散模型（Anima / Flux / H3 的 GGUF 这类），` +
+        `会放进模型库的「扩散模型」分类——ComfyUI 的 UNet / GGUF 加载器只认这里，WebUI 启动时也会挂上这个目录。</div>` : "") +
       `<table class="pv-table"><tr><th>实例</th><th>移入模型库</th><th>重复</th></tr>${rows}</table>` +
       `<div class="pv-list">${sample}${p.count > (p.sample || []).length ? `<div class="pv-line">…… 共 ${p.count} 个</div>` : ""}</div>` +
       `<div class="hint">执行前请先停止所有实例。完成后可以在下方「文件移动记录」里撤销。</div>`,

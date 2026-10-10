@@ -379,7 +379,7 @@ _TE_NAME_HINTS = ("text_encoder", "text-encoder", "textencoder", "t5xxl", "umt5"
 # 这些底模的「大模型」只有 DiT 本体（文本编码器 / VAE 要另外下），
 # ComfyUI 里得放 diffusion_models；按 Civitai 的 baseModel 提前判断，界面上一开始就显示对的位置
 _DIT_BASE_HINTS = ("anima", "flux", "wan video", "qwen", "hidream", "lumina", "chroma", "hunyuan",
-                   "ltxv", "cosmos", "z-image", "zimage")
+                   "ltxv", "cosmos", "z-image", "zimage", "minimax")
 
 
 def file_role(file_info, model_type, base_model=""):
@@ -395,8 +395,7 @@ def file_role(file_info, model_type, base_model=""):
     if t == "textencoder":
         return "TextEncoder"
     base = _TYPE_TO_ROLE.get(model_type)
-    if base == "Checkpoint" and t in ("", "model", "prunedmodel") \
-            and any(h in str(base_model or "").lower() for h in _DIT_BASE_HINTS) \
+    if base == "Checkpoint" and t in ("", "model", "prunedmodel") and is_dit_base(base_model) \
             and not (any(h in name for h in _TE_NAME_HINTS) or "vae" in name):
         base = "DiffusionModel"
     if t in ("", "model", "prunedmodel") and not file_info.get("primary"):
@@ -407,48 +406,25 @@ def file_role(file_info, model_type, base_model=""):
     return base
 
 
+def is_dit_base(base_model):
+    """Civitai / liblib 的底模名是不是「主模型只有 DiT 本体」的那几家（Anima、Flux、Wan、H3…）"""
+    low = str(base_model or "").lower()
+    return bool(low) and any(h in low for h in _DIT_BASE_HINTS)
+
+
 def classify_file(path):
     """
-    下载后按 safetensors 里的张量键名判断真实类型，用来纠正网站标错的情况：
+    下载后按文件内容判断真实类型，用来纠正网站标错的情况：
       LoRA / Checkpoint（整合了 VAE 或文本编码器的完整大模型）/
-      DiffusionModel（只有 UNet / DiT：Anima、Flux、Wan 这类）/ VAE / TextEncoder
-    不是 safetensors 或认不出时返回 None（这时不挪文件）。
+      DiffusionModel（只有 UNet / DiT：Anima、Flux、Wan、H3 这类）/ VAE / TextEncoder
+    支持 safetensors 和 GGUF；认不出时返回 None（这时不挪文件）。
+    判断逻辑在 safetensors_meta.classify_model_role，模型管理 / 合并也用同一份。
     """
-    if not str(path).lower().endswith(".safetensors"):
-        return None
     try:
         import safetensors_meta as sm
-        r = sm.read_safetensors_header(path)
+        return sm.classify_model_role(path)
     except Exception:
-        r = None
-    if not r:
         return None
-    _meta, keys = r
-    if not keys:
-        return None
-
-    def has(sub):
-        return any(sub in k for k in keys)
-
-    def starts(*pre):
-        return any(k.startswith(pre) for k in keys)
-
-    if has("lora_") or has(".lora_A.") or has(".lora_down.") or has(".lora_up.") or has(".hada_w1_"):
-        return "LoRA"
-    if starts("model.diffusion_model."):
-        bundled = starts("first_stage_model.", "conditioner.", "cond_stage_model.", "text_encoders.", "vae.")
-        return "Checkpoint" if bundled else "DiffusionModel"
-    # T5 的键也是 encoder.* 开头，必须先于 VAE 判断
-    if has("embed_tokens") or starts("text_model.", "token_embedding", "transformer.resblocks") \
-            or "shared.weight" in keys:
-        return "TextEncoder"
-    enc_dec = sum(1 for k in keys if k.startswith(("encoder.", "decoder.", "quant_conv", "post_quant_conv")))
-    if enc_dec >= 0.85 * len(keys):
-        return "VAE"
-    if starts("net.blocks.", "double_blocks.", "single_blocks.", "blocks.", "transformer_blocks.", "joint_blocks.",
-              "input_blocks.", "layers."):
-        return "DiffusionModel"
-    return None
 
 
 def folder_for_role(role, branch=""):

@@ -74,14 +74,24 @@ def _find_sidecars(model_src):
 _FULL_MARKERS = ("model.diffusion_model.", "diffusion_model.", "double_blocks.",
                  "single_blocks.", "cond_stage_model.", "conditioner.")
 
+# classify_model_role 的角色 → detect_kind 的短名
+_ROLE_TO_KIND = {"LoRA": "lora", "Checkpoint": "full", "DiffusionModel": "dit",
+                 "TextEncoder": "te", "VAE": "vae"}
+
 
 def detect_kind(path):
     """
-    'lora' / 'full'（大模型）/ 'other'（VAE、嵌入、放大模型等）/ None（读不出来）。
-    只有 lora 和 full 用来判断「放错分类」——VAE 和嵌入的键名跟大模型有重叠，
-    宁可不提醒也不要误报。
+    'lora' / 'full'（整合了 VAE/文本编码器的大模型）/ 'dit'（只有 UNet/DiT 本体：
+    Anima、Flux、Wan、H3 这类，ComfyUI 得放 diffusion_models）/ 'te'（文本编码器）/
+    'vae' / 'other' / None（读不出来）。支持 safetensors 和 GGUF。
     """
-    if not path.lower().endswith((".safetensors", ".sft")):
+    low = path.lower()
+    if not low.endswith((".safetensors", ".sft", ".gguf")):
+        return None
+    role = sm.classify_model_role(path)
+    if role in _ROLE_TO_KIND:
+        return _ROLE_TO_KIND[role]
+    if low.endswith(".gguf"):
         return None
     head = sm.read_safetensors_header(path)
     if not head:
@@ -164,11 +174,11 @@ def plan_import(target_dir, paths, progress=None, detect=True):
     progress(i, n, name)：每处理一个文件回调一次（读文件头判断类型要时间）；
     detect=False 时不读文件头（kind 全为 None），开始复制前重算计划用。
     返回 {items:[{src, dest, rel, size, action, kind}], ignored:[...],
-          counts:{lora, full}, total_bytes, free_bytes}
+          counts:{lora, full, dit, te, vae}, total_bytes, free_bytes}
     action: copy / rename（目标同名但内容不同，改名复制）/ skip（已存在同一个文件）
     """
     raw, ignored = _collect(paths)
-    items, counts, total = [], {"lora": 0, "full": 0}, 0
+    items, counts, total = [], {"lora": 0, "full": 0, "dit": 0, "te": 0, "vae": 0}, 0
     taken = set()
     n = len(raw)
     for idx, (src, rel) in enumerate(raw, 1):
@@ -493,6 +503,29 @@ def forge_library_args(lib_path, webui_root=""):
     return " ".join(args), skipped
 
 
+def dit_library_key(lib_path, cfg):
+    """
+    只有 UNet/DiT 本体的扩散模型（Anima、Flux、Wan、MiniMax-H3…）在共享模型库里该放哪个分类。
+
+    两边规矩不一样：ComfyUI 的 UNet / GGUF 加载器只扫 diffusion_models（和老的 unet），
+    放进 checkpoints 就在 ComfyUI 里「消失」；WebUI 把它和大模型放一起，启动时用叠加式的
+    --ckpt-dirs 把库里的 diffusion_models 也挂上就能读到。所以默认放 diffusion_models——
+    只有这个 WebUI 实例挂不上库里的 diffusion_models（Classic 只有替换式的 --ckpt-dir，
+    或读不到源码没把握）时才退回 checkpoints，免得 WebUI 那边读不到。
+    """
+    cfg = cfg or {}
+    if cfg.get("webui_branch") == "comfyui":
+        return "diffusion_models"
+    _args, skipped = forge_library_args(lib_path, (cfg.get("webui_root") or "").strip())
+    return "checkpoints" if "diffusion_models" in skipped else "diffusion_models"
+
+
+def dit_library_key_all(lib_path, cfgs):
+    """影响所有实例的操作（库内归位）用：每个实例都读得到才放 diffusion_models"""
+    keys = {dit_library_key(lib_path, c) for c in cfgs}
+    return "checkpoints" if "checkpoints" in keys else "diffusion_models"
+
+
 def quick_hash(path):
     """大小 + 头尾各 1MB 的哈希：判重够用，几 GB 的模型也是毫秒级"""
     h = hashlib.sha1()
@@ -521,60 +554,120 @@ def _same_volume(a, b):
         return False
 
 
-def plan_merge(instances, lib_path, comfy_layout):
+def _instance_merge_dirs(cfg, comfy_layout):
+    """合并用的实例模型目录 [(分类键, 绝对路径)]。比 instance_model_dirs 多收 ComfyUI
+    老的 unet / clip 目录（和 diffusion_models / text_encoders 并存时也要一起合并）"""
+    out = list(instance_model_dirs(cfg, comfy_layout).items())
+    root = (cfg.get("webui_root") or "").strip()
+    if cfg.get("webui_branch") == "comfyui" and root and os.path.isdir(root):
+        base = comfy_layout(root)[0] or root
+        have = {os.path.normcase(os.path.abspath(d)) for _k, d in out}
+        for k, alt in (("diffusion_models", "models/unet"), ("text_encoders", "models/clip")):
+            d = os.path.join(base, alt.replace("/", os.sep))
+            if os.path.isdir(d) and os.path.normcase(os.path.abspath(d)) not in have:
+                out.append((k, d))
+    return out
+
+
+def _under(path, root_norm):
+    p = os.path.normcase(os.path.abspath(path))
+    return p == root_norm or p.startswith(root_norm.rstrip(os.sep) + os.sep)
+
+
+def plan_merge(instances, lib_path, comfy_layout, classify=None):
     """
     把各实例已有的模型合并进模型库的计划（只读）。
     instances: [(iid, name, cfg)]
-    返回 {moves:[{src,dst,size,iid,dup}], total_bytes, dup_bytes, cross_bytes, count}
+    classify(path) → 角色（默认 safetensors_meta.classify_model_role，测试可替换）
+    返回 {moves:[{src,dst,size,iid,cat,dup,recat}], total_bytes, dup_bytes, cross_bytes, count, recat}
       dup=True 表示模型库里已有同一个文件（按大小+头尾哈希判断），源文件进回收站而不是再搬一份
+      recat=True 表示按文件内容换了分类：WebUI 和大模型放一起的「只有 DiT」的扩散模型
+        （Anima / Flux / H3 的 GGUF…）要进库里的 diffusion_models，ComfyUI 才找得到；
+        库里以前放错进 checkpoints 的也一并归位（iid 为空串）
     """
+    classify = classify or sm.classify_model_role
     moves, seen = [], {}
     lib_norm = os.path.normcase(os.path.abspath(lib_path))
-    # 模型库里已有的文件先登记，用来判重
+    total = dup_bytes = cross = recat_n = 0
+    planned_dst = set()
+
+    def find_dup(key, size, src):
+        # 大模型和 DiT 两个分类互相也要判重：库里同一个 DiT 可能在 checkpoints（旧版放的）
+        keys = [key] + [k for k in ("checkpoints", "diffusion_models") if key in ("checkpoints", "diffusion_models") and k != key]
+        for hash_path, final_path in (x for k in keys for x in seen.get((k, size), [])):
+            try:
+                if os.path.normcase(hash_path) != os.path.normcase(src) and quick_hash(hash_path) == quick_hash(src):
+                    return final_path     # 合并完成后那一份所在的位置
+            except OSError:
+                continue
+        return None
+
+    def add_move(src, rel, key, size, iid, recat):
+        nonlocal total, dup_bytes, cross, recat_n
+        dup_of = find_dup(key, size, src)
+        if recat:
+            recat_n += 1
+        if dup_of:
+            moves.append({"src": src, "dst": dup_of, "size": size, "iid": iid,
+                          "cat": key, "dup": True, "recat": recat})
+            dup_bytes += size
+            return
+        dst = os.path.join(library_dir(lib_path, key), rel)
+        if os.path.exists(dst) or os.path.normcase(dst) in planned_dst:
+            dst = _free_name(dst, planned_dst)
+        planned_dst.add(os.path.normcase(dst))
+        seen.setdefault((key, size), []).append((src, dst))   # 后面遇到同一文件时判重
+        moves.append({"src": src, "dst": dst, "size": size, "iid": iid, "cat": key, "dup": False,
+                      "recat": recat})
+        total += size
+        if not _same_volume(src, lib_path):
+            cross += size
+
+    # 1) 模型库里已有的文件先登记，用来判重（checkpoints 留到最后，里面可能有要归位的）
     for k, *_ in LIBRARY_CATEGORIES:
-        d = library_dir(lib_path, k)
-        if os.path.isdir(d):
+        if k == "checkpoints":
+            continue
+        for d in library_dir_variants(lib_path, k):
             for p in _walk_models(d):
                 try:
                     seen.setdefault((k, os.path.getsize(p)), []).append((p, p))
                 except OSError:
                     pass
-    total = dup_bytes = cross = 0
-    planned_dst = set()
-    for iid, name, cfg in instances:
-        for k, d in instance_model_dirs(cfg, comfy_layout).items():
-            if os.path.normcase(os.path.abspath(d)).startswith(lib_norm):
+    lib_dit = dit_library_key_all(lib_path, [c for _i, _n, c in instances])
+    for d in library_dir_variants(lib_path, "checkpoints"):
+        for p in _walk_models(d):
+            try:
+                size = os.path.getsize(p)
+            except OSError:
+                continue
+            if lib_dit == "diffusion_models" and classify(p) == "DiffusionModel":
+                add_move(p, os.path.relpath(p, d), "diffusion_models", size, "", True)
+            else:
+                seen.setdefault(("checkpoints", size), []).append((p, p))
+
+    # 2) 各实例自己的模型
+    for iid, _name, cfg in instances:
+        is_comfy = cfg.get("webui_branch") == "comfyui"
+        inst_dit = None
+        for k, d in _instance_merge_dirs(cfg, comfy_layout):
+            if _under(d, lib_norm):
                 continue    # 已经指向模型库（之前合并过）
             for src in _walk_models(d):
                 try:
                     size = os.path.getsize(src)
                 except OSError:
                     continue
-                rel = os.path.relpath(src, d)
-                dup_of = None
-                for hash_path, final_path in seen.get((k, size), []):
-                    try:
-                        if quick_hash(hash_path) == quick_hash(src):
-                            dup_of = final_path     # 合并完成后那一份所在的位置
-                            break
-                    except OSError:
-                        continue
-                if dup_of:
-                    moves.append({"src": src, "dst": dup_of, "size": size, "iid": iid,
-                                  "cat": k, "dup": True})
-                    dup_bytes += size
-                    continue
-                dst = os.path.join(library_dir(lib_path, k), rel)
-                if os.path.exists(dst) or os.path.normcase(dst) in planned_dst:
-                    dst = _free_name(dst, planned_dst)
-                planned_dst.add(os.path.normcase(dst))
-                seen.setdefault((k, size), []).append((src, dst))   # 后面的实例遇到同一文件时判重
-                moves.append({"src": src, "dst": dst, "size": size, "iid": iid, "cat": k, "dup": False})
-                total += size
-                if not _same_volume(src, lib_path):
-                    cross += size
+                key, recat = k, False
+                # WebUI 的大模型目录里混着只有 DiT 的扩散模型：按内容挑出来放 diffusion_models。
+                # ComfyUI 实例里用户自己放哪就是哪，不替他改
+                if k == "checkpoints" and not is_comfy and classify(src) == "DiffusionModel":
+                    if inst_dit is None:
+                        inst_dit = dit_library_key(lib_path, cfg)
+                    if inst_dit == "diffusion_models":
+                        key, recat = "diffusion_models", True
+                add_move(src, os.path.relpath(src, d), key, size, iid, recat)
     return {"moves": moves, "total_bytes": total, "dup_bytes": dup_bytes,
-            "cross_bytes": cross, "count": len(moves)}
+            "cross_bytes": cross, "count": len(moves), "recat": recat_n}
 
 
 # ---------------------------------------------------------- 回收站 / 移动日志 ----
