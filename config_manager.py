@@ -891,6 +891,9 @@ _ENV_STRIP_EXACT = {
     "PIP_NO_INDEX", "PIP_FIND_LINKS", "PIP_CONSTRAINT", "PIP_REQUIRE_HASHES",
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
     "GIT_ASKPASS", "SSH_ASKPASS", "HF_HUB_OFFLINE",
+    # 设了它 cmd.exe 就不在当前目录里找程序：`cmd /c webui.bat` 和 webui.bat 内部的
+    # `call webui-user.bat` 全都报「不是内部或外部命令」（部分安全软件/开发工具会设它）
+    "NODEFAULTCURRENTDIRECTORYINEXEPATH",
 }
 _ENV_STRIP_PREFIX = ("CONDA",)
 
@@ -916,7 +919,8 @@ def build_subprocess_env(cfg, root_dir):
     代理环境的用户通常需要它。"""
     env = {}
     for k, v in os.environ.items():
-        if k in _ENV_STRIP_EXACT or any(k.startswith(p) for p in _ENV_STRIP_PREFIX):
+        ku = k.upper()  # Windows 环境变量名不区分大小写
+        if ku in _ENV_STRIP_EXACT or any(ku.startswith(p) for p in _ENV_STRIP_PREFIX):
             continue
         env[k] = v
     env.update(build_launch_env_overrides(cfg, root_dir))
@@ -1067,7 +1071,8 @@ def build_comfy_env(cfg, root_dir):
     """ComfyUI 子进程环境：消毒 + git 路径 + 镜像（ComfyUI 不走 webui.bat，不需要 PYTHON/VENV_DIR）"""
     env = {}
     for k, v in os.environ.items():
-        if k in _ENV_STRIP_EXACT or any(k.startswith(p) for p in _ENV_STRIP_PREFIX):
+        ku = k.upper()  # Windows 环境变量名不区分大小写
+        if ku in _ENV_STRIP_EXACT or any(ku.startswith(p) for p in _ENV_STRIP_PREFIX):
             continue
         env[k] = v
     custom_git = (cfg.get("custom_git_path") or "").strip() or detect_bundled_git(root_dir) or ""
