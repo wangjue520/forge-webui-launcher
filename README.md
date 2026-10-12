@@ -195,7 +195,7 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 - **WebUI 实例**：勾选 →「安装选中项」→ 装完重启 WebUI 生效。列表按实例的分支自动适配（Neo 上不能用的隐藏，需要专门分支的自动换源）。
 - **认得出你自己装的插件**：按 git 远程地址和文件夹名（忽略大小写、zip 下载自带的 `-main`/`-master`、`.disabled`）双重匹配，所以先自己用 WebUI / Manager 装过插件、后来才用启动器的，也会正确显示「已安装」。装的是另一个分支的版本（比如 Neo 上装了原版 ADetailer）会提示，并可以「换成推荐版本」（旧文件夹挪进 `launcher_data/version_backup/replaced/`，可恢复）。WebUI 里停用的扩展标「已停用」。
 - **插件版本管理**：已装插件下方显示当前版本；「检查插件更新」联网检查全部插件（不改文件），有更新的显示「更新」按钮，也可以「全部更新」（固定了版本的会跳过）；「版本…」可以选任意提交 / 版本标签 / 之前用过的版本，切换前的版本自动记录、随时回滚。不在清单里的插件放在「其他已装插件」里，同样能更新和换版本。ComfyUI 节点换版本后自动重装依赖。
-- **作者自制**：[中文标签补全 sd-webui-zh-tag-autocomplete](https://github.com/wangjue520/sd-webui-zh-tag-autocomplete)——提示词框直接打中文出 Danbooru 英文标签，Alt+T 一键中译英，可以和 Tag Autocomplete 一起装。
+- **作者自制**：[中文标签补全 sd-webui-zh-tag-autocomplete](https://github.com/wangjue520/sd-webui-zh-tag-autocomplete)——提示词框直接打中文出 Danbooru 英文标签，Alt+T 一键中译英，字典没有的用谷歌 / DeepSeek 翻译，可以和 Tag Autocomplete 一起装。ComfyUI 版 [comfyui-zh-tag-autocomplete](https://github.com/wangjue520/comfyui-zh-tag-autocomplete) 在 ComfyUI 实例的节点清单「作者自制」里。
 - **ComfyUI 实例**：显示 ComfyUI 专用节点清单（分「推荐 / 按需 / 作者自制」三组）。节点 clone 进 `custom_nodes`，并用该实例自己的 Python 把依赖一起装好（跳过 torch 系并锁定现有 torch 版本，不会被换成 CPU 版；整批装失败时逐个装）。因为要装依赖，实例运行中不能安装。
 - **ComfyUI-Manager** 已并入 ComfyUI 本体：这里装的是它的 pip 依赖，装好后启动 ComfyUI 时自动加 `--enable-manager`（老版本 ComfyUI 退回 clone 到 custom_nodes）。
 - 「环境部署」新装 ComfyUI 时会默认一起装「推荐」组：Manager、rgthree、Custom-Scripts、Impact Pack + Subpack（FaceDetailer）、UltimateSDUpscale、VideoHelperSuite、KJNodes；部署页可以增减，勾选会被记住。

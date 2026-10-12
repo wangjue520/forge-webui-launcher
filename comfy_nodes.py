@@ -95,6 +95,11 @@ CATALOG = [
     {"id": "inpaint-webui-style", "name": "ComfyUI-Inpaint-WebUI-Style", "group": "author",
      "desc": "WebUI 风格的局部重绘：蒙版羽化、四种蒙版内容模式、只改蒙版区域不偏色。",
      "url": "https://github.com/wangjue520/ComfyUI-Inpaint-WebUI-Style.git", "folder": "ComfyUI-Inpaint-WebUI-Style"},
+    {"id": "zh-tag-autocomplete", "name": "中文标签补全（zh Tag Autocomplete）", "group": "author",
+     "desc": "在任意节点的提示词框里直接打中文，弹出对应的 Danbooru 英文标签；打下逗号时前一段中文原地变成英文，"
+             "变完可以直接手改；Alt+T 一键转换整框。字典没有的说法和整句描述用谷歌 / DeepSeek 翻译，适合 Anima。"
+             "还带「CLIP 文本编码（中文）」节点和 Anima 示例工作流（含 ControlNet-LLLite）。不需要额外的 Python 依赖。",
+     "url": "https://github.com/wangjue520/comfyui-zh-tag-autocomplete.git", "folder": "comfyui-zh-tag-autocomplete"},
 ]
 
 GROUP_LABELS = {"core": "推荐（部署 ComfyUI 时默认安装）", "extra": "按需安装", "author": "作者自制"}
