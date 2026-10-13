@@ -709,3 +709,102 @@
 
 /* 视频开屏播放期间，主界面只排版不绘制（视频底下不抢显卡）；视频结束时才露出来 */
 :root.vb-splash-hide #layout, :root.vb-splash-hide #vb-deco, :root.vb-splash-hide #vb-front { visibility: hidden; }
+
+/* ============================================================
+   「莱茵 · 分析终端」开屏（js/rhine-splash.js），3 秒
+   相位：p-on → p-draw → p-drawn → p-welcome → p-name → p-redact → p-db →（p-hold）→ p-flash → p-out
+   ============================================================ */
+#splash.sp-rhine4 {
+  --r4-ink: #0b0c0a; --r4-brass: #a67d48;
+  --r4-sans: "WWY Inter", "WWY Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+  --r4-ease: cubic-bezier(.22, 1, .36, 1);
+  --r4-m: clamp(170px, 17vmin, 230px);
+  background: radial-gradient(ellipse at 50% 46%, #f0eeea, #e8e5e0 70%, #e1ddd7) !important;
+  color: var(--r4-ink); font-family: var(--r4-sans); overflow: hidden;
+}
+#splash.sp-rhine4.p-out { background: transparent !important; pointer-events: none; }
+.sp-rhine4 svg { overflow: visible; }
+
+/* 背景：两道极淡的巨大徽记曲线，缓慢漂移 */
+.sp-rhine4 .r4-bg { position: absolute; width: 95vmax; left: -32vmax; top: -22vmax; opacity: 0; transition: opacity 1s; animation: r4Drift 16s ease-in-out infinite alternate; }
+.sp-rhine4 .r4-bg2 { left: auto; top: auto; right: -40vmax; bottom: -30vmax; width: 115vmax; transform: rotate(180deg); animation-name: r4Drift2; }
+.sp-rhine4 .r4-bg path { fill: none; stroke: rgba(60, 54, 42, .035); stroke-width: 1.3; }
+.sp-rhine4.p-on .r4-bg { opacity: 1; }
+.sp-rhine4.p-out .r4-bg { opacity: 0; transition: opacity .3s; }
+@keyframes r4Drift { to { translate: 2.5vmax 1.5vmax; } }
+@keyframes r4Drift2 { to { translate: -2.5vmax -1.5vmax; } }
+
+/* 左上角品牌：和侧栏品牌同位置同字号（侧栏 padding-top 32、左 28），开屏结束时无缝交接 */
+.sp-rhine4 .r4-brand { position: absolute; left: 28px; top: 32px; z-index: 2; }
+.sp-rhine4 .r4-brand .rb-h { min-height: 30px; }
+.sp-rhine4 .r4-brand .rb-sub { min-height: 12px; }
+.sp-rhine4 .r4-brand .rb-os { min-height: 24px; }
+.sp-rhine4 .r4-brand .rb-os b { margin-left: 12px; }
+
+/* 徽记：粗笔刷一笔画出 */
+.sp-rhine4 .r4-logo {
+  position: absolute; left: 50%; top: 50%; width: var(--r4-m); transform: translate(-50%, -50%);
+  transform-origin: 50% 50%; transition: transform .42s cubic-bezier(.65, 0, .25, 1);
+}
+.sp-rhine4 .r4-logo svg { display: block; width: 100%; }
+.sp-rhine4 .mk-path { fill: none; stroke: var(--r4-ink); stroke-width: 13; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 2000; stroke-dashoffset: 2000; }
+.sp-rhine4 .mk-pen { fill: var(--r4-ink); opacity: 0; }
+.sp-rhine4.p-draw .mk-pen { opacity: 1; }
+.sp-rhine4.p-drawn .mk-pen { opacity: 0; transition: opacity .1s; }
+.sp-rhine4 :is(.mk-dot, .mk-sq) { transform-box: fill-box; transform-origin: center; opacity: 0; }
+.sp-rhine4 .mk-dot { fill: var(--r4-ink); transform: scale(0); }
+.sp-rhine4 .mk-sq { fill: var(--r4-brass); transform: rotate(45deg) scale(0); }
+.sp-rhine4.p-drawn .mk-dot { opacity: 1; transform: scale(1); transition: transform .32s cubic-bezier(.3, 1.6, .5, 1), opacity .1s; }
+.sp-rhine4.p-drawn .mk-sq { opacity: 1; transform: rotate(45deg) scale(1); transition: transform .32s .06s cubic-bezier(.3, 1.6, .5, 1), opacity .1s .06s; }
+.sp-rhine4 .r4-sub { display: flex; justify-content: center; gap: calc(var(--r4-m) * .06); margin-top: calc(var(--r4-m) * .03); font: 800 calc(var(--r4-m) * .056) var(--r4-sans); }
+.sp-rhine4 .r4-sub span { opacity: 0; transform: translateY(4px); transition: opacity .12s, transform .25s var(--r4-ease); }
+.sp-rhine4 .r4-sub span.on { opacity: 1; transform: none; }
+
+/* 欢迎：文字栈居中，徽记挪进 .r4-slot */
+.sp-rhine4 .r4-stack {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; text-align: center; white-space: nowrap;
+}
+.sp-rhine4 .r4-w1 { font: 800 clamp(26px, 3.3vmin, 40px)/1.1 var(--r4-sans); letter-spacing: .4px; min-height: 1.1em; }
+.sp-rhine4 .r4-w2 { position: relative; margin-top: 4px; font: 800 clamp(24px, 3vmin, 36px)/1.2 var(--r4-sans); letter-spacing: .3px; min-height: 1.2em; }
+.sp-rhine4 .r4-w2 .n0 { display: inline-block; padding: 1px 9px 2px; visibility: hidden; }
+.sp-rhine4.p-name .r4-w2 .n0 { visibility: visible; }
+/* 反白：一块黑色从左往右扫过，扫过的部分变成黑底白字 */
+.sp-rhine4 .r4-w2 .n1 {
+  position: absolute; left: 0; top: 0; padding: 1px 9px 2px; background: var(--r4-ink); color: #ece9e4;
+  clip-path: inset(0 100% 0 0);
+}
+.sp-rhine4.p-redact .r4-w2 .n1 { clip-path: inset(0 0 0 0); transition: clip-path .28s cubic-bezier(.65, 0, .35, 1); }
+.sp-rhine4 .r4-cur { position: absolute; top: 0; bottom: 0; left: 100%; width: .5em; background: var(--r4-ink); opacity: 0; }
+.sp-rhine4.p-hold .r4-cur { opacity: 1; animation: r4Blink .75s steps(1) infinite; }
+@keyframes r4Blink { 50% { opacity: 0; } }
+.sp-rhine4 .r4-w3 { margin-top: 5px; font: 800 clamp(13px, 1.55vmin, 18px) var(--r4-sans); letter-spacing: .6px; clip-path: inset(0 100% 0 0); }
+.sp-rhine4.p-db .r4-w3 { clip-path: inset(0 -2% 0 0); transition: clip-path .22s var(--r4-ease); }
+.sp-rhine4 .r4-slot { width: calc(var(--r4-m) * .5); height: calc(var(--r4-m) * .5 * .62); margin-top: 10px; }
+.sp-rhine4 :is(.r4-w1, .r4-w2, .r4-w3) { visibility: hidden; }
+.sp-rhine4.p-welcome :is(.r4-w1, .r4-w2, .r4-w3) { visibility: visible; }
+
+/* 过曝：白光泛起，中间文字色散、糊开；之后整块淡出，露出背后已经就位的主界面 */
+.sp-rhine4 .r4-bloom {
+  position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: radial-gradient(ellipse at 50% 50%, #fff 0, rgba(255, 255, 255, .96) 45%, rgba(253, 252, 249, .9) 100%);
+}
+.sp-rhine4.p-flash .r4-bloom { opacity: 1; transition: opacity .3s ease-in; }
+.sp-rhine4.p-out .r4-bloom { opacity: 0; transition: opacity .7s .05s ease-out; }
+.sp-rhine4.p-flash :is(.r4-stack, .r4-logo) {
+  filter: blur(1.6px) drop-shadow(-4px 0 0 rgba(0, 190, 210, .55)) drop-shadow(4px 0 0 rgba(255, 70, 60, .35));
+  opacity: .55; transition: filter .25s, opacity .3s;
+}
+.sp-rhine4.p-out :is(.r4-stack, .r4-logo) { opacity: 0; filter: blur(8px); transition: opacity .2s, filter .3s; }
+.sp-rhine4.p-out .r4-brand { opacity: 1; }
+
+/* 跳过 */
+.sp-rhine4 .r4-skip {
+  position: absolute; right: 3vw; top: 34px; z-index: 3; border: 0; background: none; cursor: pointer;
+  font: 500 11px var(--r4-sans); letter-spacing: 1.3px; color: var(--r4-ink); opacity: 0; padding: 8px 0; transition: opacity .3s;
+}
+.sp-rhine4 .r4-skip span { margin-left: 14px; font-size: 19px; vertical-align: -2px; }
+.sp-rhine4.r-ready .r4-skip { opacity: .45; }
+.sp-rhine4.r-ready .r4-skip:hover { opacity: 1; }
+.sp-rhine4.p-flash .r4-skip { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .sp-rhine4 .r4-bg { animation: none; } }

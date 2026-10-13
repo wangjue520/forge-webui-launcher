@@ -28,7 +28,7 @@ import re
 import shutil
 import subprocess
 
-CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "launcher_config.json")
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "launcher_config.json")   # 配置放在项目根目录
 
 DEFAULT_CONFIG = {
     "webui_root": "",

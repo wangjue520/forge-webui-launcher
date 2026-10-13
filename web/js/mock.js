@@ -388,7 +388,24 @@
         kind_label: "ComfyUI", root: "", port: "", active: true, status: { state: "idle", running: false } }],
         active: "demo", multi: false, multi_manual: false }),
       library_status: () => ok({ ok: true, enabled: false, path: "", exists: false, journals: [] }),
-      outputs_info: () => ok({ ok: false, error: "预览模式：输出管理需要连接后端" }),
+      // 输出管理演示数据：几个文件夹、几百张图；缩略图地址指向不存在的演示服务（预览时显示占位）
+      outputs_info: () => ok({ ok: true, base: "http://wwy-mock.local", token: "demo", collections: [], instances: [],
+        multi: false, dirs: ["D:\\AI\\ComfyUI\\output"] }),
+      outputs_query: () => {
+        const sizes = [26, 64, 9, 118, 13], folders = ["2026-10-13", "2026-10-12", "2026-10-11 · upscale", "2026-10-08", "grids-test"]
+          .map((d) => "D:\\AI\\ComfyUI\\output\\" + d);
+        const ids = [], fidx = [];
+        sizes.forEach((n, k) => { for (let j = 0; j < n; j++) { ids.push(ids.length + 1); fidx.push(k); } });
+        return ok({ ok: true, ids, kinds: "i".repeat(ids.length), missing: [], vers: ids.map(() => "1"),
+          ratios: ids.map(() => 1), folders, fidx });
+      },
+      outputs_facets: () => ok({ ok: true, kinds: { image: 230 }, chars: [], loras: [], models: [], tags: [] }),
+      outputs_collections: () => ok({ ok: true, collections: [] }),
+      outputs_detail: (id) => ok({ ok: true, id, name: `demo_${id}.png`, path: `D:\\AI\\ComfyUI\\output\\demo_${id}.png`,
+        kind: "image", width: 1024, height: 1024, size: 1520000, mtime: 1760000000, prompt: "1girl, solo, masterpiece, best quality, looking at viewer",
+        negative: "lowres, bad hands", model: "ponyDiffusionV6", seed: "123456", sampler: "Euler a", source: "ComfyUI",
+        exists: true, time_text: "2026-10-13 21:40", size_text: "1.45 MB", chars: ["hatsune_miku"],
+        tags: ["1girl", "solo", "long_hair", "looking_at_viewer"], loras: [{ name: "detail_tweaker", weight: "0.6" }], collections: [], iid: "demo" }),
       _noop: () => ok({}),
     },
   };

@@ -19,7 +19,7 @@ import subprocess
 import sys
 from collections import deque
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 VENV_DIR = os.path.join(APP_DIR, "wd14_venv")
 
 # 特意钉死 numpy 版本范围——这是实际踩过的坑：onnxruntime 的 C 扩展在 numpy 2.x

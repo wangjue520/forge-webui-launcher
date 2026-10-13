@@ -25,7 +25,7 @@ import threading
 import time
 import urllib.parse
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 DATA_DIR = os.path.join(APP_DIR, "launcher_data")
 DB_PATH = os.path.join(DATA_DIR, "index.db")
 THUMB_DIR = os.path.join(DATA_DIR, "thumbs")
@@ -479,9 +479,19 @@ class OutputIndex:
         order = "o.mtime DESC" if (f or {}).get("sort", "new") == "new" else "o.mtime ASC"
         with self.lock:
             rows = self.db.execute(
-                f"SELECT o.id, o.kind, o.width, o.height, o.missing, o.mtime, o.size FROM outputs o WHERE {where} "
+                f"SELECT o.id, o.kind, o.width, o.height, o.missing, o.mtime, o.size, o.path FROM outputs o WHERE {where} "
                 f"ORDER BY {order} LIMIT 100000", args).fetchall()
+        # 所在文件夹：去重成列表，每行只回一个下标（界面按文件夹分排展示用）
+        folders, fidx, seen = [], [], {}
+        for r in rows:
+            d = os.path.dirname(r[7] or "")
+            k = seen.get(d)
+            if k is None:
+                k = seen[d] = len(folders)
+                folders.append(d)
+            fidx.append(k)
         return {"ids": [r[0] for r in rows], "kinds": "".join((r[1] or "o")[0] for r in rows),
+                "folders": folders, "fidx": fidx,
                 "ratios": [round((r[2] / r[3]) if r[2] and r[3] else 1, 3) for r in rows],
                 "missing": [r[0] for r in rows if r[4]],
                 # 缩略图版本号：文件内容变了（同 id 同路径被覆盖）URL 跟着变，浏览器缓存不会串图

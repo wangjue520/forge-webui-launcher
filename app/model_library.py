@@ -306,7 +306,7 @@ import hashlib
 import json
 import uuid
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 DATA_DIR = os.path.join(APP_DIR, "launcher_data")
 JOURNAL_DIR = os.path.join(DATA_DIR, "moves")
 TRASH_DIR = os.path.join(DATA_DIR, "trash")

@@ -34,7 +34,7 @@ _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # 每个 tag 都要试（candidate_tags / resolve_compat），不能只认最新的那个。
 FALLBACK_TAGS = ("cu128", "cu126", "cu124", "cu121", "cu118")
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 _CACHE_PATH = os.path.join(APP_DIR, "launcher_data", "torch_compat_cache.json")
 _CACHE_TTL = 7 * 86400
 

@@ -32,6 +32,9 @@
     // 矢量突破：结构沿用终末地（不设 base），换成浅灰 + 青色 + 黑；背景装饰见 js/vector.js
     // （正常维护的风格，新功能同样要适配它）
     { id: "vector", label: "矢量突破 · 青色拟生态", css: "themes/vector.css", splash: "vector" },
+    // 莱茵 · 分析终端：结构沿用终末地（不设 base），暖灰研究纸 + 墨色 + 黄铜；三维档案库背景见 js/rhine-field.js，
+    // 界面编排 js/rhine.js，开屏 js/rhine-splash.js，音效 js/rhine-sfx.js
+    { id: "rhine", label: "莱茵 · 分析终端（研究档案）", css: "themes/rhine.css", splash: "rhine" },
   ];
   var KEY = "ui-theme";
   // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名

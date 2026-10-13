@@ -6,7 +6,7 @@
 
 📘 **图文教程（PDF，77 页）**：[WWY 启动器 × Anima 完全上手教程](教程Tutorial/WWY启动器_Anima_完全上手教程.pdf)——从下载、部署、下模型到提示词、参数、LoRA、启动器全部功能和常见问题。
 
-> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `start一键启动.bat` (or place `启动WWY启动器.bat` next to the folder and use that), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
+> **English TL;DR**: A beginner-proof launcher for ComfyUI & Forge WebUI. Download the ZIP, extract to a pure-English path, double-click `启动WWY启动器.bat` (or place it next to the folder and use it from there), deploy with one click, download a checkpoint, press Launch. Full UI is in Chinese.
 
 ---
 
@@ -72,7 +72,7 @@ D:\forge-launcher\
 └─ 启动WWY启动器.bat         ← 把压缩包里的这个 bat 移到文件夹旁边，以后双击它
 ```
 
-`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `forge-webui-launcher` 文件夹），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的 `start一键启动.bat` 效果完全一样。
+`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `forge-webui-launcher` 文件夹），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的这个 bat 效果完全一样。
 
 ### 二、第一次双击 bat
 
@@ -228,6 +228,7 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 | 新拟物 · 浅色 / 新拟物 · 深色 | Neumorphism（Soft UI）：底色和卡片同一种灰，形状只靠左上亮光 + 右下暗影区分——卡片、按钮、侧栏浮起，输入框、日志、导航选中项凹陷；复选框是老式墙壁拨杆电灯开关（3D 透视的白色拨杆 + 投影，开时槽里亮起点缀色的 ON）；切换页面时旧页的凸起压平、新页再浮起，配一声沉闷的「咚」，拨开关有清脆的「咔哒」，点按钮有薄膜键盘的「噗」（Web Audio 现场合成，不带音频文件）；文件数 / 已选数等偶尔变化的数字像机械里程表一样滚动（显卡占用、进度这类频繁变化的不滚）；无开屏动画 |
 | 液态玻璃 · 浅色 / 液态玻璃 · 深色 | 仿 iOS 26 / macOS 26 Liquid Glass：侧栏、顶部标题胶囊、提示条是透明玻璃，边缘真的会折射背后的画面（带轻微色散）；内容卡片是接近不透明的分组材质；缓慢流动的绸带壁纸；大标题滚动时缩进顶部胶囊；苹果系统配色，随附 Inter + 思源黑体子集字体（SIL OFL）；带自己的开屏动画 |
 | 矢量突破 · 青色拟生态 | 致敬明日方舟 × 塞壬唱片「矢量突破」PV 的视觉语言（非官方，不含官方标志）：侧栏、页头、卡片、弹窗都是毛玻璃，透出后面虚化的立体场景（浅青方块和软球，远 / 中 / 近三层，翻页时视差滑动）；大圆角、柔和投影，按钮像有厚度的胶囊；页头是瑞士风紧排大字（标签列 + 两行咬合的大字 + “06” 引号编号，中文页名压在下面）。开屏和背景都是**预渲染**的（开屏是 60fps 视频，背景是三张透明图层），运行时不做实时 3D 渲染，核显也不卡；视频播不了时自动退回实时版。随附 TeX Gyre Heros 拉丁子集（改名 WWY Grotesk，GUST Font License） |
+| 莱茵 · 分析终端（研究档案） | 参考《明日方舟》特别映像「莱茵生命：访问」及其同人复刻站的视觉语言（非官方，不含官方标志）。界面分三块：左边目录是一块块浮动的半透明亚克力档案板；中间装饰是实时三维档案库（手写 WebGL2，不依赖任何库，离线可用），当前页面对应的档案升起，编号和功能名直接透视贴在板面上；右边是功能页。功能页宽度固定、内容只排一次版：窗口不够宽时平时只露出一部分，鼠标进入时整块平移出来盖住装饰（只动 transform，不重排）；窗口够宽时功能页整块放得下，装饰区永久保留。内容上滑时抬头折叠成一行。点中间装饰区进入装饰全屏：滚轮 / 拖动 / 方向键切换档案，点升起的档案板直接进入对应功能页，Esc 返回；Ctrl+K 打开档案索引。输出管理是档案架：每个文件夹一排斜插的亚克力档案板，点开平铺，可一键全部平铺。开屏约 3 秒；界面音效全部 Web Audio 现场合成（没有音乐），底栏可开关。不支持 WebGL2 时退回纯纸面背景。实现见 `themes/rhine.css`、`js/rhine*.js` |
 
 新风格做成 `web/themes/xxx.css` 加注册表一条即可（见 `web/js/themes.js` 开头注释），开屏动画也变体化。原来的「极简」风格已由新拟物取代（配置里的旧选择会自动换成新拟物），`themes/minimal.css` 只留作结构基底：液态玻璃复用极简的结构规则（`base: "minimal"`，选择器写 `[data-ui-base="minimal"]`），只叠一层材质与动效（`themes/liquid.css` + `js/liquid.js`，字体在 `web/fonts/`）。新拟物同理（`themes/neumorph.css` + `js/neumorph.js`，滚轮数字接哪些元素见 `neumorph.js` 里的 `ROLL` 列表）。
 
@@ -357,27 +358,32 @@ Forge 默认 `output\txt2img-images\` / `output\img2img-images\`（Classic 分�
 
 ```
 forge-webui-launcher/
-├─ 启动WWY启动器.bat    ← 可移到文件夹旁边当入口（双引用法见上文）
-├─ start一键启动.bat     ← 文件夹内的启动入口（自动准备 Python + 依赖）
+├─ 启动WWY启动器.bat    ← 唯一入口（双击；也可以放到文件夹旁边用，见上文）
+├─ README.md / LICENSE / requirements.txt
+├─ version.json         ← 当前版本号（每次更新自动重写）
+├─ launcher_config.json ← 配置（首次运行自动生成，更新时保留）
+├─ app/                 ← 全部 Python 代码
+│  ├─ webview_main.py      ← 入口：创建窗口、关闭前确认
+│  ├─ webview_api.py       ← JS ↔ Python 桥接层：所有页面逻辑、事件推送
+│  ├─ process_manager.py   ← 每个实例一个启动器（进程树/端口/就绪判定）
+│  ├─ model_library.py     ← 拖拽上传、共享模型库合并去重、LoRA 整理、移动记录与撤销
+│  ├─ output_index.py      ← 输出管理器：SQLite 索引、角色识别、收藏夹、本地文件服务
+│  ├─ config_manager.py    ← 配置读写、实例管理、命令行参数生成、环境检测
+│  ├─ portable_env.py      ← 便携 Python/Git 下载、venv 检测、hashlib 补丁
+│  ├─ updater.py           ← 启动器自更新（版本号管理、GitHub 检查、增量升级、旧布局清理）
+│  ├─ version_manager.py   ← WebUI / ComfyUI / 插件的 git 版本管理（检查更新、切换、回滚、接管整合包）
+│  ├─ comfy_nodes.py / mirror_manager.py / civitai_downloader.py / liblib_client.py …
+│  ├─ wd14_*.py            ← WD14 反推（独立 venv）
+│  └─ meta_engine/         ← 图片元数据读写引擎
+├─ scripts/             ← PowerShell 脚本（便携 Python 下载、地区检测、快捷方式）
+├─ web/                 ← 前端（index.html / style.css / splash.css / js/ / themes/）
+├─ assets/  tools/  tests/  教程Tutorial/
+│
+│  以下由启动器运行时自动生成（不在仓库里）：
 ├─ .venv/               ← 启动器自己的运行环境（首次自动创建，删了自动重建）
 ├─ python/              ← 自动下载的便携 Python 3.13（没有才建）
 ├─ launcher_data/       ← 运行期数据：输出索引、缩略图、下载缓存、移动记录、版本切换记录与备份（更新时保留）
-├─ webview_main.py      ← 入口：创建窗口、关闭前确认
-├─ webview_api.py       ← JS ↔ Python 桥接层：所有页面逻辑、事件推送
-├─ process_manager.py   ← 每个实例一个启动器（进程树/端口/就绪判定）
-├─ model_library.py     ← 拖拽上传、共享模型库合并去重、LoRA 整理、移动记录与撤销
-├─ output_index.py      ← 输出管理器：SQLite 索引、角色识别、收藏夹、本地文件服务
-├─ config_manager.py    ← 配置读写、实例管理、命令行参数生成、环境检测
-├─ portable_env.py      ← 便携 Python/Git 下载、venv 检测、hashlib 补丁
-├─ updater.py           ← 启动器自更新（版本号管理、GitHub 检查、增量升级）
-├─ version_manager.py   ← WebUI / ComfyUI / 插件的 git 版本管理（检查更新、切换、回滚、接管整合包）
-├─ comfy_nodes.py       ← ComfyUI 常用节点清单、安装与依赖
-├─ version.json         ← 当前版本号（每次更新自动重写）
-├─ mirror_manager.py    ← 国内镜像加速
-├─ civitai_downloader.py / liblib_client.py / safetensors_meta.py / image_meta_core.py
-├─ meta_engine/         ← 图片元数据读写引擎
-├─ wd14_*.py            ← WD14 反推（独立 venv）
-└─ web/                 ← 前端（index.html / style.css / splash.css / js/ / themes/）
+└─ wd14_venv/  wd_tagger_models/  tmp/
 ```
 
 **前端联调**：浏览器打开 `web/index.html?mock=1` 可预览界面（注入标注了"演示数据"的假数据，底部有常驻提示条；不带 `?mock=1` 不会启用 mock）。支持 `?page=xxx` 直接定位页面。

@@ -52,7 +52,7 @@ import h3_models as h3m
 import amd_rocm
 import netspeed
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
 from process_manager import (  # noqa: E402  进程工具与常量（V3 搬到 process_manager）
     WEBUI_ENTRY_SCRIPT, _NO_WINDOW, _URL_RE, _BIND_ERROR_RE, _OVERRIDE_VAR_PATTERN,
@@ -5982,7 +5982,7 @@ def _api_wd14_tag(self, images, general_thresh, character_thresh, include_rating
                     }, f)
 
                 py = venv.venv_python_path()
-                script = os.path.join(APP_DIR, "wd14_infer_cli.py")
+                script = os.path.join(APP_DIR, "app", "wd14_infer_cli.py")
                 emit_log(f"正在隔离环境中反推 {len(images)} 张图片 ...")
 
                 self._wd14_proc = subprocess.Popen(
@@ -6800,7 +6800,7 @@ def _api_launcher_restart(self):
         if os.name == "nt" and os.path.exists(bat):
             os.startfile(bat)  # noqa: S606 - 拉起本启动器自己的 bat
         else:
-            subprocess.Popen([sys.executable, os.path.join(APP_DIR, "webview_main.py")],
+            subprocess.Popen([sys.executable, os.path.join(APP_DIR, "app", "webview_main.py")],
                              cwd=APP_DIR)
     except Exception as e:
         return {"ok": False, "error": f"重启失败: {e}"}

@@ -20,7 +20,8 @@ param(
 
 $ErrorActionPreference = "SilentlyContinue"
 
-$LauncherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# 脚本在 scripts\ 子目录里，启动器根目录是它的上一级
+$LauncherDir = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $IconPath    = Join-Path $LauncherDir "assets\wwy_launcher_icon.ico"
 $EntryBat    = Join-Path $LauncherDir "启动WWY启动器.bat"
 if (-not (Test-Path $IconPath)) { exit 0 }   # 没有图标就什么都不做

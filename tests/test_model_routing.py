@@ -6,6 +6,8 @@ DiT 模型（Anima / Flux / Wan / MiniMax-H3）分类路由的回归测试：
 只有 DiT 的主模型和大模型放一起。共享模型库要同时喂两边，放错就在某一边「消失」。
 用合成的假文件跑，不需要真模型。运行：python -m unittest tests.test_model_routing
 """
+import os as _os, sys as _sys  # app_dir_for_tests：被测模块在 app/ 子目录里
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "app"))
 import json
 import os
 import shutil

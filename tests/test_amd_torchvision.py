@@ -1,4 +1,6 @@
 """不依赖 A 卡或 AMD 网络的回归测试。"""
+import os as _os, sys as _sys  # app_dir_for_tests：被测模块在 app/ 子目录里
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "app"))
 import functools
 import http.server
 import os

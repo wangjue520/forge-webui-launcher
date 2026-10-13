@@ -16,9 +16,9 @@ import json
 import os
 import subprocess
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 MARKER = os.path.join(APP_DIR, "launcher_data", "shortcuts.json")
-SCRIPT = os.path.join(APP_DIR, "create_shortcuts.ps1")
+SCRIPT = os.path.join(APP_DIR, "scripts", "create_shortcuts.ps1")
 ICON = os.path.join(APP_DIR, "assets", "wwy_launcher_icon.ico")
 DESKTOP_NAME = "WWY 启动器.lnk"
 FOLDER_NAME = "启动WWY启动器.lnk"

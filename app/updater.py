@@ -18,7 +18,7 @@
 页码就是总提交数），加速代理可能不透传该头，拿不到就本地计数 +1，
 保证版本号单调递增。
 
-维护者打包前可执行 `python updater.py --write-version` 把当前 git
+维护者打包前可执行 `python app/updater.py --write-version` 把当前 git
 版本写进 version.json，让 ZIP 用户拿到的就是最新版本号。
 """
 import json
@@ -33,7 +33,7 @@ from datetime import datetime
 
 import requests
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
 REPO = "wangjue520/forge-webui-launcher"
 BRANCH = "main"
@@ -293,6 +293,40 @@ def _overlay_copy(src_root, log_cb):
     return copied
 
 
+def cleanup_legacy_layout(log_cb=None):
+    """清理旧目录布局的残留。
+
+    早期版本把所有 .py / .ps1 平铺在根目录；现在代码在 app/、PowerShell 脚本在 scripts/。
+    从旧版本用 ZIP 覆盖升级时，覆盖只增不删，根目录会留下一份旧代码。这里只删
+    「新位置已经有同名文件」的那些（以及旧的 meta_engine/、__pycache__/），别的东西一律不碰。
+    """
+    app_dir = os.path.join(APP_DIR, "app")
+    scr_dir = os.path.join(APP_DIR, "scripts")
+    if not os.path.isdir(app_dir):
+        return []
+    removed = []
+    for name in os.listdir(APP_DIR):
+        p = os.path.join(APP_DIR, name)
+        if not os.path.isfile(p):
+            continue
+        moved = ((name.endswith(".py") and os.path.isfile(os.path.join(app_dir, name))) or
+                 (name.endswith(".ps1") and os.path.isfile(os.path.join(scr_dir, name))))
+        if moved:
+            try:
+                os.remove(p)
+                removed.append(name)
+            except OSError:
+                pass
+    old_me = os.path.join(APP_DIR, "meta_engine")
+    if os.path.isdir(old_me) and os.path.isdir(os.path.join(app_dir, "meta_engine")):
+        shutil.rmtree(old_me, ignore_errors=True)
+        removed.append("meta_engine/")
+    shutil.rmtree(os.path.join(APP_DIR, "__pycache__"), ignore_errors=True)
+    if removed and log_cb:
+        log_cb(f"[更新] 已清理旧目录布局残留的 {len(removed)} 项（代码已搬进 app/ 和 scripts/）")
+    return removed
+
+
 def _update_via_zip(cfg, log_cb, progress_cb, cancel_flag):
     """无 .git 的 ZIP 用户：下载 main 分支快照，覆盖式更新。"""
     import portable_env as pe
@@ -316,6 +350,7 @@ def _update_via_zip(cfg, log_cb, progress_cb, cancel_flag):
         if len(roots) != 1:
             raise UpdateError("代码包内部结构异常，已中止")
         _overlay_copy(os.path.join(extract_dir, roots[0]), log_cb)
+        cleanup_legacy_layout(log_cb)
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     return remote

@@ -23,7 +23,7 @@ from webview.dom import DOMEventHandler
 import config_manager as cm
 from webview_api import LauncherApi
 
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 ICON_PATH = os.path.join(APP_DIR, "assets", "wwy_launcher_icon.ico")
 
 
@@ -124,6 +124,11 @@ def _quiet_windows_error_dialogs():
 
 def main():
     _quiet_windows_error_dialogs()
+    try:   # 从旧版本（代码平铺在根目录）升级上来时，清掉根目录残留的旧代码
+        import updater
+        updater.cleanup_legacy_layout()
+    except Exception:
+        pass
     _patch_http_server_backlog()
     api = LauncherApi()
     cm.write_theme_file(api.cfg)   # 开屏动画在后端应答前就要读风格文件

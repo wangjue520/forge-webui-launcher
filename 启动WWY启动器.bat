@@ -19,9 +19,9 @@ if not exist "%TEMP%\" set "TEMP=%~dp0launcher_data"
 if not exist "%TEMP%\" mkdir "%TEMP%" >nul 2>nul
 
 rem 兼容老习惯：这个 bat 被拿到启动器文件夹【旁边】时，自动转交文件夹里的本体
-if not exist "%~dp0webview_main.py" (
+if not exist "%~dp0app\webview_main.py" (
     for /d %%d in ("%~dp0forge-webui-launcher*") do (
-        if exist "%%d\webview_main.py" (
+        if exist "%%d\app\webview_main.py" (
             call "%%d\启动WWY启动器.bat" %*
             exit /b
         )
@@ -257,7 +257,7 @@ rem ===================================================================
 rem  :detect_region —— 查询出口 IP 的国家代码写入 %REGION%（查不到留空）
 rem ===================================================================
 :detect_region
-for /f "delims=" %%r in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0detect_region.ps1"') do set "REGION=%%r"
+for /f "delims=" %%r in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\detect_region.ps1"') do set "REGION=%%r"
 if /i "%REGION%"=="CN" (
     echo   检测到国内网络环境，安装依赖优先走国内镜像 ...
 ) else (
@@ -379,7 +379,7 @@ echo.
 
 rem %~dp0 末尾自带反斜杠，直接包引号会变成 \" 把引号转义掉、参数粘连，
 rem 标准写法是 %~dp0.（末尾补一个点），PowerShell 才能正确收到两个参数
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0bootstrap_python.ps1" -LauncherDir "%~dp0." -ArchivePath "%TEMP%\forge_launcher_python.tar.gz"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\bootstrap_python.ps1" -LauncherDir "%~dp0." -ArchivePath "%TEMP%\forge_launcher_python.tar.gz"
 if errorlevel 1 (
     echo.
     echo   [x] 便携 Python 下载/解压失败（上面应有详细原因）。
@@ -412,7 +412,7 @@ if errorlevel 1 (
     echo       https://developer.microsoft.com/microsoft-edge/webview2/
     echo.
 )
-%VPY% webview_main.py
+%VPY% app\webview_main.py
 if errorlevel 1 (
     echo.
     echo   ============================================================

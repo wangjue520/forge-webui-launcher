@@ -5,6 +5,8 @@
  * 缩略图：先请求缓存；没有就由浏览器加载原图（视频截一帧）画到 canvas，压成 webp
  * 传回后端缓存——不需要 Pillow / ffmpeg。
  * 网格是虚拟滚动：几万张图也只渲染屏幕上那几十个格子。
+ * 「莱茵 · 分析终端」风格下换成档案架视图：每个文件夹一排，没展开时是一叠斜插的亚克力档案板，
+ * 点开后板子从堆里依次飞出平铺成网格；工具栏可以一键全部平铺（同样是虚拟滚动）。
  */
 (function () {
   "use strict";
@@ -15,6 +17,7 @@
   const CELL = 168, GAP = 8, THUMB = 320;
   let base = "", token = "";
   let ids = [], kinds = "", missing = new Set(), vers = [];
+  let folders = [], fidx = [];       // 所在文件夹（去重列表 + 每个文件的下标），档案架视图分排用
   let filters = { q: "", kind: "", iid: "", collection: "", chars: [], tags: [], lora: "", model: "", sort: "new" };
   let timeDays = "";
   let collections = [];
@@ -55,6 +58,8 @@
       kinds = (r && r.kinds) || "";
       missing = new Set((r && r.missing) || []);
       vers = (r && r.vers) || [];
+      folders = (r && r.folders) || [];
+      fidx = (r && r.fidx) || [];
       renderFacets(fc || {});
       layout(true);
       const kindTxt = fc && fc.kinds ? Object.entries(fc.kinds).map(([k, n]) =>
@@ -202,6 +207,8 @@
   const cellPool = new Map();   // 当前渲染着的格子：索引 → 元素
 
   function layout(reset) {
+    if (shelfOn()) { shelfLayout(reset); return; }
+    if (shelfWas) { reset = true; shelfWas = false; clearShelf(); cs = CELL; }
     const wrap = $("#out-scroll");
     const w = wrap.clientWidth - 4;
     cols = Math.max(1, Math.floor((w + GAP) / (CELL + GAP)));
@@ -216,6 +223,7 @@
   }
 
   function renderVisible() {
+    if (shelfOn()) { shelfRender(); return; }
     const wrap = $("#out-scroll");
     const grid = $("#out-grid");
     const rowH = CELL + GAP;
@@ -253,6 +261,9 @@
     } else if (!missing.has(id)) {
       const img = document.createElement("img");
       img.loading = "lazy";
+      img.decoding = "async";
+      img.decoding = "async";
+      img.decoding = "async";
       img.alt = "";
       img.src = thumbUrl(i);
       img.onerror = () => { img.onerror = null; makeThumb(id, kind, img); };
@@ -260,6 +271,199 @@
     }
     el.addEventListener("click", (e) => onCellClick(i, e));
     return el;
+  }
+
+  /* ---------- 档案架视图（莱茵风格）：每个文件夹一排亚克力档案板 ---------- */
+  const SH = { HEAD: 48, STACK: 212, PAD: 20, STEP: 30, MAX: 48 };
+  let groups = [], gOf = [], lines = [], shelfWas = false;
+  const headPool = new Map();
+  const openState = new Map();          // 文件夹路径 → 是否平铺（换筛选后保持）
+  let shelfAll = false;
+  try { shelfAll = localStorage.getItem("out-shelf-all") === "1"; } catch (e) {}
+  let animG = -1, animUntil = 0, delayT = 0;
+  let cs = CELL;                         // 档案架里的格子边长：按可用宽度撑满，不留右侧空白
+
+  function shelfOn() { return document.documentElement.dataset.uiTheme === "rhine"; }
+
+  function clearShelf() {
+    headPool.forEach((el) => el.remove()); headPool.clear();
+    cellPool.forEach((el) => el.remove()); cellPool.clear();
+    $("#out-grid").classList.remove("shelf");
+  }
+
+  function buildGroups() {
+    const map = new Map();
+    groups = []; gOf = new Array(ids.length);
+    for (let i = 0; i < ids.length; i++) {
+      const k = fidx.length ? fidx[i] : 0;
+      let g = map.get(k);
+      if (!g) {
+        const full = folders[k] || "";
+        const seg = full.split(/[\\/]/).filter(Boolean);
+        g = { key: full, full, label: seg.slice(-2).join(" / ") || "全部输出", items: [], gi: groups.length };
+        map.set(k, g); groups.push(g);
+      }
+      gOf[i] = g.gi;
+      g.items.push(i);
+    }
+    groups.forEach((g, n) => { g.open = openState.has(g.key) ? openState.get(g.key) : (shelfAll || n === 0); });
+    syncShelfBtn();
+  }
+
+  function stackCount(g) {
+    const w = $("#out-scroll").clientWidth - 4;
+    return Math.min(g.items.length, SH.MAX, Math.max(1, Math.floor((w - cs - 40) / SH.STEP) + 1));
+  }
+  // 档案堆里第 k 张：往右依次退后，斜插着只露出一截
+  function stackT(k, lineY) {
+    return `translate(${k * SH.STEP}px, ${lineY + 18}px) perspective(900px) rotateY(-34deg) scale(.93)`;
+  }
+  function gridT(c, y) {
+    return `translate(${c * (cs + GAP)}px, ${y}px)`;   // 平铺状态是纯 2D：不让每个格子各占一个 3D 合成层
+  }
+
+  function shelfLayout(reset) {
+    const wrap = $("#out-scroll"), grid = $("#out-grid");
+    const w = wrap.clientWidth - 4;
+    cols = Math.max(1, Math.floor((w + GAP) / (CELL + GAP)));
+    const ncs = Math.floor((w - GAP * (cols - 1)) / cols);
+    if (ncs !== cs) { cs = ncs; cellPool.forEach((el) => { el.style.width = el.style.height = cs + "px"; }); }
+    if (reset || !shelfWas) {
+      clearShelf();
+      buildGroups();
+      if (reset) wrap.scrollTop = 0;
+    }
+    shelfWas = true;
+    grid.classList.add("shelf");
+    lines = [];
+    let y = 0;
+    groups.forEach((g, gi) => {
+      g.y = y;
+      lines.push({ y, h: SH.HEAD, g: gi, type: "head" }); y += SH.HEAD;
+      if (g.open) {
+        const rows = Math.ceil(g.items.length / cols);
+        for (let r = 0; r < rows; r++) { lines.push({ y, h: cs + GAP, g: gi, type: "row", row: r }); y += cs + GAP; }
+      } else { lines.push({ y, h: Math.max(SH.STACK, cs + 44), g: gi, type: "stack" }); y += Math.max(SH.STACK, cs + 44); }
+      y += SH.PAD;
+    });
+    grid.style.height = y + "px";
+    shelfRender();
+  }
+
+  function shelfRender() {
+    const wrap = $("#out-scroll"), grid = $("#out-grid");
+    if (!lines.length) return;
+    const top = wrap.scrollTop - 300, bot = wrap.scrollTop + wrap.clientHeight + 300;
+    let lo = 0, hi = lines.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (lines[mid].y + lines[mid].h < top) lo = mid + 1; else hi = mid; }
+    const wantC = new Set(), wantH = new Set();
+    for (let li = lo; li < lines.length && lines[li].y < bot; li++) {
+      const L = lines[li], g = groups[L.g];
+      if (L.type === "head") {
+        wantH.add(L.g);
+        let h = headPool.get(L.g);
+        if (!h) { h = makeHead(L.g); h.style.transform = `translateY(${L.y}px)`; grid.appendChild(h); headPool.set(L.g, h); }
+        h.style.transform = `translateY(${L.y}px)`;
+        h.classList.toggle("open", g.open);
+        h.querySelector(".oh-tg").textContent = g.open ? "收起" : "平铺";
+      } else if (L.type === "stack") {
+        const m = stackCount(g);
+        for (let k = 0; k < m; k++) { const i = g.items[k]; wantC.add(i); place(i, stackT(k, L.y), true, k, L.g, L.y); }
+      } else {
+        for (let c = 0; c < cols; c++) {
+          const k = L.row * cols + c;
+          if (k >= g.items.length) break;
+          const i = g.items[k]; wantC.add(i);
+          place(i, gridT(c, L.y), false, k, L.g, g.y + SH.HEAD);
+        }
+      }
+    }
+    cellPool.forEach((el, i) => { if (!wantC.has(i)) { el.remove(); cellPool.delete(i); } });
+    headPool.forEach((el, gi) => { if (!wantH.has(gi)) { el.remove(); headPool.delete(gi); } });
+  }
+
+  function place(i, tf, stacked, k, gi, stackY) {
+    const grid = $("#out-grid");
+    let el = cellPool.get(i);
+    const animating = (animG === gi || animG === -2) && performance.now() < animUntil;
+    const delay = Math.min(k, 36) * 16 + "ms";
+    if (!el) {
+      el = makeCell(i);
+      el.style.width = el.style.height = cs + "px";
+      el.classList.add("oc-plate");
+      el.classList.toggle("oc-stacked", stacked);
+      el.style.zIndex = stacked ? String(SH.MAX - k) : "";
+      if (animating && !stacked) {
+        // 新出现的格子：从档案堆的位置飞出来平铺
+        el.style.transition = "none";
+        el.style.transform = stackT(Math.min(k, SH.MAX - 1), stackY);
+        el.style.opacity = "0";
+        grid.appendChild(el); cellPool.set(i, el);
+        void el.offsetWidth;
+        el.style.transition = ""; el.style.transitionDelay = delay;
+        el.style.transform = tf; el.style.opacity = "";
+        return;
+      }
+      el.style.transform = tf;
+      grid.appendChild(el); cellPool.set(i, el);
+      return;
+    }
+    if (el.classList.contains("oc-stacked") !== stacked) {
+      el.classList.toggle("oc-stacked", stacked);
+      el.style.zIndex = stacked ? String(SH.MAX - k) : "";
+      if (animating) el.style.transitionDelay = delay;
+    }
+    if (el.style.transform !== tf) el.style.transform = tf;
+  }
+
+  function makeHead(gi) {
+    const g = groups[gi];
+    const h = document.createElement("div");
+    h.className = "oc-head";
+    h.title = g.full;
+    h.innerHTML = `<i></i><b>${App.esc(g.label)}</b><em>${g.items.length} FILES</em>` +
+      `<span class="oh-path">${App.esc(g.full)}</span><span class="oh-tg"></span>`;
+    h.addEventListener("click", () => toggleGroup(gi));
+    return h;
+  }
+
+  function animate(gi) {
+    animG = gi; animUntil = performance.now() + 1400;
+    clearTimeout(delayT);
+    delayT = setTimeout(() => cellPool.forEach((el) => { el.style.transitionDelay = ""; }), 1500);
+    if (window.RhineSfx) window.RhineSfx.play("pull");
+  }
+
+  function toggleGroup(gi, v) {
+    const g = groups[gi]; if (!g) return;
+    g.open = v == null ? !g.open : v;
+    openState.set(g.key, g.open);
+    animate(gi);
+    shelfLayout(false);
+    syncShelfBtn();
+  }
+
+  function setAllOpen(v) {
+    shelfAll = v;
+    try { localStorage.setItem("out-shelf-all", v ? "1" : "0"); } catch (e) {}
+    groups.forEach((g) => { g.open = v; openState.set(g.key, v); });
+    animate(-2);
+    shelfLayout(false);
+    syncShelfBtn();
+  }
+
+  function syncShelfBtn() {
+    let b = $("#out-shelf-all");
+    const right = $(".out-bar-right");
+    if (!b && right) {
+      b = document.createElement("button");
+      b.className = "btn btn-sm"; b.id = "out-shelf-all"; b.type = "button";
+      b.addEventListener("click", () => setAllOpen(!(groups.length && groups.every((g) => g.open))));
+      right.insertBefore(b, right.firstChild);
+    }
+    if (!b) return;
+    b.hidden = !shelfOn();
+    b.textContent = groups.length && groups.every((g) => g.open) ? "全部收起" : "全部平铺";
   }
 
   /* ---------- 缩略图：浏览器画好传回后端缓存 ---------- */
@@ -327,6 +531,8 @@
   /* ---------- 选择 / 详情 ---------- */
   function onCellClick(i, e) {
     const id = ids[i];
+    const el0 = cellPool.get(i);
+    if (shelfOn() && el0 && el0.classList.contains("oc-stacked")) { toggleGroup(gOf[i], true); return; }
     if (selectMode || e.ctrlKey || e.metaKey) {
       if (!selectMode) setSelectMode(true);
       if (selected.has(id)) selected.delete(id); else selected.add(id);
@@ -583,8 +789,15 @@
 
   App.pages.outputs = {
     init() {
-      $("#out-scroll").addEventListener("scroll", () => requestAnimationFrame(renderVisible), { passive: true });
+      // 一帧最多重排一次（滚动事件一帧里可能来好几个）
+      let rvQueued = false;
+      $("#out-scroll").addEventListener("scroll", () => {
+        if (rvQueued) return;
+        rvQueued = true;
+        requestAnimationFrame(() => { rvQueued = false; renderVisible(); });
+      }, { passive: true });
       window.addEventListener("resize", () => { if (visible) layout(false); });
+      window.addEventListener("wwy-theme", () => setTimeout(() => { syncShelfBtn(); if (visible) layout(true); }, 0));
 
       $("#of-q").addEventListener("input", () => { filters.q = $("#of-q").value; scheduleQuery(350); });
       $("#of-time").addEventListener("change", () => { timeDays = $("#of-time").value; scheduleQuery(0); });
