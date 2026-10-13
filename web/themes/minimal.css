@@ -1,9 +1,12 @@
 /* ============================================================
-   极简（minimal-light / minimal-dark）— 界面风格覆盖层
-   无装饰（无等高线、无刻度尺、无切角、无黄色高亮）、小圆角、
-   细线、单一靛蓝点缀色；开屏动画：无（themes.js 里 splash: "none"）
+   极简结构基底（data-ui-base="minimal"）
+   「极简」风格本身已下线（由新拟物 neu-* 取代），这个文件现在只作为
+   新拟物 / 液态玻璃的共用结构层：去掉终末地的全部装饰（等高线、刻度尺、
+   切角、黄色高亮），把基底变量映射到 --m-* 语义色。
+   --m-* 的具体颜色由叠在上面的风格文件提供（themes/neumorph.css、themes/liquid.css），
+   这里不再自带配色。
 
-   配色规则（两套都按这个来，改色时别破坏）：
+   配色规则（叠在上面的各风格都按这个来，改色时别破坏）：
    · 文字分三级：--m-text 正文 / --m-text-2 次要 / --m-text-3 提示。
      三级在所有底色（背景、卡片、输入框、浅色填充）上对比度都 ≥ 4.5:1，
      提示文字不再用"浅到快看不见"的灰。
@@ -15,80 +18,6 @@
      底色用；深色主题里 --ink 变成浅色文字，所以凡是把 --ink / --yel 当
      底色的地方，这里都逐个改成了语义色（见下方"原本是黑底块/黄底块的地方"）。
    ============================================================ */
-
-/* ---------- 浅色 ---------- */
-[data-ui-theme="minimal-light"] {
-  color-scheme: light;
-  --m-bg: #f5f5f4;
-  --m-surface: #ffffff;
-  --m-fill: #f1f1f0;
-  --m-fill-2: #e8e8e6;
-  --m-sunken: #fafaf9;
-  --m-border: rgba(24, 24, 27, .12);
-  --m-border-2: rgba(24, 24, 27, .07);
-  --m-border-strong: rgba(24, 24, 27, .26);
-  --m-text: #18181b;
-  --m-text-2: #3f3f46;
-  --m-text-3: #5c5c66;        /* 白底 6.4:1，#f1f1f0 底 5.7:1 */
-  --m-text-off: #83838d;      /* 仅用于禁用态，填充底上约 3.2:1：看得清但一眼知道不能点 */
-  --m-accent: #3b5bdb;        /* 白字 5.7:1 */
-  --m-accent-hover: #3249c0;
-  --m-accent-soft: rgba(59, 91, 219, .1);
-  --m-accent-soft-2: rgba(59, 91, 219, .16);
-  --m-accent-text: #3350c8;   /* 淡靛蓝底上 5.4:1 */
-  --m-on-accent: #ffffff;
-  --m-ok: #15803d;
-  --m-warn: #a15c07;
-  --m-bad: #c9302c;
-  --m-bad-soft: rgba(201, 48, 44, .08);
-  --m-overlay: rgba(24, 24, 27, .32);
-  --m-media-bg: #ececea;
-  --m-toast-bg: #18181b;
-  --m-toast-text: #f4f4f5;
-  --m-toast-bad: #fca5a5;
-  --m-toast-ok: #86efac;
-  --m-scroll: rgba(24, 24, 27, .2);
-  --m-scroll-hover: rgba(24, 24, 27, .36);
-  --m-shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 4px 14px rgba(0, 0, 0, .05);
-  --m-shadow-pop: 0 20px 56px rgba(0, 0, 0, .18);
-}
-
-/* ---------- 深色 ---------- */
-[data-ui-theme="minimal-dark"] {
-  color-scheme: dark;         /* 下拉菜单、滚动条等系统控件也跟着变深色 */
-  --m-bg: #111217;
-  --m-surface: #1a1c22;
-  --m-fill: #23252d;
-  --m-fill-2: #2c2f38;
-  --m-sunken: #15161b;
-  --m-border: rgba(255, 255, 255, .1);
-  --m-border-2: rgba(255, 255, 255, .06);
-  --m-border-strong: rgba(255, 255, 255, .22);
-  --m-text: #ececf1;
-  --m-text-2: #c5c7ce;
-  --m-text-3: #9b9ea8;        /* 卡片底 6.1:1，填充底 5.4:1 */
-  --m-text-off: #7a7d87;
-  --m-accent: #8c9cff;
-  --m-accent-hover: #a5b2ff;
-  --m-accent-soft: rgba(140, 156, 255, .14);
-  --m-accent-soft-2: rgba(140, 156, 255, .22);
-  --m-accent-text: #aab6ff;
-  --m-on-accent: #0f1016;     /* 靛蓝实底上用深色字 7:1 */
-  --m-ok: #4ade80;
-  --m-warn: #fbbf24;
-  --m-bad: #f87171;
-  --m-bad-soft: rgba(248, 113, 113, .1);
-  --m-overlay: rgba(0, 0, 0, .55);
-  --m-media-bg: #0c0d10;
-  --m-toast-bg: #2a2d36;
-  --m-toast-text: #ececf1;
-  --m-toast-bad: #fca5a5;
-  --m-toast-ok: #86efac;
-  --m-scroll: rgba(255, 255, 255, .18);
-  --m-scroll-hover: rgba(255, 255, 255, .32);
-  --m-shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 4px 14px rgba(0, 0, 0, .25);
-  --m-shadow-pop: 0 20px 56px rgba(0, 0, 0, .55);
-}
 
 /* ---------- 把语义色映射到基底变量（两套共用） ---------- */
 [data-ui-base="minimal"] {

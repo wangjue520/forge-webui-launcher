@@ -1,0 +1,546 @@
+/* ============================================================
+   新拟物（neu-light / neu-dark）— Neumorphism / Soft UI
+   叠在 themes/minimal.css 之上（themes.js：css 按顺序加载，base: minimal），
+   结构、对比度规则沿用极简，这里只换「材质」：
+
+   · 底色和卡片是同一种颜色，形状只靠两道阴影区分——
+     左上一道亮光（--nm-hi）、右下一道暗影（--nm-lo），像从同一块材料里
+     压出来 / 鼓出来的。没有描边，没有分隔线
+   · 凸起（raise）= 可点、浮着的东西：卡片、按钮、开关拨钮、弹窗
+     凹陷（inset）= 往里填东西、或者已经被按下：输入框、日志、进度槽、
+     导航选中项、选中的筛选项
+   · 点缀色只用在少量地方（选中文字、勾选、进度、主按钮），大面积保持中性灰
+
+   阴影四档：--nm-raise-sm / --nm-raise / --nm-raise-lg / --nm-inset(-sm)
+   改阴影强度只改 --nm-hi / --nm-lo 两个颜色即可。
+   ============================================================ */
+
+/* ---------- 浅色 ---------- */
+[data-ui-theme="neu-light"] {
+  color-scheme: light;
+  --nm-bg: #e4e7ec;
+  --nm-bg-hi: #eceef2;           /* 凸面渐变的亮端 */
+  --nm-bg-lo: #dadde3;           /* 凸面渐变的暗端 */
+  --nm-hi: rgba(255, 255, 255, .92);
+  --nm-lo: rgba(158, 168, 186, .62);
+  --nm-lo-soft: rgba(158, 168, 186, .38);
+
+  --m-bg: var(--nm-bg);
+  --m-surface: var(--nm-bg);
+  --m-fill: rgba(150, 160, 178, .14);
+  --m-fill-2: rgba(150, 160, 178, .24);
+  --m-sunken: var(--nm-bg);
+  --m-border: rgba(110, 120, 140, .16);
+  --m-border-2: rgba(110, 120, 140, .1);
+  --m-border-strong: rgba(110, 120, 140, .3);
+  --m-text: #2b303b;            /* 底色上 11:1 */
+  --m-text-2: #464c59;          /* 7.4:1 */
+  --m-text-3: #5b6170;          /* 5.0:1 */
+  --m-text-off: #8d93a0;
+  --m-accent: #4256c4;          /* 白字 6.3:1，底色上 4.9:1 */
+  --m-accent-hover: #384bb0;
+  --m-accent-2: #6b7ee0;        /* 主按钮凸面渐变的亮端 */
+  --m-accent-soft: rgba(66, 86, 196, .1);
+  --m-accent-soft-2: rgba(66, 86, 196, .18);
+  --m-accent-text: #3446ad;     /* 底色上 6.1:1 */
+  --m-on-accent: #ffffff;
+  --m-ok: #17803d;
+  --m-warn: #9a5806;
+  --m-bad: #c0302c;
+  --m-bad-soft: rgba(192, 48, 44, .08);
+  --m-overlay: rgba(70, 78, 94, .28);
+  --m-media-bg: #dcdfe5;
+  --m-toast-bg: var(--nm-bg);
+  --m-toast-text: #2b303b;
+  --m-toast-bad: #b42a26;
+  --m-toast-ok: #17733a;
+  --m-scroll: rgba(120, 130, 150, .36);
+  --m-scroll-hover: rgba(120, 130, 150, .56);
+  --m-shadow: none;
+  --m-shadow-pop: 18px 18px 44px rgba(130, 140, 160, .55), -14px -14px 36px rgba(255, 255, 255, .85);
+}
+
+/* ---------- 深色 ---------- */
+[data-ui-theme="neu-dark"] {
+  color-scheme: dark;
+  --nm-bg: #2a2d34;
+  --nm-bg-hi: #30333b;
+  --nm-bg-lo: #25282e;
+  --nm-hi: rgba(255, 255, 255, .055);
+  --nm-lo: rgba(0, 0, 0, .5);
+  --nm-lo-soft: rgba(0, 0, 0, .32);
+
+  --m-bg: var(--nm-bg);
+  --m-surface: var(--nm-bg);
+  --m-fill: rgba(255, 255, 255, .05);
+  --m-fill-2: rgba(255, 255, 255, .09);
+  --m-sunken: var(--nm-bg);
+  --m-border: rgba(255, 255, 255, .08);
+  --m-border-2: rgba(255, 255, 255, .05);
+  --m-border-strong: rgba(255, 255, 255, .16);
+  --m-text: #e6e8ee;
+  --m-text-2: #c3c7d0;
+  --m-text-3: #a0a5b1;          /* 底色上 5.6:1 */
+  --m-text-off: #737885;
+  --m-accent: #8d9cff;
+  --m-accent-hover: #a3afff;
+  --m-accent-2: #b0bbff;
+  --m-accent-soft: rgba(141, 156, 255, .12);
+  --m-accent-soft-2: rgba(141, 156, 255, .2);
+  --m-accent-text: #aab5ff;
+  --m-on-accent: #161827;       /* 浅靛蓝实底上用深色字 */
+  --m-ok: #4ade80;
+  --m-warn: #fbbf24;
+  --m-bad: #f87171;
+  --m-bad-soft: rgba(248, 113, 113, .1);
+  --m-overlay: rgba(0, 0, 0, .45);
+  --m-media-bg: #23262c;
+  --m-toast-bg: var(--nm-bg);
+  --m-toast-text: #e6e8ee;
+  --m-toast-bad: #fca5a5;
+  --m-toast-ok: #86efac;
+  --m-scroll: rgba(255, 255, 255, .14);
+  --m-scroll-hover: rgba(255, 255, 255, .26);
+  --m-shadow: none;
+  --m-shadow-pop: 18px 18px 44px rgba(0, 0, 0, .55), -10px -10px 30px rgba(255, 255, 255, .04);
+}
+
+/* ---------- 阴影 / 形状 / 字体 ---------- */
+/* 阴影颜色注册成可动画的属性：翻页时整页的亮光 / 暗影一起淡到透明 = 「压平」 */
+@property --nm-lo { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --nm-hi { syntax: "<color>"; inherits: true; initial-value: transparent; }
+
+/* 组合阴影在 .page 上再声明一次：自定义属性里的 var() 在声明处就解析成具体颜色，
+   只在根上声明的话，页面里改 --nm-lo / --nm-hi 不会影响到它们 */
+[data-ui-theme^="neu"],
+[data-ui-theme^="neu"] .page {
+  --nm-raise-sm: 3px 3px 7px var(--nm-lo), -3px -3px 7px var(--nm-hi);
+  --nm-raise:    7px 7px 16px var(--nm-lo), -7px -7px 16px var(--nm-hi);
+  --nm-raise-lg: 12px 12px 28px var(--nm-lo), -12px -12px 28px var(--nm-hi);
+  --nm-inset-sm: inset 2px 2px 5px var(--nm-lo), inset -2px -2px 5px var(--nm-hi);
+  --nm-inset:    inset 4px 4px 9px var(--nm-lo), inset -4px -4px 9px var(--nm-hi);
+}
+[data-ui-theme^="neu"] {
+  --nm-convex: linear-gradient(145deg, var(--nm-bg-hi), var(--nm-bg-lo));
+  --nm-ease: cubic-bezier(.3, .7, .3, 1);
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 24px;
+  --disp: "WWY Inter", "Segoe UI", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --sans: "WWY Inter", "Segoe UI", "WWY Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+}
+[data-ui-theme^="neu"] body {
+  background: var(--nm-bg);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+}
+[data-ui-theme^="neu"] :is(button, input, select, textarea) { font-family: inherit; }
+
+/* ============================================================
+   侧栏：一整块浮起的圆角面板
+   ============================================================ */
+[data-ui-theme^="neu"] #sidebar {
+  width: 228px;
+  margin: 12px 0 12px 12px; height: calc(100% - 24px);
+  border: 0; border-radius: 30px;
+  background: var(--nm-bg);
+  box-shadow: var(--nm-raise-lg);
+  padding: 12px 0 10px;
+}
+[data-ui-theme^="neu"] .brand { border-bottom: 0; padding: 6px 18px 12px; margin-bottom: 2px; }
+/* 圆形凸起徽标（参考图里的头像位） */
+[data-ui-theme^="neu"] .brand-logo {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: var(--nm-convex); color: var(--m-accent-text);
+  font: 700 19px var(--disp);
+  box-shadow: 4px 4px 10px var(--nm-lo), -4px -4px 10px var(--nm-hi);
+}
+[data-ui-theme^="neu"] .brand-name { font: 650 15px/1.25 var(--disp); letter-spacing: -.005em; }
+[data-ui-theme^="neu"] .brand-sub { font-size: 11px; letter-spacing: 0; }
+[data-ui-theme^="neu"] .brand-ver { font-family: var(--sans); font-size: 10.5px; letter-spacing: .02em; }
+
+/* 导航不能比极简高太多：侧栏剩下的空间要留给性能监控（放不下 2 行它就整块隐藏） */
+[data-ui-theme^="neu"] #nav { padding: 0 14px; gap: 2px; }
+[data-ui-theme^="neu"] .nav-item {
+  padding: 7px 13px; border-radius: 12px; font-weight: 500;
+  transition: box-shadow .25s var(--nm-ease), color .2s;
+}
+[data-ui-theme^="neu"] .nav-item:hover { background: transparent; color: var(--m-text); box-shadow: var(--nm-raise-sm); }
+/* 选中项：按下去（凹陷）+ 点缀色文字 */
+[data-ui-theme^="neu"] .nav-item.active,
+[data-ui-theme^="neu"] .nav-item.active:hover {
+  background: transparent; color: var(--m-accent-text); font-weight: 600;
+  box-shadow: var(--nm-inset-sm);
+}
+[data-ui-theme^="neu"] .nav-tag { background: transparent; border-radius: 999px; padding: 1px 7px; box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .nav-item.active .nav-tag { background: transparent; }
+
+[data-ui-theme^="neu"] .sidebar-footer { border-top: 0; }
+[data-ui-theme^="neu"] .inst-switch {
+  border: 0; border-radius: 16px; background: transparent; box-shadow: var(--nm-inset-sm);
+  margin-left: 14px; margin-right: 14px;
+}
+[data-ui-theme^="neu"] #inst-switch-select option,
+[data-ui-theme^="neu"] select option { background: var(--nm-bg); }
+
+/* 侧栏性能监控：凹进去的一块小仪表 */
+[data-ui-theme^="neu"] .perf-mon { padding: 8px 14px 8px; --pm-bg: transparent; }
+[data-ui-theme^="neu"] .pm-box { border-top: 0; padding: 9px 11px 8px; gap: 5px; border-radius: 16px; box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .pm-spark { border-radius: 6px; }
+
+/* ============================================================
+   页头 / 内容区
+   ============================================================ */
+[data-ui-theme^="neu"] #topbar { border-bottom: 0; padding: 26px 34px 12px; }
+[data-ui-theme^="neu"] #page-title {
+  font: 700 24px/1.2 var(--disp); letter-spacing: -.015em; color: var(--m-text);
+  /* 轻微压印：和参考图里的标题字一样，像刻在面板上 */
+  text-shadow: 1px 1px 1px var(--nm-hi), -1px -1px 1px var(--nm-lo-soft);
+}
+/* 卡片阴影向外扩约 28px，内容区留出足够边距，别被裁掉 */
+[data-ui-theme^="neu"] #content { padding: 16px 34px 40px; }
+
+/* 翻页（js/neumorph.js 加 class）：
+   旧页 .nm-sink —— 凸起和凹陷一起压平（阴影淡出），内容随后淡出
+   新页 .nm-flat —— 以压平状态出现，去掉 class 后阴影长回来 = 重新浮起 */
+[data-ui-theme^="neu"] .page {
+  animation: none;
+  transition: --nm-lo .26s var(--nm-ease), --nm-hi .26s var(--nm-ease), opacity .16s ease-out;
+}
+[data-ui-theme^="neu"] .page.nm-sink {
+  --nm-lo: transparent; --nm-hi: transparent; opacity: 0;
+  transition: --nm-lo .1s ease-in, --nm-hi .1s ease-in, opacity .07s ease-in .04s;
+}
+[data-ui-theme^="neu"] .page.nm-flat { --nm-lo: transparent; --nm-hi: transparent; opacity: .35; transition: none; }
+
+/* ============================================================
+   卡片：凸起的软块
+   ============================================================ */
+[data-ui-theme^="neu"] :is(.card, .card-flat, .inst-card, .out-filters, .drop-banner) {
+  background: var(--nm-bg); border: 0; box-shadow: var(--nm-raise);
+}
+[data-ui-theme^="neu"] .card { border-radius: 26px; padding: 20px 24px; margin-bottom: 26px; }
+[data-ui-theme^="neu"] .inst-card,
+[data-ui-theme^="neu"] .out-filters,
+[data-ui-theme^="neu"] .drop-banner { border-radius: 24px; }
+[data-ui-theme^="neu"] .card-flat { border-radius: 20px; }
+[data-ui-theme^="neu"] .card-title { font: 650 14px/1.35 var(--disp); letter-spacing: -.005em; }
+[data-ui-theme^="neu"] .sub-title { font-weight: 600; }
+[data-ui-theme^="neu"] .sub-title::after { border-bottom: 0; height: 2px; border-radius: 2px; box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .inst-card.active { box-shadow: var(--nm-raise), inset 0 0 0 2px var(--m-accent); }
+
+/* ============================================================
+   输入框：凹槽
+   ============================================================ */
+[data-ui-theme^="neu"] input[type="text"],
+[data-ui-theme^="neu"] input[type="password"],
+[data-ui-theme^="neu"] input[type="number"],
+[data-ui-theme^="neu"] select,
+[data-ui-theme^="neu"] textarea {
+  background-color: var(--nm-bg); border-color: transparent; border-radius: 14px;
+  box-shadow: var(--nm-inset);
+  transition: box-shadow .25s var(--nm-ease);
+}
+[data-ui-theme^="neu"] input:hover:not(:disabled):not(:focus),
+[data-ui-theme^="neu"] select:hover:not(:disabled):not(:focus),
+[data-ui-theme^="neu"] textarea:hover:not(:disabled):not(:focus) { border-color: transparent; }
+[data-ui-theme^="neu"] input:focus,
+[data-ui-theme^="neu"] select:focus,
+[data-ui-theme^="neu"] textarea:focus {
+  border-color: transparent;
+  box-shadow: var(--nm-inset), 0 0 0 2px var(--m-accent-soft-2);
+}
+[data-ui-theme^="neu"] input:disabled,
+[data-ui-theme^="neu"] select:disabled,
+[data-ui-theme^="neu"] textarea:disabled { background-color: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+
+/* 复选框 → 老式墙壁拨杆电灯开关（toggle light switch），横放：关 = 拨杆朝左，开 = 朝右
+   i        = 微微凸起的塑料边框
+   ::before = 边框里的长条凹槽，露出来的那半边印着 OFF / ON；
+              开的时候凹槽整条亮成点缀色 + 白字 ON + 外圈光晕——一眼就能看出哪些开着
+   ::after  = 白色塑料拨杆：真 3D 透视（perspective + rotateY），伸出槽外的一端离人更近、
+              看起来更大；上下两个面一亮一暗是拨杆的棱，drop-shadow 是投在墙上的影子 */
+[data-ui-theme^="neu"] .chk-row { align-items: center; }
+[data-ui-theme^="neu"] .chk-row i,
+[data-ui-theme^="neu"] .chk-row input:checked + i {
+  width: 54px; height: 22px; margin: 0 7px 0 9px; border: 0; border-radius: 5px;
+  background: linear-gradient(180deg, var(--nm-bg-hi), var(--nm-bg-lo));
+  box-shadow: 2px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi), inset 0 1px 0 var(--nm-hi);
+}
+[data-ui-theme^="neu"] .chk-row:hover i { border: 0; }
+/* 凹槽 + 文字 */
+[data-ui-theme^="neu"] .chk-row i::before {
+  content: "OFF"; position: absolute; left: 4px; top: 4px; width: 46px; height: 14px; z-index: 0;
+  box-sizing: border-box; padding: 0 4px; border-radius: 2.5px;
+  font: 700 7.5px/14px var(--sans); letter-spacing: .08em; text-align: right;
+  color: #c4c9d2;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--nm-bg-lo), #000 34%), color-mix(in srgb, var(--nm-bg-lo), #000 20%));
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .45), inset 0 -1px 0 rgba(255, 255, 255, .08);
+  transition: background-color .15s, box-shadow .2s;
+}
+[data-ui-theme^="neu"] .chk-row input:checked + i::before {
+  content: "ON"; text-align: left; color: #fff;
+  background: linear-gradient(180deg, var(--m-accent-2), var(--m-accent));
+  text-shadow: 0 0 4px rgba(255, 255, 255, .7);
+  box-shadow: inset 0 2px 3px rgba(0, 0, 0, .3),
+    0 0 0 1px color-mix(in srgb, var(--m-accent), transparent 50%),
+    0 0 12px 1px color-mix(in srgb, var(--m-accent), transparent 35%);
+}
+/* 拨杆：一半在槽里（转轴在槽中点 x=27），一半翘出来 */
+[data-ui-theme^="neu"] .chk-row i::after,
+[data-ui-theme^="neu"] .chk-row input:checked + i::after {
+  content: ""; position: absolute; top: 5px; width: 28px; height: 12px; z-index: 1;
+  border: 0; border-radius: 2px;
+  filter: drop-shadow(2px 4px 2.5px rgba(0, 0, 0, .32));
+  transition: none;
+}
+[data-ui-theme^="neu"] .chk-row i::after {
+  left: -1px; transform-origin: 100% 50%;
+  transform: perspective(48px) rotateY(48deg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .85) 0%, rgba(255, 255, 255, .2) 44%, rgba(0, 0, 0, .13) 56%, rgba(0, 0, 0, .05) 100%),
+    linear-gradient(90deg, #fbfbfc 0%, #eceef1 35%, #cdd1d8 100%);
+}
+[data-ui-theme^="neu"] .chk-row input:checked + i::after {
+  left: 27px; transform-origin: 0 50%;
+  transform: perspective(48px) rotateY(-48deg);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .85) 0%, rgba(255, 255, 255, .2) 44%, rgba(0, 0, 0, .13) 56%, rgba(0, 0, 0, .05) 100%),
+    linear-gradient(270deg, #fbfbfc 0%, #eceef1 35%, #cdd1d8 100%);
+}
+/* chk-row 里放的是单选框（版本列表等「多选一」）：不做成开关，做成凹槽圆孔 + 选中时凸起的点缀色圆钮 */
+[data-ui-theme^="neu"] .chk-row input[type="radio"] + i,
+[data-ui-theme^="neu"] .chk-row input[type="radio"]:checked + i {
+  width: 18px; height: 18px; margin: 1px 4px 0 2px; border-radius: 50%;
+  background: var(--nm-bg); box-shadow: var(--nm-inset-sm);
+}
+[data-ui-theme^="neu"] .chk-row input[type="radio"] + i::before { content: none; }
+[data-ui-theme^="neu"] .chk-row input[type="radio"] + i::after { content: none; filter: none; }
+[data-ui-theme^="neu"] .chk-row input[type="radio"]:checked + i::after {
+  content: ""; left: 4px; top: 4px; width: 10px; height: 10px; border-radius: 50%; transform: none;
+  background: linear-gradient(145deg, var(--m-accent-2), var(--m-accent));
+  box-shadow: 1px 1px 2px var(--nm-lo), 0 0 6px color-mix(in srgb, var(--m-accent), transparent 40%);
+}
+[data-ui-theme^="neu"] .chk-row input[type="radio"]:disabled + i { opacity: .45; }
+[data-ui-theme^="neu"] .ver-list { border: 0; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); padding: 6px 14px; }
+
+/* 开着的那一行：文字也加深，和关着的拉开差距 */
+[data-ui-theme^="neu"] .chk-row input:checked ~ span { color: var(--m-text); font-weight: 600; }
+[data-ui-theme^="neu"] .chk-row input:disabled + i { opacity: .5; }
+[data-ui-theme^="neu"] .chk-row .tag { border-radius: 999px; }
+
+/* 滑块：凹槽 + 凸起圆钮 */
+[data-ui-theme^="neu"] input[type="range"] { height: 8px; border-radius: 999px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] input[type="range"]::-webkit-slider-thumb {
+  width: 20px; height: 20px; border: 0; border-radius: 50%;
+  background: var(--nm-convex); box-shadow: 3px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi);
+}
+[data-ui-theme^="neu"] input[type="range"]:focus::-webkit-slider-thumb {
+  box-shadow: 3px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi), 0 0 0 3px var(--m-accent-soft-2);
+}
+
+/* ============================================================
+   按钮：凸起，按下变凹
+   ============================================================ */
+[data-ui-theme^="neu"] .btn {
+  border-color: transparent; border-radius: 14px;
+  background: var(--nm-bg); color: var(--m-text); font-weight: 600;
+  box-shadow: var(--nm-raise-sm);
+  transition: box-shadow .2s var(--nm-ease), color .2s, transform .2s var(--nm-ease);
+}
+[data-ui-theme^="neu"] .btn:hover { background: var(--nm-bg); border-color: transparent; color: var(--m-accent-text); box-shadow: 5px 5px 11px var(--nm-lo), -5px -5px 11px var(--nm-hi); }
+[data-ui-theme^="neu"] .btn:active:not(:disabled) { background: var(--nm-bg); box-shadow: var(--nm-inset-sm); transform: none; }
+[data-ui-theme^="neu"] .btn:focus-visible { box-shadow: var(--nm-raise-sm), 0 0 0 3px var(--m-accent-soft-2); }
+/* 主按钮：点缀色的凸面 */
+[data-ui-theme^="neu"] .btn-primary,
+[data-ui-theme^="neu"] .btn-accent,
+[data-ui-theme^="neu"] .btn-success {
+  border-color: transparent; border-radius: 14px; color: var(--m-on-accent);
+  background: linear-gradient(145deg, var(--m-accent-2), var(--m-accent));
+  box-shadow: 4px 4px 10px var(--nm-lo), -4px -4px 10px var(--nm-hi);
+}
+[data-ui-theme^="neu"] .btn-primary:hover,
+[data-ui-theme^="neu"] .btn-accent:hover,
+[data-ui-theme^="neu"] .btn-success:hover {
+  border-color: transparent; color: var(--m-on-accent);
+  background: linear-gradient(145deg, var(--m-accent-2), var(--m-accent-hover));
+  box-shadow: 6px 6px 14px var(--nm-lo), -6px -6px 14px var(--nm-hi);
+}
+[data-ui-theme^="neu"] :is(.btn-primary, .btn-accent, .btn-success):active:not(:disabled) {
+  background: var(--m-accent);
+  box-shadow: inset 3px 3px 7px rgba(0, 0, 0, .25), inset -2px -2px 6px rgba(255, 255, 255, .18);
+}
+[data-ui-theme^="neu"] .btn-lg { border-radius: 18px; font-weight: 650; letter-spacing: .01em; }
+/* 禁用：变平（没有阴影），灰字——一眼看出「按不动」 */
+[data-ui-theme^="neu"] .btn:disabled,
+[data-ui-theme^="neu"] .btn-primary:disabled,
+[data-ui-theme^="neu"] .btn-accent:disabled,
+[data-ui-theme^="neu"] .btn-success:disabled {
+  background: var(--nm-bg); border-color: transparent; color: var(--m-text-off);
+  box-shadow: inset 1px 1px 2px var(--nm-lo-soft), inset -1px -1px 2px var(--nm-hi);
+}
+[data-ui-theme^="neu"] .btn-danger-text:hover { background: var(--nm-bg); border-color: transparent; color: var(--m-bad); }
+[data-ui-theme^="neu"] #modal-buttons .btn-danger,
+[data-ui-theme^="neu"] #modal-buttons .btn-danger:hover {
+  background: linear-gradient(145deg, #e05a55, #c0302c); border-color: transparent; color: #fff; filter: none;
+}
+
+/* ============================================================
+   提示 / 代码 / 控制台：凹进去
+   ============================================================ */
+[data-ui-theme^="neu"] .hint-block {
+  border: 0; border-radius: 16px; background: var(--nm-bg);
+  box-shadow: var(--nm-inset-sm), inset 3px 0 0 var(--m-accent);
+}
+[data-ui-theme^="neu"] .code-box { border: 0; border-radius: 14px; background: var(--nm-bg); box-shadow: var(--nm-inset); }
+[data-ui-theme^="neu"] .console-wrap { border: 0; border-radius: 20px; background: var(--nm-bg); box-shadow: var(--nm-inset); }
+[data-ui-theme^="neu"] .console-head { background: transparent; border-bottom: 1px solid var(--m-border-2); font-weight: 600; letter-spacing: .02em; }
+[data-ui-theme^="neu"] .console-head .btn { background: var(--nm-bg); border-color: transparent; border-radius: 10px; }
+[data-ui-theme^="neu"] .console-head .btn:hover { background: var(--nm-bg); border-color: transparent; }
+[data-ui-theme^="neu"] .console { background: transparent; }
+
+/* 进度条：凹槽 + 点缀色条 */
+[data-ui-theme^="neu"] .progress::before { height: 10px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .progress-bar {
+  height: 6px; margin: -8px 2px 0;
+  background: linear-gradient(90deg, var(--m-accent), var(--m-accent-2));
+}
+[data-ui-theme^="neu"] .progress-text { margin-top: 7px; }
+
+/* 状态胶囊 */
+[data-ui-theme^="neu"] .status-pill,
+[data-ui-theme^="neu"] .status-pill[data-state],
+[data-ui-theme^="neu"] #sidebar .status-pill,
+[data-ui-theme^="neu"] #sidebar .status-pill[data-state] {
+  background: var(--nm-bg); border-color: transparent; box-shadow: var(--nm-raise-sm);
+}
+[data-ui-theme^="neu"] .status-pill[data-state="error"] { color: var(--m-bad); }
+[data-ui-theme^="neu"] .status-pill .dot { box-shadow: 0 0 0 2px var(--nm-bg); }
+[data-ui-theme^="neu"] .status-pill[data-state="ready"] .dot,
+[data-ui-theme^="neu"] .status-pill[data-state="running"] .dot { box-shadow: 0 0 6px var(--m-ok); }
+
+/* ============================================================
+   表格 / 列表
+   ============================================================ */
+[data-ui-theme^="neu"] .table-wrap { border: 0; border-radius: 18px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .data-table th { background: transparent; border-bottom: 1px solid var(--m-border-2); font-weight: 600; letter-spacing: 0; }
+[data-ui-theme^="neu"] .data-table tbody tr:hover { background: var(--m-fill); }
+[data-ui-theme^="neu"] .data-table tbody tr.selected { background: var(--m-accent-soft); box-shadow: none; }
+
+[data-ui-theme^="neu"] .preview-box { border-radius: 18px; background: var(--nm-bg); box-shadow: var(--nm-inset); }
+[data-ui-theme^="neu"] .detail-view { border: 0; border-radius: 18px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .detail-view .sect { border-bottom-color: var(--m-border-2); }
+
+/* 分类 / 筛选 / 合集：悬停浮起，选中按下去 */
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item) {
+  border-radius: 12px; transition: box-shadow .2s var(--nm-ease), color .2s;
+}
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item):hover { background: transparent; box-shadow: var(--nm-raise-sm); }
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item).active,
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item).on,
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item).active:hover,
+[data-ui-theme^="neu"] :is(.cat-item, .facet, .col-item).on:hover {
+  background: transparent; box-shadow: var(--nm-inset-sm); color: var(--m-accent-text);
+}
+[data-ui-theme^="neu"] .facet-list { border: 0; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .col-ops button { background: var(--nm-bg); border-radius: 8px; box-shadow: var(--nm-raise-sm); }
+
+/* 小胶囊 */
+[data-ui-theme^="neu"] .chip {
+  border-color: transparent; background: var(--nm-bg); box-shadow: var(--nm-raise-sm);
+  transition: box-shadow .2s var(--nm-ease), color .2s;
+}
+[data-ui-theme^="neu"] .chip:hover { border-color: transparent; color: var(--m-accent-text); }
+[data-ui-theme^="neu"] .chip.on { background: var(--nm-bg); color: var(--m-accent-text); border-color: transparent; box-shadow: var(--nm-inset-sm); font-weight: 600; }
+
+/* 扩展 / 日志行：一行一块小软块 */
+[data-ui-theme^="neu"] .ext-item {
+  border: 0; border-radius: 18px; background: var(--nm-bg); box-shadow: var(--nm-raise-sm);
+  transition: box-shadow .25s var(--nm-ease);
+}
+[data-ui-theme^="neu"] .ext-item:hover { background: var(--nm-bg); box-shadow: 5px 5px 12px var(--nm-lo), -5px -5px 12px var(--nm-hi); }
+[data-ui-theme^="neu"] .ext-item.installed { box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .ext-group::after { border-bottom-color: var(--m-border-2); }
+[data-ui-theme^="neu"] .journal-row { border: 0; border-radius: 14px; background: var(--nm-bg); box-shadow: var(--nm-raise-sm); }
+[data-ui-theme^="neu"] .journal-row.undone { box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .pv-list { border: 0; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .char-slot { border: 0; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .tw-row { background: transparent; box-shadow: var(--nm-inset-sm); border-radius: 10px; }
+[data-ui-theme^="neu"] .od-text { border: 0; border-radius: 12px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .ic-kind { border-radius: 999px; background: transparent; box-shadow: var(--nm-inset-sm); }
+
+/* 单选 / 选择列表 */
+[data-ui-theme^="neu"] :is(.choice-item, .radio-row) {
+  border-color: transparent; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-raise-sm);
+  transition: box-shadow .2s var(--nm-ease), color .2s;
+}
+[data-ui-theme^="neu"] .choice-item:hover { background: var(--nm-bg); border-color: transparent; color: var(--m-accent-text); }
+[data-ui-theme^="neu"] .radio-row.checked { background: var(--nm-bg); border-color: transparent; box-shadow: var(--nm-inset-sm); color: var(--m-accent-text); }
+[data-ui-theme^="neu"] .radio-dot { border: 0; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+[data-ui-theme^="neu"] .radio-row.checked .radio-dot::after { inset: 4px; background: linear-gradient(145deg, var(--m-accent-2), var(--m-accent)); }
+
+/* ============================================================
+   拖放区 / 输出图
+   ============================================================ */
+[data-ui-theme^="neu"] :is(.drop-area, .drop-list) {
+  border: 0; border-radius: 24px; background-color: var(--nm-bg); box-shadow: var(--nm-inset);
+}
+[data-ui-theme^="neu"] :is(.drop-area, .drop-list).dragover {
+  background-color: var(--nm-bg); box-shadow: var(--nm-inset), inset 0 0 0 2px var(--m-accent);
+}
+[data-ui-theme^="neu"] .drop-banner .db-mark { border-radius: 50%; background: var(--nm-bg); box-shadow: var(--nm-raise-sm); }
+[data-ui-theme^="neu"] #page-models.drag-active .drop-banner { background: var(--nm-bg); box-shadow: var(--nm-raise), inset 0 0 0 2px var(--m-accent); }
+[data-ui-theme^="neu"] #page-models.drag-active .models-layout { outline: 0; box-shadow: inset 0 0 0 2px var(--m-accent); border-radius: 26px; }
+
+[data-ui-theme^="neu"] .oc {
+  border: 0; border-radius: 18px; overflow: hidden; background: var(--nm-bg);
+  box-shadow: var(--nm-raise-sm); transition: box-shadow .25s var(--nm-ease), transform .25s var(--nm-ease);
+}
+[data-ui-theme^="neu"] .oc:hover { transform: translateY(-2px); box-shadow: 6px 6px 14px var(--nm-lo), -6px -6px 14px var(--nm-hi); }
+[data-ui-theme^="neu"] .oc.sel { outline: 0; box-shadow: var(--nm-raise-sm), inset 0 0 0 3px var(--m-accent); }
+[data-ui-theme^="neu"] .out-selbar { border: 0; border-radius: 16px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm), inset 3px 0 0 var(--m-accent); }
+[data-ui-theme^="neu"] .out-detail { border-left: 0; border-radius: 28px 0 0 28px; background: var(--nm-bg); box-shadow: var(--m-shadow-pop); }
+
+/* ============================================================
+   弹窗 / 提示条
+   ============================================================ */
+[data-ui-theme^="neu"] #modal-mask { -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); }
+[data-ui-theme^="neu"] #modal {
+  border: 0; border-radius: 30px; background: var(--nm-bg);
+  box-shadow: var(--m-shadow-pop);
+  animation: nmPop .35s var(--nm-ease);
+}
+[data-ui-theme^="neu"] #modal-title { font: 650 17px/1.3 var(--disp); }
+@keyframes nmPop { from { opacity: 0; transform: scale(.96); } to { opacity: 1; transform: none; } }
+[data-ui-theme^="neu"] .toast {
+  border: 0; border-radius: 20px; padding: 12px 20px;
+  background: var(--m-toast-bg); color: var(--m-toast-text); font-weight: 500;
+  box-shadow: var(--nm-raise);
+  animation: nmPop .35s var(--nm-ease);
+}
+
+/* ---------- 滚动条：凹槽里的软滑块 ---------- */
+[data-ui-theme^="neu"] ::-webkit-scrollbar { width: 12px; height: 12px; }
+[data-ui-theme^="neu"] ::-webkit-scrollbar-thumb { border: 3.5px solid transparent; border-radius: 999px; background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-ui-theme^="neu"] #modal,
+  [data-ui-theme^="neu"] .toast { animation: none !important; }
+}
+
+/* ---------- 机械滚轮数字（js/neumorph.js 生成） ----------
+   每一位是一个只露一格的窗口，里面是 0-9×3 的竖条，靠 translateY 滚动；
+   上下边缘渐隐，像数字鼓的弧面 */
+[data-ui-theme^="neu"] .nm-num { display: inline-flex; font-variant-numeric: tabular-nums; vertical-align: bottom; }
+[data-ui-theme^="neu"] .nm-col {
+  display: inline-block; height: 1em; line-height: 1; overflow: hidden;
+  padding: .12em 0; box-sizing: content-box;
+  -webkit-mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent);
+          mask-image: linear-gradient(transparent, #000 22%, #000 78%, transparent);
+}
+[data-ui-theme^="neu"] .nm-strip {
+  display: block; width: 1ch; text-align: center; word-break: break-all; white-space: normal;
+  line-height: 1;
+  transition-property: transform;
+  transition-timing-function: cubic-bezier(.2, .9, .25, 1.06);   /* 末尾轻轻过冲一下再卡住 */
+}

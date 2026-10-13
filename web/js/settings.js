@@ -325,7 +325,8 @@
           o.textContent = t.label;
           themeSel.appendChild(o);
         });
-        themeSel.value = App.cfg.ui_theme || "terminal";
+        // 配置里可能是已下线风格的旧 id（如 minimal-light），按别名换成实际条目再回填
+        themeSel.value = window.WWYThemes.find(App.cfg.ui_theme || "terminal").id;
         themeSel.addEventListener("change", () => window.WWYThemes.apply(themeSel.value, true));
       }
 

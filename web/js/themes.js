@@ -22,18 +22,20 @@
     // 动效 / 背景由 js/bauform.js 负责，数字翻牌是 js/bauform-flap.js，
     // 西文装饰字体是自制的 WWY Bauform（tools/build_bauform_font.py）
     { id: "bauform", label: "构型 BAUFORM（深色）", css: "themes/bauform.css", splash: "bauform" },
-    { id: "minimal-light", label: "极简 · 浅色（无开屏动画）", css: "themes/minimal.css", base: "minimal", splash: "none" },
-    { id: "minimal-dark", label: "极简 · 深色（无开屏动画）", css: "themes/minimal.css", base: "minimal", splash: "none" },
+    // 「极简」本身已不再单独提供（被新拟物取代），themes/minimal.css 只作为下面几套的结构基底
     // 液态玻璃：结构沿用极简（base），再叠一层玻璃材质 + 流动背景（js/liquid.js）
     { id: "liquid-light", label: "液态玻璃 · 浅色", css: ["themes/minimal.css", "themes/liquid.css"], base: "minimal", splash: "liquid" },
     { id: "liquid-dark", label: "液态玻璃 · 深色", css: ["themes/minimal.css", "themes/liquid.css"], base: "minimal", splash: "liquid" },
+    // 新拟物（Neumorphism）：结构沿用极简（base），themes/neumorph.css 换成同色凸起 / 凹陷的软阴影材质
+    { id: "neu-light", label: "新拟物 · 浅色（无开屏动画）", css: ["themes/minimal.css", "themes/neumorph.css"], base: "minimal", splash: "none" },
+    { id: "neu-dark", label: "新拟物 · 深色（无开屏动画）", css: ["themes/minimal.css", "themes/neumorph.css"], base: "minimal", splash: "none" },
     // 矢量突破：结构沿用终末地（不设 base），换成浅灰 + 青色 + 黑；背景装饰见 js/vector.js
     // （正常维护的风格，新功能同样要适配它）
     { id: "vector", label: "矢量突破 · 青色拟生态", css: "themes/vector.css", splash: "vector" },
   ];
   var KEY = "ui-theme";
-  // 旧版本只叫 "minimal"，自动归到浅色
-  var ALIAS = { minimal: "minimal-light", blueprint: "bauform" };   // blueprint = 构型的内测名
+  // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名
+  var ALIAS = { minimal: "neu-light", "minimal-light": "neu-light", "minimal-dark": "neu-dark", blueprint: "bauform" };
 
   function find(id) {
     id = ALIAS[id] || id;
@@ -80,6 +82,7 @@
   window.WWYThemes = {
     list: function () { return THEMES.slice(); },
     current: function () { return find(currentId()); },
+    find: find,   // 旧 id / 别名 → 实际的风格条目（设置页下拉框回填用）
     apply: apply,
   };
 
