@@ -344,6 +344,148 @@ def search_models_by_name(query, api_key=None, limit=6, host=None):
     return results
 
 
+# 图片里记的模型角色 → Civitai 搜索时限定的模型类型
+_ROLE_SEARCH_TYPES = {
+    "Checkpoint": ["Checkpoint"],
+    "LoRA": ["LORA", "LoCon", "DoRA"],
+    "Embedding": ["TextualInversion"],
+    "VAE": ["VAE"],
+    "ControlNet": ["Controlnet"],
+    "Upscaler": ["Upscaler"],
+    "TextEncoder": ["Checkpoint", "Other"],     # 单独发的文本编码器常被标成 Checkpoint / Other
+}
+# 文件名里不是「名字」的部分：版本号、精度、训练步数、常见后缀
+_NOISE_TOKEN = re.compile(r"^(v?\d+([._]\d+)*[a-z]?|fp\d+|bf\d+|f\d+|e\d+m\d+(fn)?|q\d+(_k(_[sml])?)?|nf4|int8|"
+                          r"pruned|ema|noema|final|fix(ed)?|safetensors|ckpt|gguf|lora|locon|lycoris|dora|"
+                          r"step\d+|ep\d+|epoch\d+|\d+steps?|base|test)$", re.IGNORECASE)
+# 互相通用的底模算同一家（Illustrious 的 LoRA 在 NoobAI 上基本能用）
+_BASE_FAMILIES = ({"illustrious", "noobai"}, {"sd 1.5", "sd 1.4", "sd 1.5 lcm", "sd 1.5 hyper"},
+                  {"flux.1 d", "flux.1 s", "flux.1 krea", "flux.1 kontext"})
+
+
+def _name_tokens(name):
+    """模型文件名 → 搜索用的词：去路径和后缀，按 _ - . 空格 和驼峰拆开，丢掉版本号/精度这类噪声"""
+    stem = os.path.splitext(os.path.basename(str(name or "").replace("\\", "/")))[0]
+    parts = re.split(r"[\s_\-.()\[\]]+", stem)
+    out = []
+    for p in parts:
+        # waiIllustriousSDXL → wai Illustrious SDXL；anima29B 这种数字连着的不拆
+        for t in re.findall(r"[A-Z]{2,}(?=[A-Z][a-z]|$|\d)|[A-Z]?[a-z]+\d*[a-z]*|[A-Z]+\d*|\d+[A-Za-z]*", p) or [p]:
+            if t and not _NOISE_TOKEN.match(t):
+                out.append(t)
+    return stem, out
+
+
+def _same_base(a, b):
+    a, b = str(a or "").strip().lower(), str(b or "").strip().lower()
+    if not a or not b:
+        return False
+    return a == b or any(a in fam and b in fam for fam in _BASE_FAMILIES)
+
+
+def guess_base_from_name(name):
+    """只有文件名时猜底模（图里的大模型本地没有、哈希也查不到时用）；猜不出返回空串"""
+    low = str(name or "").lower()
+    for hints, base in ((("anima",), "Anima"), (("illustrious", "noob", "_ill", "ill_", "-ill"), "Illustrious"),
+                        (("pony",), "Pony"), (("flux",), "Flux.1 D"), (("sd15", "sd1.5", "sd_1.5"), "SD 1.5"),
+                        (("sdxl",), "SDXL 1.0")):
+        if any(h in low for h in hints):
+            return base
+    if re.search(r"(^|[_\-.])il([_\-.]|$)", os.path.splitext(low)[0] + "."):   # xxx-V1-IL
+        return "Illustrious"
+    return ""
+
+
+def search_models_smart(name, role, base_model="", api_key=None, limit=8, host=None):
+    """
+    图片信息页「缺失模型 → 按名字搜索」用：比 search_models_by_name 准得多。
+      - 按角色限定 Civitai 的模型类型（搜大模型不会出来一堆 LoRA）
+      - Civitai 只按「模型名」搜，图里记的是文件名（waiIllustriousSDXL_v160），直接搜常常
+        一个都对不上：拆词、去版本号后多搜几个写法，结果合并
+      - 每个模型的所有版本、所有文件都看一遍：文件名完全一致的那个版本排最前并直接选中
+      - 知道这张图的底模时（base_model），LoRA 这类只留同底模的；一个都没有才放开，并标出来
+    返回 (候选列表, 是否按底模过滤了)。候选是 _normalize_version_payload 的格式，另带
+    match_file（要下载的文件）、exact（文件名完全一致）、base_match（同底模）。
+    """
+    host = host or DEFAULT_API_HOST
+    api_base = API_BASE_TEMPLATE.format(host=host)
+    stem, tokens = _name_tokens(name)
+    queries = []
+    # 再加一个只用「长词」的写法：Char-HonkaiSR-Cerydra 里的 Char 是「角色」前缀，
+    # 带着它搜出来一堆叫 Char 的角色，真正有区分度的是 Honkai Cerydra
+    long_words = [t for t in tokens if len(t) >= 4]
+    longest = max(tokens, key=len) if tokens else ""
+    for q in (" ".join(tokens), " ".join(long_words), longest, " ".join(tokens[:2]), stem):
+        q = q.strip()
+        if len(q) >= 2 and q.lower() not in [x.lower() for x in queries]:
+            queries.append(q)
+    types = _ROLE_SEARCH_TYPES.get(role)
+
+    def run(q):
+        params = {"query": q, "limit": 20, "nsfw": "true"}
+        if types:
+            params["types"] = types
+        try:
+            resp = requests.get(f"{api_base}/models", headers=_headers(api_key), params=params, timeout=20)
+        except requests.exceptions.RequestException as e:
+            raise CivitaiError(f"连接 {host} 失败: {e}")
+        if resp.status_code == 401:
+            raise CivitaiError("需要 API Key 才能访问该资源，请在设置里填写 API Key")
+        resp.raise_for_status()
+        return resp.json().get("items", [])
+
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        batches = list(pool.map(run, queries))
+
+    stem_low = stem.lower()
+    tok_low = {t.lower() for t in tokens}
+    # 长词分量重：Cerydra 命中比 Char / IL 这种两三个字母的词命中有说服力得多
+    tok_weight = sum(len(t) for t in tok_low) or 1
+    seen, cands = set(), []
+    for items in batches:
+        for item in items:
+            if item.get("id") in seen or not item.get("modelVersions"):
+                continue
+            seen.add(item.get("id"))
+            # 所有版本的所有文件里找文件名完全一致的；找不到就用最新版本的主文件
+            best_v, best_f, exact = item["modelVersions"][0], None, False
+            for v in item["modelVersions"]:
+                for f in v.get("files") or []:
+                    if os.path.splitext(str(f.get("name") or ""))[0].lower() == stem_low:
+                        best_v, best_f, exact = v, f, True
+                        break
+                if exact:
+                    break
+            c = _normalize_version_payload(best_v, item.get("name", "未知模型"), item.get("type", "Other"),
+                                           item.get("id"))
+            if best_f:
+                c["match_file"] = next((f for f in c["files"] if f["name"] == best_f.get("name")), None)
+            if not c.get("match_file"):
+                c["match_file"] = next((f for f in c["files"] if f["primary"]), c["files"][0] if c["files"] else None)
+            if not c["match_file"]:
+                continue
+            c["exact"] = exact
+            c["base_match"] = _same_base(c["base_model"], base_model)
+            words = {t.lower() for t in _name_tokens(item.get("name", ""))[1]} | \
+                {t.lower() for t in _name_tokens(c["match_file"]["name"])[1]}
+            overlap = sum(len(t) for t in tok_low & words) / tok_weight
+            c["_score"] = exact * 100 + c["base_match"] * 30 + overlap * 40
+            cands.append(c)
+
+    filtered = False
+    if base_model and role != "Checkpoint":
+        same = [c for c in cands if c["base_match"] or c["exact"]]
+        if same:
+            cands, filtered = same, True
+    cands.sort(key=lambda c: -c["_score"])
+    # 有文件名完全一致的就基本找到了：只再留 3 个备选，别让一长串近似结果把它淹没
+    n_exact = sum(1 for c in cands if c["exact"])
+    if n_exact:
+        limit = min(limit, n_exact + 3)
+    return cands[:limit], filtered
+
+
 def guess_folder(model_type, branch=""):
     """Civitai 模型类型 → 建议存放的相对目录。branch 传入实例分支
     （classic/neo2/comfyui）时按目标分支的目录结构走，避免 Neo/ComfyUI
@@ -395,6 +537,11 @@ def file_role(file_info, model_type, base_model=""):
     if t == "textencoder":
         return "TextEncoder"
     base = _TYPE_TO_ROLE.get(model_type)
+    # 单独发布的文本编码器常被作者标成 Checkpoint（比如 Qwen-3-0.6B base/anima，文件名 qwen306B…），
+    # 这时它就是主文件：文件名明显是文本编码器的也按文本编码器算（带 image 的是 Qwen-Image 这类主模型，排除）
+    if base == "Checkpoint" and t in ("", "model", "prunedmodel") and "image" not in name \
+            and any(h in name for h in _TE_NAME_HINTS):
+        return "TextEncoder"
     if base == "Checkpoint" and t in ("", "model", "prunedmodel") and is_dit_base(base_model) \
             and not (any(h in name for h in _TE_NAME_HINTS) or "vae" in name):
         base = "DiffusionModel"
@@ -423,6 +570,65 @@ def classify_file(path):
     try:
         import safetensors_meta as sm
         return sm.classify_model_role(path)
+    except Exception:
+        return None
+
+
+_SNIFF_FIRST = 1024 * 1024          # 第一次读 1MB：绝大多数模型的文件头都在这里面
+_SNIFF_MAX_HEADER = 64 * 1024 * 1024
+
+
+def _range_get(url, start, end, api_key, timeout):
+    """读远程文件的 [start, end] 字节。返回 (数据, 最终地址)；服务器不支持 Range 返回 (None, …)"""
+    headers = _headers(api_key, url)
+    headers["Range"] = f"bytes={start}-{end}"
+    if _is_civitai_host(url):
+        resp = _get_civitai_stream(url, headers, api_key)
+    else:
+        resp = requests.get(url, headers=headers, stream=True, timeout=timeout, allow_redirects=True)
+    with resp:
+        # 200 = 服务器无视 Range 要整个发过来（几 GB），206 才是只给了这一段
+        if resp.status_code != 206:
+            return None, resp.url or url
+        want = end - start + 1
+        buf = b""
+        for chunk in resp.iter_content(chunk_size=65536):
+            buf += chunk
+            if len(buf) >= want:
+                break
+        return buf[:want], resp.url or url
+
+
+def sniff_remote_role(file_info, api_key=None, timeout=20):
+    """
+    下载前只读远程 safetensors 开头的文件头（通常几 KB 到几百 KB），按文件内容判断真实类型。
+    网站标的类型经常不准：比如 Qwen 文本编码器被作者发成「Checkpoint / Model」，按网站标的
+    会显示成大模型、存进大模型目录。判断规则和下载后纠正用的是同一份（classify_header_keys）。
+    读不了（GGUF、需要登录、服务器不支持 Range、网络问题）就返回 None，调用方照旧按网站标的类型走。
+    """
+    url = file_info.get("downloadUrl")
+    name = str(file_info.get("name") or "").lower()
+    if not url or not name.endswith((".safetensors", ".sft")):
+        return None
+    try:
+        import struct
+        import safetensors_meta as sm
+        data, final = _range_get(url, 0, _SNIFF_FIRST - 1, api_key, timeout)
+        if not data or len(data) < 8:
+            return None
+        n = struct.unpack("<Q", data[:8])[0]
+        if n <= 0 or n > _SNIFF_MAX_HEADER:
+            return None
+        if 8 + n > len(data):
+            # 文件头比第一次读的长：从已经跳转好的最终地址（CDN 签名地址）接着读剩下的
+            more, _ = _range_get(final, len(data), 8 + n - 1, api_key, timeout)
+            if not more:
+                return None
+            data += more
+        header = json.loads(data[8:8 + n].decode("utf-8", "replace"))
+        if not isinstance(header, dict):
+            return None
+        return sm.classify_header_keys([k for k in header if k != "__metadata__"])
     except Exception:
         return None
 

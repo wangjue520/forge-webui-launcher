@@ -374,14 +374,14 @@
     $("#meta-download").disabled = downloading || !missingRows.some((r) => r.checked && r.state === "found");
   }
 
-  async function nameSearch(idx) {
+  async function nameSearch(idx, allBases) {
     const row = missingRows.find((r) => r.idx === idx);
     if (!row) return;
     row._prevState = row.state;   // 记住来路（no_hash / not_found），失败或取消时还原
     row.state = "querying";
     renderMissing();
     try {
-      const r = await App.api.meta_name_search(idx);
+      const r = await App.api.meta_name_search(idx, !!allBases);
       if (r && r.ok === false) { row.state = row._prevState || "no_hash"; renderMissing(); App.toast(r.error || "搜索失败", "error"); }
     } catch (e) { row.state = row._prevState || "no_hash"; renderMissing(); App.toast("搜索失败：" + e.message, "error"); }
   }
@@ -477,17 +477,29 @@
           App.toast(e.error || "Civitai 上没有搜到同名模型", "error");
           return;
         }
+        // 按这张图的底模过滤过：写明依据，并给「显示全部底模」的退路
+        let note = "名字搜索不保证精确匹配，请确认后再下载。";
+        if (e.filtered) note = `只显示 <b>${App.esc(e.base)}</b> 底模的结果（按${App.esc(e.base_why)}判断）。` + note;
+        else if (e.base && !e.all_bases) note = `没有 ${App.esc(e.base)} 底模的结果，下面是其他底模的。` + note;
+        const item = (c, i) =>
+          `<div class="choice-item" data-i="${i}">` +
+          `<div><b>${App.esc(c.model)}</b>${c.version ? " · " + App.esc(c.version) : ""}` +
+          (c.exact ? ' <span class="ext-status">文件名完全一致</span>' : "") +
+          (c.base_match ? ' <span class="ext-status ext-rec">同底模</span>' : "") + `</div>` +
+          `<div class="dim" style="font-size:11.5px">${App.esc(c.type)} · ${App.esc(c.base)} · ${App.esc(c.file)}` +
+          (c.size_mb ? `（${c.size_mb} MB）` : "") + `</div></div>`;
+        const btns = [{ id: "cancel", label: "取消" }];
+        if (e.filtered) btns.unshift({ id: "all", label: "显示全部底模" });
         const v = await App.modal(
           `为「${row.name}」选择匹配的模型`,
-          `<div class="dim" style="margin-bottom:8px">名字搜索不保证精确匹配，请确认后再下载：</div>
-           <div class="choice-list">` +
-          e.candidates.map((c, i) => `<div class="choice-item" data-i="${i}">${App.esc(c.label)}</div>`).join("") +
-          `</div>`,
-          [{ id: "cancel", label: "取消" }],
+          `<div class="dim" style="margin-bottom:8px">${note}</div>
+           <div class="choice-list">` + e.candidates.map(item).join("") + `</div>`,
+          btns,
           { onOpen(body, finish) {
               body.querySelectorAll(".choice-item").forEach((el) =>
                 el.addEventListener("click", () => finish("pick:" + el.dataset.i)));
             } });
+        if (v === "all") { row.state = row._prevState || "no_hash"; nameSearch(e.idx, true); return; }
         if (!v || v.indexOf("pick:") !== 0) { row.state = row._prevState || "no_hash"; renderMissing(); return; }
         try {
           const r = await App.api.meta_choose_candidate(e.idx, +v.slice(5));

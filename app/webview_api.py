@@ -552,6 +552,7 @@ class LauncherApi:
         self._meta_refs = []
         self._meta_lookup_result = {}    # idx -> {"ok":...}
         self._meta_name_searches = {}    # idx -> [candidates]
+        self._meta_local = {}            # idx -> 本地已有的文件路径
         self._meta_dl_thread = None
         self._meta_dl_cancel = False
 
@@ -3269,21 +3270,37 @@ def _api_civitai_fetch(self, text):
             default_folder = cd.guess_folder(info["model_type"], self.cfg.get("webui_branch", ""))
             # 一个版本里可能打包了主模型 + 文本编码器 + VAE：每个文件按 Civitai 给它标的
             # 类型各放各的文件夹，不再整版都塞进大模型目录
+            # 网站标的类型经常不准（Qwen 文本编码器被标成 Checkpoint / Model）：
+            # 并行只读每个文件开头的文件头，按真实内容判断，读不了再信网站标的
+            from concurrent.futures import ThreadPoolExecutor
+            log("正在读取文件头识别真实类型 ...")
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                sniffed = list(pool.map(lambda f: cd.sniff_remote_role(f, api_key), info["files"]))
             files = []
-            for f in info["files"]:
+            for f, real in zip(info["files"], sniffed):
                 role = cd.file_role(f, info["model_type"], info.get("base_model", ""))
+                by_content = bool(real) and real != role
+                if real:
+                    role = real
                 fdest, ffolder = _role_dest(self, role, default_folder)
                 f["_auto_dest"] = fdest
+                label = cd.ROLE_LABELS.get(role, info["model_type"])
                 files.append({"name": f["name"], "sizeKB": f.get("sizeKB") or 0,
                               "primary": bool(f.get("primary")), "role": role or "",
-                              "role_label": cd.ROLE_LABELS.get(role, info["model_type"]),
-                              "folder": ffolder, "dest": fdest})
+                              "role_label": label + ("（按文件内容识别）" if by_content else ""),
+                              "by_content": by_content, "folder": ffolder, "dest": fdest})
             main = next((x for x in files if x["primary"]), files[0] if files else None)
             dest, folder = (main["dest"], main["folder"]) if main else _download_dest(self, default_folder)
+            # 主文件的真实类型和网站标的不一样（读文件头或按文件名认出来的）：显示真实类型
+            model_type = info["model_type"]
+            if main and main["role"] and main["role"] != cd._TYPE_TO_ROLE.get(info["model_type"]):
+                how = "按文件内容识别；" if main["by_content"] else ""
+                model_type = (f"{cd.ROLE_LABELS.get(main['role'], main['role'])}"
+                              f"（{how}Civitai 上标的是 {info['model_type']}）")
             subset = {
                 "source": "civitai",
                 "model_name": info["model_name"],
-                "model_type": info["model_type"],
+                "model_type": model_type,
                 "version_name": info["version_name"],
                 "base_model": info.get("base_model", ""),
                 "page_url": f"https://civitai.com/models/{info['model_id']}"
@@ -6325,6 +6342,7 @@ def _api_meta_load(self, path):
     self._meta_refs = meta["refs"]
     self._meta_lookup_result = {}
     self._meta_name_searches = {}
+    self._meta_local = {}
 
     f = meta["file"]
     file_bits = []
@@ -6389,6 +6407,7 @@ def _api_meta_scan_missing(self):
         return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录，才能判断本地是否已有这些模型"}
 
     self._meta_lookup_result = {}
+    self._meta_local = {}      # idx → 本地已有的文件（按名字搜索时用它判断这张图的底模）
     rows = []
     lookups = []
     for idx, ref in enumerate(self._meta_refs):
@@ -6402,6 +6421,7 @@ def _api_meta_scan_missing(self):
             extra_dirs=extra)
         if local_path:
             row["state"] = "local"
+            self._meta_local[idx] = local_path
         elif not ref.get("hash"):
             row["state"] = "no_hash"
         else:
@@ -6439,25 +6459,50 @@ def _api_meta_scan_missing(self):
     return {"ok": True, "rows": rows, "querying": len(lookups)}
 
 
-def _api_meta_name_search(self, idx):
+def _meta_image_base(self):
+    """这张图的底模（按图里的大模型判断）→ (底模, 依据)；判断不了返回 ("", "")"""
+    for idx, ref in enumerate(self._meta_refs):
+        if ref["role"] != "Checkpoint":
+            continue
+        local = (getattr(self, "_meta_local", None) or {}).get(idx)
+        if local:
+            b = read_sidecar_base_model(local)
+            if b:
+                return b, "本地大模型的信息"
+        found = (self._meta_lookup_result or {}).get(idx) or {}
+        b = (found.get("version_info") or {}).get("base_model")
+        if b:
+            return b, "按哈希查到的大模型"
+        b = cd.guess_base_from_name(local or ref["name"])
+        if b:
+            return b, "大模型的文件名"
+    return "", ""
+
+
+def _api_meta_name_search(self, idx, all_bases=False):
     idx = int(idx)
     if not (0 <= idx < len(self._meta_refs)):
         return {"ok": False, "error": "引用无效"}
-    query = self._meta_refs[idx]["name"]
+    ref = self._meta_refs[idx]
+    base, why = ("", "") if all_bases else _meta_image_base(self)
     api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
 
     def work():
         try:
-            results = cd.search_models_by_name(query, api_key)
+            results, filtered = cd.search_models_smart(ref["name"], ref["role"], base, api_key)
             self._meta_name_searches[idx] = results
             candidates = []
             for r in results:
-                primary = next((f for f in r["files"] if f["primary"]),
-                               r["files"][0] if r["files"] else None)
-                fname = primary["name"] if primary else "（无可下载文件）"
-                base_model = r.get("base_model") or "未知底模"
-                candidates.append({"label": f"{r['model_name']} | {fname} | {base_model}"})
-            self._emit("meta", "name_result", idx=idx, ok=True, candidates=candidates)
+                f = r["match_file"]
+                candidates.append({
+                    "model": r["model_name"], "version": r.get("version_name") or "",
+                    "type": r.get("model_type") or "", "file": f["name"],
+                    "size_mb": round((f.get("sizeKB") or 0) / 1024, 1),
+                    "base": r.get("base_model") or "未知底模",
+                    "exact": r["exact"], "base_match": r["base_match"],
+                })
+            self._emit("meta", "name_result", idx=idx, ok=True, candidates=candidates,
+                       base=base, base_why=why, filtered=filtered, all_bases=bool(all_bases))
         except cd.CivitaiError as e:
             self._emit("meta", "name_result", idx=idx, ok=False, error=str(e))
         except Exception as e:
@@ -6474,8 +6519,9 @@ def _api_meta_choose_candidate(self, idx, cand_idx):
     if not (0 <= cand_idx < len(results)):
         return {"ok": False, "error": "候选无效"}
     chosen = results[cand_idx]
-    primary = next((f for f in chosen["files"] if f["primary"]),
-                   chosen["files"][0] if chosen["files"] else None)
+    # 搜索时挑好的文件（文件名完全一致的那个）；旧格式的结果才退回主文件
+    primary = chosen.get("match_file") or next((f for f in chosen["files"] if f["primary"]),
+                                               chosen["files"][0] if chosen["files"] else None)
     if not primary:
         return {"ok": False, "error": "选中的候选没有可下载的文件"}
     self._meta_lookup_result[idx] = {"ok": True, "version_info": chosen, "file_info": primary}
@@ -6944,6 +6990,7 @@ def _api_meta_parse(self, container, name="", size=0, path=""):
     self._meta_refs = meta["refs"]
     self._meta_lookup_result = {}
     self._meta_name_searches = {}
+    self._meta_local = {}
 
     resp = _meta_response(meta, path or name)
     resp["name"] = name or os.path.basename(path or "")

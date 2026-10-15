@@ -290,7 +290,12 @@ def classify_model_role(path):
     r = read_safetensors_header(path)
     if not r:
         return None
-    _meta, keys = r
+    return classify_header_keys(r[1])
+
+
+def classify_header_keys(keys):
+    """按 safetensors 文件头里的张量名判断模型类型（规则见 classify_model_role）。
+    单独拆出来：下载前只读远程文件开头的文件头也用它判断，不用先下载整个文件。"""
     if not keys:
         return None
 
