@@ -499,7 +499,18 @@ def guess_folder(model_type, branch=""):
                 return folder
         except Exception:
             pass
+    if str(branch or "").lower() in ("comfyui", "comfy") and model_type in _COMFY_TYPE_FOLDERS:
+        return _COMFY_TYPE_FOLDERS[model_type]
     return MODEL_TYPE_FOLDER_MAP.get(model_type, DEFAULT_FOLDER)
+
+
+# 不走角色表的类型里，ComfyUI 的目录名和 WebUI 不一样的：MODEL_TYPE_FOLDER_MAP 是按 WebUI 写的，
+# 照搬过去 ComfyUI 读不到（它的 Hypernetwork 加载器看 models/hypernetworks，
+# AnimateDiff-Evolved 看 models/animatediff_models）
+_COMFY_TYPE_FOLDERS = {
+    "Hypernetwork": "models/hypernetworks",
+    "MotionModule": "models/animatediff_models",
+}
 
 
 # ---------------------------------------------------------------------------
