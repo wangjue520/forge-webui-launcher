@@ -305,7 +305,8 @@
     instances: "实例管理",
     settings: "高级选项",
     launcher: "启动器设置",
-    deploy: "环境部署 · 版本管理",
+    deploy: "环境部署",
+    versions: "版本管理",
     civitai: "模型下载 · Civitai / liblib",
     models: "模型管理",
     outputs: "输出管理",
@@ -316,7 +317,7 @@
 
   // 页头上方的英文编号（终末地风格的等宽标注）
   const PAGE_CODES = {
-    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY",
+    launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY", versions: "VERSIONS",
     civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
     wd14: "WD14 TAGGER", meta: "IMAGE META",
   };
@@ -327,19 +328,22 @@
       try { App.pages[prev].onHide(); } catch (e) { console.error(e); }
     }
     App.currentPage = name;
-    $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === name));
+    const navName = (App.navParent[name] && App.navParent[name]()) || name;
+    $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === navName));
     $$(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));
     $("#page-title").textContent = PAGE_TITLES[name] || name;
     const code = $("#page-code");
     if (code) {
       // 编号跟侧栏上看到的一致（隐藏的页面不占号）
       const visible = $$(".nav-item").filter((b) => !b.hidden).map((b) => b.dataset.page);
-      const idx = visible.indexOf(name);
+      const idx = visible.indexOf(navName);
       code.textContent = String(idx + 1).padStart(2, "0") + " // " + (PAGE_CODES[name] || name.toUpperCase());
     }
     const mod = App.pages[name];
     if (mod && mod.onShow) mod.onShow();
   };
+  // 不占侧栏的子页面：侧栏高亮和编号跟着所属的那一页（如版本管理 → 实例管理 / 一键启动）
+  App.navParent = {};
 
   function initNav() {
     $$(".nav-item").forEach((b) =>

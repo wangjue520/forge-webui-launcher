@@ -948,8 +948,12 @@ class LauncherApi:
         return ports
 
     def _instance_launch_extras(self, iid, cfg, log):
-        """启动前把共享模型库挂到实例上（见 _library_launch_extras）"""
+        """启动前把共享模型库挂到实例上（见 _library_launch_extras），顺带修已知的节点兼容问题"""
         _library_launch_extras(self, iid, cfg, log)
+        if cm.is_comfy(cfg):
+            comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
+            if comfy_dir:
+                comfy_nodes.fix_rgthree_compat(comfy_dir, log)
 
     # 以下几个是 V2 的接口，iid 省略 = 当前实例；前端启动页照旧调用
     def launch_status(self, iid=None):
@@ -1451,6 +1455,11 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
                 else:
                     log(f"[部署] 注意：环境里的 torch 不是 ROCm 版（{info.get('version') or info.get('error')}），"
                         "可以在本页点「切换显卡环境」重装\n")
+        else:
+            py = _forge_env_python(self._deploy_cfg, target)
+            if py:
+                _ensure_triton(self, py, target, log, make_env(), self._deploy_cfg,
+                               _pip_mirror_argsets(self._deploy_cfg, lambda m: log(m + "\n")))
 
         # ---- 5. hashlib 兼容补丁（保险步骤，新版 Python 下补丁自动不生效）----
         # 有 venv 写 venv 里；走 VENV_DIR=-（没用 venv）时写进便携 Python 本体
@@ -2614,6 +2623,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             self._emit("deploy", "error", title="依赖安装失败",
                        text="ComfyUI 依赖安装失败，请查看部署日志。修复后重新点「开始部署」会跳过已完成的步骤。")
             return
+        _ensure_triton(self, py, target, log, env, dcfg, pip_mirror_argsets)
 
         # ---- 6. 常用节点（失败只提醒，不算部署失败）----
         node_ids = dcfg.get("deploy_comfy_nodes")
@@ -2630,6 +2640,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
             log("[部署] 常用节点：" + comfy_nodes.summary_text(res) + "\n")
+            comfy_nodes.fix_rgthree_compat(target, lambda m: log(m.replace("[启动器]", "[部署]")))
             if res["failed"]:
                 log("[部署] 失败的节点可以之后在「常用插件」页重新安装\n")
             # Manager 是日常使用频率最高的节点，明确告知最终状态，免得用户
@@ -2637,8 +2648,8 @@ def _deploy_flow_comfy(self, target, use_portable):
             if comfy_nodes.MANAGER_ID in node_ids:
                 mgr = comfy_nodes.find(comfy_nodes.MANAGER_ID)
                 if comfy_nodes.is_installed(mgr, target, py):
-                    log("[部署] ComfyUI-Manager 就绪：启动时会自动加 --enable-manager，"
-                        "网页里会出现 Manager 按钮\n")
+                    log("[部署] ComfyUI-Manager 就绪：启动时会自动加 --enable-manager。"
+                        "入口在网页顶栏的「管理扩展功能」按钮（新版界面不再叫 Manager）\n")
                 else:
                     log("[部署] 注意：ComfyUI-Manager 没能装上（上面日志有原因），"
                         "网络好转后可到「常用插件」页勾选重装\n")
@@ -2670,6 +2681,61 @@ def _deploy_flow_comfy(self, target, use_portable):
         self._deploy_running = False
         self._deploy_proc = None
         self._emit("deploy", "state", running=False)
+
+
+def _triton_spec_for_torch(torch_ver):
+    """
+    torch 版本 → 对应的 triton-windows 版本范围（pip 规格），不支持返回 None。
+    triton-windows 跟着官方 triton 走：torch 2.6 配 3.2、2.7 配 3.3 …… 2.9 配 3.5，
+    即 triton 3.(m-4) 对应 torch 2.m。版本对不上 import 时会直接崩，所以必须钉住小版本。
+    """
+    m = re.match(r"(\d+)\.(\d+)", torch_ver or "")
+    if not m or int(m.group(1)) != 2 or int(m.group(2)) < 6:
+        return None
+    minor = int(m.group(2)) - 4
+    return f"triton-windows>=3.{minor},<3.{minor + 1}"
+
+
+def _ensure_triton(self, py, cwd, log, env, cfg, pip_mirror_argsets=None):
+    """
+    给 N 卡的 Windows 环境装 triton-windows（SageAttention、SAM3、一些注意力加速节点要用，
+    没有就报 No module named 'triton'）。已装 / A 卡 / 没 N 卡 / torch 太老都跳过；
+    装失败只提醒，不算部署失败。
+    """
+    if os.name != "nt" or amd_rocm.is_rocm(cfg) or not _nvidia_gpu_names():
+        return
+    try:
+        r = subprocess.run([py, "-c", "import torch; print(torch.__version__)\n"
+                            "try:\n import triton; print('triton', triton.__version__)\n"
+                            "except Exception: pass"],
+                           capture_output=True, text=True, timeout=180, env=env, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        log(f"[部署] 检测 triton 失败，跳过（{e}）\n")
+        return
+    lines = (r.stdout or "").split()
+    if r.returncode != 0 or not lines:
+        log("[部署] 读不到 torch 版本，跳过安装 triton\n")
+        return
+    torch_ver = lines[0]
+    if "triton" in lines:
+        log(f"[部署] triton 已安装（{lines[lines.index('triton') + 1]}），跳过\n")
+        return
+    spec = _triton_spec_for_torch(torch_ver)
+    if not spec:
+        log(f"[部署] torch {torch_ver} 太旧，没有对应的 triton-windows，跳过\n")
+        return
+    log(f"\n[部署] 安装 triton（{spec}，配 torch {torch_ver}；SageAttention 等加速要用）...\n")
+    for i, extra in enumerate(list(pip_mirror_argsets or []) + [[]]):
+        if self._deploy_cancel.is_set():
+            raise _DeployCancelled()
+        if i > 0:
+            log("[部署] 上一个源没装上，换下一个源重试 ...\n")
+        if self._deploy_run_cmd(py, ["-m", "pip", "install", spec] + extra,
+                                cwd, log, env=env, timeout=1200) == 0:
+            log("[部署] triton 安装完成\n")
+            return
+    log("[部署] triton 没装上（不影响正常使用，只有 SageAttention 等需要它的节点会报 "
+        "No module named 'triton'），网络好转后重新点「开始部署」会再试\n")
 
 
 def mm_official():
@@ -4074,10 +4140,13 @@ def _api_models_list(self, cat_index):
     except (IndexError, ValueError):
         return {"ok": False, "error": "类别无效", "files": []}
     files = []
+    infos = set()    # .civitai.info 的主名：用来发现「只剩信息/预览、模型本体不在这」的情况
     try:
         for dirpath, dirnames, filenames in os.walk(cat["path"]):
             dirnames[:] = [d for d in dirnames if not d.startswith(".")]
             for fn in filenames:
+                if fn.lower().endswith(".civitai.info"):
+                    infos.add(os.path.normcase(os.path.join(dirpath, fn[:-len(".civitai.info")])))
                 if not fn.lower().endswith(MODEL_EXTS):
                     continue
                 full = os.path.join(dirpath, fn)
@@ -4097,8 +4166,13 @@ def _api_models_list(self, cat_index):
         return {"ok": False, "error": str(e), "files": []}
     files.sort(key=lambda x: x["rel"].lower())
     no_info = sum(1 for f in files if not f["base"])
+    # 模型被合并进共享模型库（或被别的启动器副本搬走）后，实例目录里常常只剩
+    # .civitai.info 和预览图——列表是空的，得告诉用户模型去哪了
+    stems = {os.path.normcase(os.path.splitext(f["path"])[0]) for f in files}
+    orphans = len(infos - stems)
     return {"ok": True, "is_lora": cat["is_lora"], "files": files,
-            "total": len(files), "no_info": no_info}
+            "total": len(files), "no_info": no_info, "orphans": orphans,
+            "library": bool(_library_path(self))}
 
 
 def _api_models_detail(self, path):
@@ -4115,12 +4189,12 @@ def _api_models_detail(self, path):
         pass
 
     base, _ext = os.path.splitext(path)
-    for cand in (base + ".preview.png", base + ".png", base + ".jpg",
-                 base + ".jpeg", base + ".webp"):
+    for cand in _preview_candidates(path):
         if os.path.exists(cand):
-            url = _image_data_url(cand)
+            url = _image_data_url(cand, max_bytes=32 * 1024 * 1024)
             if url:
                 out["preview"] = url
+                out["preview_path"] = cand
                 break
 
     info_path = base + ".civitai.info"
@@ -4307,8 +4381,7 @@ def _api_models_batch_cancel(self):
 
 def _api_models_delete(self, path):
     base, _ext = os.path.splitext(path)
-    sidecars = [p for p in (base + ".civitai.info", base + ".preview.png",
-                            base + ".png", base + ".json")
+    sidecars = [p for p in [base + ".civitai.info", base + ".json"] + _preview_candidates(path)
                 if os.path.exists(p) and p != path]
     deleted = []
     try:
@@ -4323,6 +4396,90 @@ def _api_models_delete(self, path):
     except OSError as e:
         return {"ok": False, "error": str(e)}
     return {"ok": True, "deleted": deleted}
+
+
+# 模型的预览图：WebUI 认 名字.png / 名字.preview.png（以及 jpg/jpeg/webp/gif），
+# 前者优先；ComfyUI 的 LoRA 预览插件也认这两种。查找按这个顺序
+_PREVIEW_IMG_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+
+def _preview_candidates(model_path):
+    base = os.path.splitext(model_path)[0]
+    out = [base + ".preview.png"]
+    for mid in ("", ".preview"):
+        out += [base + mid + e for e in _PREVIEW_IMG_EXTS if base + mid + e not in out]
+    return [p for p in out if os.path.normcase(p) != os.path.normcase(model_path)]
+
+
+def _sniff_image_ext(raw):
+    """按文件头认图片格式（剪贴板 / 改过后缀的文件都靠这个）；认不出返回 None"""
+    if raw[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if raw[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        return ".webp"
+    if raw[:6] in (b"GIF87a", b"GIF89a"):
+        return ".gif"
+    return None
+
+
+def _clear_previews(model_path):
+    """旧预览图全部进回收站（WebUI 里 名字.png 比 名字.preview.png 优先，留着会盖住新图）"""
+    removed = []
+    for p in _preview_candidates(model_path):
+        if os.path.isfile(p):
+            if ml.send_to_trash(p) or not os.path.exists(p):
+                removed.append(p)
+            else:
+                raise OSError(f"旧预览图被占用，删不掉：{os.path.basename(p)}")
+    return removed
+
+
+def _api_models_set_preview(self, path, src="", b64_data=""):
+    """
+    把一张图设成模型的预览图。图片来源二选一：src（本机图片路径，选文件 / 拖进来的），
+    b64_data（剪贴板粘贴的）。统一存成 名字.preview.<原格式>，旧预览进回收站。
+    """
+    if not path or not os.path.isfile(path) or not path.lower().endswith(MODEL_EXTS):
+        return {"ok": False, "error": "模型文件不存在"}
+    try:
+        if src:
+            if os.path.getsize(src) > 50 * 1024 * 1024:
+                return {"ok": False, "error": "图片太大（超过 50MB）"}
+            with open(src, "rb") as f:
+                raw = f.read()
+        elif b64_data:
+            raw = base64.b64decode(b64_data)
+        else:
+            return {"ok": False, "error": "没有图片"}
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"读取图片失败：{e}"}
+    ext = _sniff_image_ext(raw)
+    if not ext:
+        return {"ok": False, "error": "只支持 PNG / JPG / WEBP / GIF 图片（WebUI 也只认这几种）"}
+    dest = os.path.splitext(path)[0] + ".preview" + ext
+    tmp = dest + ".tmp"
+    try:
+        with open(tmp, "wb") as f:
+            f.write(raw)
+        _clear_previews(path)
+        os.replace(tmp, dest)
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return {"ok": False, "error": f"保存预览图失败：{e}"}
+    return {"ok": True, "path": dest}
+
+
+def _api_models_remove_preview(self, path):
+    try:
+        removed = _clear_previews(path)
+    except OSError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "removed": len(removed)}
 
 
 # 拖拽上传识别出的类型 → 显示名
@@ -5593,6 +5750,72 @@ def _api_ext_replace(self, name, iid=None):
                                           "WebUI 正在运行的话请先停止。"}
     self._emit("ext", "log", text=f"\n[插件] 旧版本 {'、'.join(moved)} 已移到 {dest_root}\n")
     return _api_ext_install(self, [name], iid)
+
+
+def _api_ext_toggle(self, rel, enable, iid=None):
+    """
+    启用 / 停用一个已装插件。
+    WebUI：写 config.json 的 disabled_extensions（和 WebUI 自己「扩展」页的勾选是同一个东西）；
+           以前用文件夹 .disabled 后缀 / .disabled/ 目录停用的，启用时挪回来。
+    ComfyUI：文件夹改名 xxx.disabled（ComfyUI 跳过这类目录，ComfyUI-Manager 也认）；
+           启用时去掉后缀，Manager 挪进 .disabled/ 的（可能带 @版本号）也挪回来。
+    实例运行中不让改：WebUI 退出时会把内存里的设置写回 config.json，ComfyUI 的节点文件正被占用。
+    """
+    if _ext_busy(self):
+        return {"ok": False, "error": "已有插件任务在进行中，等它结束再操作"}
+    cfg, info, _comfy_dir = _ext_target(self, iid)
+    p = _ext_resolve_repo(info, rel)
+    if not p:
+        return {"ok": False, "error": "插件目录不存在（可能刚被改过），请刷新"}
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，请先在「一键启动」页停止它再开关插件"}
+    base = info["target_dir"]
+    parent, folder = os.path.split(p)
+    in_dd = os.path.normcase(parent) == os.path.normcase(os.path.join(base, ".disabled"))
+    suffixed = folder.lower().endswith(".disabled")
+
+    def move(dst):
+        if os.path.exists(dst):
+            raise OSError(f"「{os.path.basename(dst)}」已经存在，同一个插件装了两份，请先手动删掉一份")
+        os.rename(p, dst)
+
+    try:
+        if enable:
+            if in_dd or suffixed:
+                name = folder[:-len(".disabled")] if suffixed else folder
+                if in_dd:
+                    name = name.split("@", 1)[0] or name
+                move(os.path.join(base, name))
+                folder = name
+            if info["kind"] != "comfyui":
+                _webui_set_ext_disabled(info["root"], folder, False)
+        elif info["kind"] == "comfyui":
+            if not (in_dd or suffixed):
+                move(p + ".disabled")
+        else:
+            _webui_set_ext_disabled(info["root"], folder, True)
+    except (OSError, ValueError) as e:
+        return {"ok": False, "error": f"操作失败：{e}"}
+    return {"ok": True, "restart": True}
+
+
+def _webui_set_ext_disabled(root, folder, disabled):
+    """改 WebUI config.json 里的 disabled_extensions（扩展名就是文件夹名）"""
+    path = os.path.join(root, "config.json")
+    data = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)   # 读不了就报错，绝不能拿空配置覆盖用户的设置
+        if not isinstance(data, dict):
+            raise ValueError("WebUI 的 config.json 格式不对")
+    names = [n for n in (data.get("disabled_extensions") or []) if str(n).lower() != folder.lower()]
+    if disabled:
+        names.append(folder)
+    data["disabled_extensions"] = names
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+    os.replace(tmp, path)
 
 
 def _api_ext_open_dir(self, rel=None, iid=None):
@@ -6998,6 +7221,8 @@ for _name, _fn in {
     "models_batch": _api_models_batch,
     "models_batch_cancel": _api_models_batch_cancel,
     "models_delete": _api_models_delete,
+    "models_set_preview": _api_models_set_preview,
+    "models_remove_preview": _api_models_remove_preview,
     "models_set_trained_words": _api_models_set_trained_words,
     "models_bind_liblib": _api_models_bind_liblib,
     "models_import_plan": _api_models_import_plan,
@@ -7022,6 +7247,7 @@ for _name, _fn in {
     "ext_switch": _api_ext_switch,
     "ext_replace": _api_ext_replace,
     "ext_open_dir": _api_ext_open_dir,
+    "ext_toggle": _api_ext_toggle,
     "ver_info": _api_ver_info,
     "ver_check": _api_ver_check,
     "ver_switch": _api_ver_switch,

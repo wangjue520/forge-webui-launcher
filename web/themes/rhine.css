@@ -858,7 +858,7 @@
 :root[data-ui-theme="rhine"] #md-files :is(td, th):not(:first-child) { white-space: nowrap; }
 :root[data-ui-theme="rhine"] #md-files td:first-child { word-break: normal; overflow-wrap: anywhere; }
 :root[data-ui-theme="rhine"] .preview-box { background-color: rgba(250, 248, 243, .45); border: 1px solid rgba(255, 255, 255, .8); }
-:root[data-ui-theme="rhine"] .preview-toggle { top: 8px; right: 8px; padding: 2px 9px; font-size: 10.5px; background: rgba(250, 248, 243, .85); }
+:root[data-ui-theme="rhine"] .preview-toggle { padding: 2px 9px; font-size: 10.5px; background: rgba(250, 248, 243, .85); }
 :root[data-ui-theme="rhine"] .detail-view { background: var(--rh-sheet); border: 1px solid rgba(255, 255, 255, .8); padding: 14px 16px; }
 :root[data-ui-theme="rhine"] .detail-view .sect { border-bottom: 1px solid #20221d; font-size: 12.5px; letter-spacing: .3px; white-space: nowrap; }
 :root[data-ui-theme="rhine"] .detail-view .sect .card-title-hint { flex: 0 1 auto; margin-left: 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -941,10 +941,11 @@
   .models-layout { grid-template-columns: 150px minmax(0, 1fr) !important; grid-template-rows: minmax(150px, 1.7fr) minmax(170px, 1fr) !important; }
   .models-detail { grid-column: 1 / -1; display: grid !important; grid-template-columns: minmax(180px, 34%) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; gap: 8px 12px; }
   .models-detail .preview-wrap { grid-row: 1 / span 2; min-height: 0; }
-  .models-detail .preview-box { height: 100% !important; min-height: 0; }
+  .models-detail .preview-box { height: auto !important; flex: 1; min-height: 0; }
   .models-detail .detail-view { grid-column: 2; min-height: 0; }
   .models-detail .detail-actions { grid-column: 2; }
-  .models-detail.preview-collapsed { grid-template-columns: minmax(0, 1fr); }
+  .models-detail.preview-collapsed { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr) auto; }
+  .models-detail.preview-collapsed .preview-wrap { grid-row: auto; }
   .models-detail.preview-collapsed :is(.detail-view, .detail-actions) { grid-column: 1; }
 }
 /* 窗口矮时：拖拽提示条压成一行，把高度留给列表 */

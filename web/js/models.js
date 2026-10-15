@@ -18,6 +18,8 @@
   let lastJournal = "";    // 最近一次整理的记录（撤销用）
   let isLibrary = false;   // 当前管理的是共享模型库
   let pendingSelect = "";  // 上传完成后要选中的文件路径
+  let hasPreview = false;  // 选中的模型当前有没有预览图
+  const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
 
   function tbody() { return $("#md-files tbody"); }
 
@@ -88,7 +90,8 @@
     tbody().querySelectorAll("tr").forEach((r) => r.classList.remove("selected"));
     if (tr) tr.classList.add("selected");
     selected = files.find((f) => f.path === path) || null;
-    ["#md-open", "#md-copy-name", "#md-hash-lookup", "#md-delete"].forEach((s) => ($(s).disabled = !selected));
+    ["#md-open", "#md-copy-name", "#md-hash-lookup", "#md-delete", "#md-preview-set"].forEach((s) => ($(s).disabled = !selected));
+    $("#md-preview-del").disabled = true;
     $("#md-copy-lora").disabled = !selected || !curIsLora;
 
     const detail = $("#md-detail");
@@ -108,7 +111,10 @@
 
   function renderDetail(d) {
     const box = $("#md-preview");
-    box.innerHTML = d.preview ? `<img src="${d.preview}" alt="">` : "<span>没有预览图</span>";
+    hasPreview = !!d.preview;
+    box.innerHTML = d.preview ? `<img src="${d.preview}" alt="" title="点击查看大图">`
+      : "<span>没有预览图 · 点下方「设置预览图」，或把图片拖进窗口 / Ctrl+V 粘贴</span>";
+    $("#md-preview-del").disabled = !hasPreview;
 
     let html = "";
     if (d.file) {
@@ -231,7 +237,8 @@
     $("#md-detail").innerHTML = "";
     $("#md-preview").innerHTML = "<span>选中文件后这里显示预览图</span>";
     selected = null;
-    ["#md-open", "#md-copy-name", "#md-copy-lora", "#md-hash-lookup", "#md-delete"].forEach((s) => ($(s).disabled = true));
+    ["#md-open", "#md-copy-name", "#md-copy-lora", "#md-hash-lookup", "#md-delete",
+      "#md-preview-set", "#md-preview-del"].forEach((s) => ($(s).disabled = true));
     try {
       const r = await App.api.models_list(idx);
       if (r && r.ok === false) { $("#md-count").textContent = r.error || "读取失败"; return; }
@@ -243,6 +250,12 @@
       renderTable();
       $("#md-root").textContent = r.no_info > 0
         ? `其中 ${r.no_info} 个没有 Civitai 信息` : "";
+      if (r.orphans > 0 && !files.length) {
+        // 只剩 .civitai.info / 预览图、模型本体不在：多半是被合并进共享模型库了
+        $("#md-count").textContent = `这个文件夹里没有模型文件，只有 ${r.orphans} 个模型的信息/预览图——` +
+          (r.library ? "模型本体可能被移走或删除了。"
+            : "模型本体多半已被合并进共享模型库（可能是另一个启动器副本做的）。到「设置」里开启共享模型库并选那个文件夹，就能在这里看到它们。");
+      }
       if (pendingSelect) {
         const want = pendingSelect;
         pendingSelect = "";
@@ -382,8 +395,31 @@
     } catch (e) { App.toast("撤销失败：" + e.message, "error"); }
   }
 
+  /* ---------- 预览图 ---------- */
+  async function setPreview(src, b64) {
+    if (!selected) { App.toast("先在列表里选中一个模型", "error"); return; }
+    const target = selected.path;
+    try {
+      const r = await App.api.models_set_preview(target, src || "", b64 || "");
+      if (r && r.ok) {
+        App.toast("已设置预览图（旧的已放进回收站）", "ok");
+        if (selected && selected.path === target) selectRow(target, tbody().querySelector("tr.selected"));
+      } else App.toast((r && r.error) || "设置预览图失败", "error", 5000);
+    } catch (e) { App.toast("设置预览图失败：" + e.message, "error"); }
+  }
+
   async function handleDrop(paths) {
     if (!paths || !paths.length) { setPreparing(false); return; }
+    // 拖进来的全是图片：当成给选中模型设预览图（图片本来也不能当模型上传）
+    if (paths.every((p) => IMG_RE.test(p))) {
+      setPreparing(false);
+      if (!selected) { App.toast("要设预览图的话，先在列表里选中一个模型，再把图片拖进来", "error", 5000); return; }
+      if (paths.length > 1) App.toast("拖了多张图，只用第一张做预览图", "");
+      const name = selected.rel.split(/[\\/]/).pop();
+      if (hasPreview && !(await App.confirm("替换预览图", `把「${name}」的预览图换成这张？\n\n旧预览图会放进回收站。`, "替换"))) return;
+      setPreview(paths[0]);
+      return;
+    }
     if (importing) { App.toast("上一批模型还在复制，请等它完成或先取消", "error"); return; }
     if (organizing) { setPreparing(false); App.toast("正在整理 LoRA，请等它完成再拖入", "error"); return; }
     if (curCat < 0 || !categories[curCat]) { setPreparing(false); App.toast("请先在左侧选一个模型分类，再把文件拖进来", "error"); return; }
@@ -536,6 +572,55 @@
         applyPreviewCollapsed();
       });
       applyPreviewCollapsed();
+
+      $("#md-preview-set").addEventListener("click", async () => {
+        if (!selected) return;
+        try {
+          const r = await App.api.choose_images(false);
+          const p = r && r.paths && r.paths[0];
+          if (p) setPreview(p);
+        } catch (e) { App.toast("打开文件选择失败：" + e.message, "error"); }
+      });
+      $("#md-preview-del").addEventListener("click", async () => {
+        if (!selected) return;
+        const target = selected.path;
+        if (!(await App.confirm("移除预览图", "把这个模型的预览图放进回收站？", "移除"))) return;
+        try {
+          const r = await App.api.models_remove_preview(target);
+          if (r && r.ok) { App.toast("已移除预览图", "ok"); selectRow(target, tbody().querySelector("tr.selected")); }
+          else App.toast((r && r.error) || "移除失败", "error");
+        } catch (e) { App.toast("移除失败：" + e.message, "error"); }
+      });
+      // 点预览图看大图
+      $("#md-preview").addEventListener("click", (e) => {
+        const img = e.target.closest("img");
+        if (!img) return;
+        App.modal(selected ? selected.rel.split(/[\\/]/).pop() : "预览图",
+          `<img src="${img.src}" alt="" style="display:block;max-width:100%;max-height:75vh;margin:0 auto;object-fit:contain">`,
+          [{ id: "ok", label: "关闭" }]);
+      });
+      // Ctrl+V 粘贴剪贴板里的图片作为预览图（浏览器 / WebUI 里右键「复制图片」后直接粘）
+      const abToB64 = (buf) => {
+        const bytes = new Uint8Array(buf);
+        let str = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) str += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        return btoa(str);
+      };
+      document.addEventListener("paste", async (e) => {
+        if (App.currentPage !== "models") return;
+        const t = e.target;
+        if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA")) return;
+        const it = Array.from((e.clipboardData && e.clipboardData.items) || [])
+          .find((x) => x.kind === "file" && (x.type || "").startsWith("image/"));
+        const f = it && it.getAsFile();
+        if (!f) return;
+        e.preventDefault();
+        if (!selected) { App.toast("先在列表里选中一个模型，再粘贴图片", "error"); return; }
+        const name = selected.rel.split(/[\\/]/).pop();
+        if (hasPreview && !(await App.confirm("替换预览图", `把「${name}」的预览图换成剪贴板里的图片？\n\n旧预览图会放进回收站。`, "替换"))) return;
+        try { setPreview("", abToB64(await f.arrayBuffer())); }
+        catch (err) { App.toast("粘贴图片失败：" + err.message, "error"); }
+      });
 
       $$("#md-files th.sortable").forEach((th) => th.addEventListener("click", () => {
         const key = th.dataset.sort;

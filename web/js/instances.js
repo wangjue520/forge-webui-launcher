@@ -41,6 +41,9 @@
     // 页面本身保留；回到单实例时恢复显示。
     const deployNav = document.querySelector('.nav-item[data-page="deploy"]');
     if (deployNav && m) deployNav.hidden = true;
+    // 版本管理不占侧栏：多实例时入口在实例管理页，单实例时在环境部署页
+    const dv = $("#deploy-versions-row");
+    if (dv) dv.hidden = m;
     if (!m && App.currentPage === "instances") App.showPage("launch");
   }
 
@@ -203,7 +206,7 @@
           ${isRunning(i)
             ? '<button class="btn btn-sm" data-act="stop">停止</button>'
             : `<button class="btn btn-sm btn-primary" data-act="start"${i.root ? "" : " disabled"}>启动</button>`}
-          <button class="btn btn-sm" data-act="versions"${i.root ? "" : " disabled"} title="更新 / 切换 / 回滚这个实例的 WebUI 或 ComfyUI 版本（在「环境部署」页）">版本管理…</button>
+          <button class="btn btn-sm" data-act="versions"${i.root ? "" : " disabled"} title="更新 / 切换 / 回滚这个实例的 WebUI 或 ComfyUI 版本">版本管理…</button>
           <button class="btn btn-sm btn-danger-text" data-act="remove"${App.instances.instances.length <= 1 ? " disabled" : ""}>移除实例</button>
           <span class="hint">移除只是从启动器里去掉，不会删除任何文件</span>
         </div>
@@ -358,6 +361,7 @@
       $("#inst-switch-select").addEventListener("change", (e) => switchTo(e.target.value));
       $("#inst-add").addEventListener("click", addInstance);
       $("#inst-deploy").addEventListener("click", () => App.showPage("deploy"));
+      $("#inst-versions").addEventListener("click", () => App.openVersions(""));
 
       $("#lib-enabled").addEventListener("change", async (e) => {
         let path = $("#lib-path").value.trim();

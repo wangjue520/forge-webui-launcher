@@ -13,7 +13,7 @@
   const $ = (s) => document.querySelector(s);
 
   const INTRO_FORGE = "勾选想装的扩展，点「安装选中项」会依次 git clone 到上面这个实例的 extensions/ 目录。已经装过的（包括你以前自己在 WebUI 里装的）显示「已安装」并自动跳过。部分扩展（ADetailer、WD14 Tagger 等）会按实例的分支自动装对应的兼容版本。已装的插件可以「检查插件更新」后一键更新，也可以点「版本…」换成任意历史版本或回滚。装好 / 更新后重启 WebUI 生效。";
-  const INTRO_COMFY = "ComfyUI 的节点和 WebUI 扩展不通用，这里是 ComfyUI 专用清单。安装时会 clone 到上面这个实例的 custom_nodes/，并用它自己的 Python 把节点依赖一起装好（ComfyUI 不会自动装依赖）；更新 / 换版本后也会自动重装依赖。「推荐」那组在「环境部署」新装 ComfyUI 时会默认一起装上。更多节点可以在 ComfyUI 网页里用 Manager 搜索安装。";
+  const INTRO_COMFY = "ComfyUI 的节点和 WebUI 扩展不通用，这里是 ComfyUI 专用清单。安装时会 clone 到上面这个实例的 custom_nodes/，并用它自己的 Python 把节点依赖一起装好（ComfyUI 不会自动装依赖）；更新 / 换版本后也会自动重装依赖。「推荐」那组在「环境部署」新装 ComfyUI 时会默认一起装上。更多节点可以在 ComfyUI 网页里用 Manager 搜索安装——新版界面的入口是顶栏的「管理扩展功能」按钮。";
 
   let log = null;
   let items = [];
@@ -77,9 +77,12 @@
       ? (u.behind && !r.pinned ? `<button class="btn btn-xs btn-accent" data-act="update" data-rel="${rel}">更新</button>` : "") +
         `<button class="btn btn-xs" data-act="versions" data-rel="${rel}" data-name="${App.esc(r.folder)}">版本…</button>`
       : "";
-    return `<div class="ext-ver">` +
+    const tgl = r.disabled
+      ? `<button class="btn btn-xs btn-accent" data-act="enable" data-rel="${rel}" title="重新启用这个插件（重启实例后生效）">启用</button>`
+      : `<button class="btn btn-xs" data-act="disable" data-rel="${rel}" title="暂时停用，不删除文件，随时能再启用（重启实例后生效）">停用</button>`;
+    return `<div class="ext-ver${r.disabled ? " is-off" : ""}">` +
       `<span class="ext-ver-txt">${showFolder ? `<span class="ext-folder" title="${App.esc(r.remote || "")}">${App.esc(r.folder)}</span>` : ""}${ver}${st}</span>` +
-      `<span class="ext-ver-btns">${btns}<button class="btn btn-xs" data-act="open" data-rel="${rel}" title="打开插件目录">目录</button></span></div>`;
+      `<span class="ext-ver-btns">${tgl}${btns}<button class="btn btn-xs" data-act="open" data-rel="${rel}" title="打开插件目录">目录</button></span></div>`;
   }
 
   function itemHtml(it) {
@@ -289,6 +292,16 @@
         if (installing) return;
         const act = b.dataset.act;
         if (act === "open") App.api.ext_open_dir(b.dataset.rel, targetId || null);
+        else if (act === "enable" || act === "disable") {
+          const on = act === "enable";
+          b.disabled = true;
+          try {
+            const r = await App.api.ext_toggle(b.dataset.rel, on, targetId || null);
+            if (r && r.ok === false) App.toast(r.error || "操作失败", "error", 6000);
+            else App.toast(`已${on ? "启用" : "停用"}，重启${last && last.comfy ? " ComfyUI" : " WebUI"} 后生效`, "ok", 4000);
+          } catch (err) { App.toast("操作失败：" + err.message, "error"); }
+          refresh();
+        }
         else if (act === "versions") openVersions(b.dataset.rel, b.dataset.name);
         else if (act === "update") {
           const r = findRepo(b.dataset.rel);

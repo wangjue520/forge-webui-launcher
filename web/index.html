@@ -380,50 +380,10 @@
 
       <!-- ======== 环境部署 ======== -->
       <section class="page" id="page-deploy">
-        <!-- 版本管理（WebUI / ComfyUI 本体）：已有实例的更新 / 切换 / 回滚，逻辑在 js/versions.js -->
-        <div id="ver-section" hidden>
-          <div class="card ext-target-card">
-            <div class="card-title">版本管理 · 更新 / 切换 / 回滚<span class="card-title-hint" id="ver-target-hint"></span></div>
-            <div class="ext-target">
-              <span class="ic-kind" id="ver-target-kind"></span>
-              <b class="ext-target-name" id="ver-target-name">—</b>
-              <select id="ver-target-sel" hidden></select>
-            </div>
-            <div class="ext-target-path" id="ver-target-path"></div>
-            <div class="hint" id="ver-target-warn" data-status="warn" hidden></div>
-          </div>
-          <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「常用插件」页管理。</div>
-
-          <div class="card">
-            <div class="card-title">当前版本<span class="card-title-hint" id="ver-check-hint"></span></div>
-            <div class="kv-table" id="ver-current"></div>
-            <div class="hint" id="ver-status"></div>
-            <div class="action-row">
-              <button class="btn btn-accent" id="ver-update"><svg class="btn-icon"><use href="#i-download"/></svg>更新到最新</button>
-              <button class="btn" id="ver-check">检查更新 / 选择版本</button>
-              <button class="btn" id="ver-adopt" hidden>接管为 Git 管理…</button>
-              <button class="btn" id="ver-cancel" disabled>取消</button>
-            </div>
-          </div>
-
-          <div class="card" id="ver-pick-card" hidden>
-            <div class="card-title">选择版本<span class="card-title-hint">「最近提交」是当前分支最新的 40 个提交；「版本标签」是作者发布的正式版本号</span></div>
-            <div id="ver-pick"></div>
-            <div class="action-row">
-              <button class="btn btn-primary" id="ver-apply" disabled>切换到所选版本</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-title">切换记录<span class="card-title-hint">每次切换前的版本都会记在这里，点「回到这个版本」就能回滚</span></div>
-            <div id="ver-history"></div>
-          </div>
-
-          <div class="console-wrap">
-            <div class="console-head"><span>日志</span><button class="btn btn-xs" id="ver-log-clear">清空</button></div>
-            <pre class="console console-sm" id="ver-log"></pre>
-          </div>
-          <div class="ext-group ver-sep">部署新环境 · 环境检测与维修</div>
+        <!-- 单实例时的版本管理入口（多实例时在「实例管理」页，和「部署新的实例」并排） -->
+        <div class="action-row" id="deploy-versions-row">
+          <button class="btn" id="deploy-versions">版本管理…</button>
+          <span class="hint">已经装好的 WebUI / ComfyUI 要更新、切换或回滚版本，点这里（不用重新部署）</span>
         </div>
 
         <div class="card">
@@ -511,6 +471,57 @@
           <pre class="console" id="deploy-log"></pre>
         </div>
       </section>
+
+      <!-- ======== 版本管理（WebUI / ComfyUI 本体） ======== -->
+      <section class="page" id="page-versions">
+        <div class="action-row ver-back-row"><button class="btn btn-sm" id="ver-back">← 返回</button></div>
+        <div class="hint hint-block" id="ver-empty" hidden>还没有可用的实例。先到「环境部署」装一个 WebUI 或 ComfyUI，或者在「一键启动」页选择已有的安装，之后就能在这里更新 / 切换 / 回滚版本。</div>
+        <!-- 已有实例的更新 / 切换 / 回滚，逻辑在 js/versions.js -->
+        <div id="ver-section" hidden>
+          <div class="card ext-target-card">
+            <div class="card-title">要管理的实例<span class="card-title-hint" id="ver-target-hint"></span></div>
+            <div class="ext-target">
+              <span class="ic-kind" id="ver-target-kind"></span>
+              <b class="ext-target-name" id="ver-target-name">—</b>
+              <select id="ver-target-sel" hidden></select>
+            </div>
+            <div class="ext-target-path" id="ver-target-path"></div>
+            <div class="hint" id="ver-target-warn" data-status="warn" hidden></div>
+          </div>
+          <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「常用插件」页管理。</div>
+
+          <div class="card">
+            <div class="card-title">当前版本<span class="card-title-hint" id="ver-check-hint"></span></div>
+            <div class="kv-table" id="ver-current"></div>
+            <div class="hint" id="ver-status"></div>
+            <div class="action-row">
+              <button class="btn btn-accent" id="ver-update"><svg class="btn-icon"><use href="#i-download"/></svg>更新到最新</button>
+              <button class="btn" id="ver-check">检查更新 / 选择版本</button>
+              <button class="btn" id="ver-adopt" hidden>接管为 Git 管理…</button>
+              <button class="btn" id="ver-cancel" disabled>取消</button>
+            </div>
+          </div>
+
+          <div class="card" id="ver-pick-card" hidden>
+            <div class="card-title">选择版本<span class="card-title-hint">「最近提交」是当前分支最新的 40 个提交；「版本标签」是作者发布的正式版本号</span></div>
+            <div id="ver-pick"></div>
+            <div class="action-row">
+              <button class="btn btn-primary" id="ver-apply" disabled>切换到所选版本</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">切换记录<span class="card-title-hint">每次切换前的版本都会记在这里，点「回到这个版本」就能回滚</span></div>
+            <div id="ver-history"></div>
+          </div>
+
+          <div class="console-wrap">
+            <div class="console-head"><span>日志</span><button class="btn btn-xs" id="ver-log-clear">清空</button></div>
+            <pre class="console console-sm" id="ver-log"></pre>
+          </div>
+        </div>
+      </section>
+
 
       <!-- ======== 模型下载 ======== -->
       <section class="page" id="page-civitai">
@@ -637,7 +648,11 @@
           <div class="models-detail">
             <div class="preview-wrap">
               <div class="preview-box" id="md-preview"><span>选中文件后这里显示预览图</span></div>
-              <button class="btn preview-toggle" id="md-preview-toggle" title="收起/展开预览图，给详情腾出空间">收起</button>
+              <div class="preview-tools">
+                <button class="btn btn-xs" id="md-preview-set" disabled title="选一张图片作为预览图（也可以直接把图片拖进窗口，或 Ctrl+V 粘贴剪贴板里的图）">设置预览图…</button>
+                <button class="btn btn-xs" id="md-preview-del" disabled title="移除预览图（进回收站）">移除</button>
+                <button class="btn btn-xs preview-toggle" id="md-preview-toggle" title="收起/展开预览图，给详情腾出空间">收起</button>
+              </div>
             </div>
             <div class="detail-view" id="md-detail"></div>
             <div class="detail-actions">
@@ -804,11 +819,12 @@
 
       <!-- ======== 实例管理（多实例） ======== -->
       <section class="page" id="page-instances">
-        <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、常用插件、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。要更新 / 切换 / 回滚某个实例的 WebUI 或 ComfyUI 版本，点它下面的「版本管理…」。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
+        <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、常用插件、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。要更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本，点实例下面或「部署新的实例」旁边的「版本管理…」。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
         <div id="inst-list"></div>
         <div class="action-row">
           <button class="btn btn-primary" id="inst-add">添加已有安装</button>
           <button class="btn" id="inst-deploy">部署新的实例…</button>
+          <button class="btn" id="inst-versions" title="更新 / 切换 / 回滚各实例的 WebUI 或 ComfyUI 版本">版本管理…</button>
         </div>
 
         <div class="card" id="lib-card">

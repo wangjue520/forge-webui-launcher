@@ -34,8 +34,8 @@ CATALOG = [
     {"id": MANAGER_ID, "name": "ComfyUI-Manager（节点管理器）", "group": "core", "default": True,
      "desc": "在 ComfyUI 网页里搜索 / 安装 / 更新其它节点，打开别人的工作流时一键补装缺失节点。"
              "现已内置进 ComfyUI，这里装好依赖后启动器会自动加 --enable-manager 启用。"
-             "新版界面的入口：左侧栏「节点」面板就是节点管理器（老版那个 Manager 按钮没了），"
-             "也可以在命令面板里搜 Manager（拼图图标）；装了以后记得刷新一下网页。"
+             "新版界面的入口：网页顶栏中间的「管理扩展功能」按钮（英文界面叫 Manage Extensions），"
+             "点开就是「自定义节点管理器」；第一次打开网页会先弹出模板窗口，关掉就能看到。装了以后记得刷新一下网页。"
              "想要老版 Manager 界面的话，在高级选项的额外参数里加 --enable-manager-legacy-ui 重启即可。",
      "url": "", "folder": ""},
     {"id": "rgthree-comfy", "name": "rgthree-comfy", "group": "core", "default": True,
@@ -516,3 +516,50 @@ def summary_text(res):
         names = "、".join((find(i) or {"name": i})["name"] + f"（{why}）" for i, why in res["failed"])
         parts.append(f"失败 {len(res['failed'])} 个：{names}")
     return "；".join(parts) or "没有需要安装的节点"
+
+
+def fix_rgthree_compat(comfy_dir, log=lambda m: None):
+    """
+    rgthree-comfy 默认会给 ComfyUI 的 execution.recursive_output_delete_if_changed 打补丁
+    （「递归执行优化」）。新版 ComfyUI 删掉了这个函数，补丁一打就 AttributeError，
+    整个 rgthree 加载失败。检测到这种情况就在 rgthree_config.json 里把
+    patch_recursive_execution 关掉——这是 rgthree 自己提示的办法，只是少了个优化，节点照常用。
+    用户已经手动写了这个开关的，尊重用户的设置不动。返回是否改了配置。
+    """
+    import json
+    nodes = custom_nodes_dir(comfy_dir)
+    if not nodes or not os.path.isdir(nodes):
+        return False
+    try:
+        rg = next((os.path.join(nodes, n) for n in os.listdir(nodes)
+                   if n.lower().startswith("rgthree-comfy") and not n.lower().endswith(".disabled")
+                   and os.path.isfile(os.path.join(nodes, n, "__init__.py"))), None)
+    except OSError:
+        return False
+    if not rg:
+        return False
+    try:
+        with open(os.path.join(comfy_dir, "execution.py"), "r", encoding="utf-8", errors="replace") as f:
+            if "def recursive_output_delete_if_changed" in f.read():
+                return False      # ComfyUI 还有这个函数，补丁能正常打
+    except OSError:
+        return False
+    cfg_path = os.path.join(rg, "rgthree_config.json")
+    data = {}
+    if os.path.exists(cfg_path):
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return False          # 用户的配置读不了就别碰，免得覆盖坏
+        if not isinstance(data, dict) or "patch_recursive_execution" in data:
+            return False
+    data["patch_recursive_execution"] = False
+    try:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+    except OSError:
+        return False
+    log("[启动器] rgthree-comfy 的「递归执行优化」和当前 ComfyUI 不兼容（会导致整个 rgthree 加载失败），"
+        "已在 rgthree_config.json 里关掉它，rgthree 的节点照常可用\n")
+    return True
