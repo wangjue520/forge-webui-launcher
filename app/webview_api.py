@@ -4635,6 +4635,18 @@ def _library_path(self):
     return p if p and os.path.isdir(p) else ""
 
 
+def _models_root(cfg):
+    """
+    实例里 models/ 等模型目录所在的那一层。WebUI 就是根目录；ComfyUI 的根目录可能选在
+    官方便携包外层（ComfyUI_windows_portable/），真正读模型的是里面的 ComfyUI/models——
+    直接拿根目录拼 models/loras，文件会下到外层一个 ComfyUI 根本不看的 models 文件夹里。
+    """
+    root = (cfg.get("webui_root") or "").strip()
+    if root and cm.is_comfy(cfg):
+        return cm.comfy_layout(root)[0] or root
+    return root
+
+
 def _download_dest(self, folder):
     """
     模型下载的默认保存位置 → (绝对路径, 显示用的位置说明)。
@@ -4647,7 +4659,7 @@ def _download_dest(self, folder):
         if key:
             d = ml.library_dir(lib, key)
             return d, f"共享模型库/{os.path.basename(d)}"
-    root = (self.cfg.get("webui_root") or "").strip()
+    root = _models_root(self.cfg)
     return (os.path.join(root, *folder.split("/")) if root else folder), folder
 
 
@@ -6417,7 +6429,7 @@ def _api_meta_scan_missing(self):
         if lib and ref["role"] == "Checkpoint":
             extra = extra + ml.library_dir_variants(lib, "diffusion_models")   # 只有 DiT 的主模型
         local_path = imc.find_local_model_file(
-            root, ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
+            _models_root(self.cfg), ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
             extra_dirs=extra)
         if local_path:
             row["state"] = "local"
