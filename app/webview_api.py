@@ -2097,7 +2097,7 @@ def _api_instance_add(self, root, name=""):
         return {"ok": False, "error": "这个目录看起来既不是 ComfyUI（没有 main.py）也不是 WebUI"
                                       "（没有 webui.bat）。还没安装的话，去「环境部署」页部署一个。"}
     for inst in self.cfg.get("instances") or []:
-        if inst.get("webui_root") and _same_path(inst["webui_root"], root):
+        if inst.get("webui_root") and _same_install(inst["webui_root"], root):
             return {"ok": False, "error": f"这个目录已经是实例「{inst.get('name')}」了"}
     branch = "comfyui" if kind == "comfyui" else _guess_forge_branch(root)
     import install_finder
@@ -2304,6 +2304,15 @@ def _same_path(a, b):
         return False
 
 
+def _same_install(a, b):
+    """两个根目录是不是同一个安装：ComfyUI 官方便携包的外层和里层 ComfyUI/ 是同一个，
+    按路径比会被当成两个实例（同时启动两份、抢同一个 ComfyUI）"""
+    if _same_path(a, b):
+        return True
+    da, db = cm.comfy_layout(a)[0], cm.comfy_layout(b)[0]
+    return bool(da and db and _same_path(da, db))
+
+
 def _deploy_cfg_for(self, target, branch):
     """部署用配置：目标就是当前实例的目录 → 沿用当前实例设置；否则用默认实例设置"""
     cfg = dict(self.cfg)
@@ -2331,7 +2340,7 @@ def _deploy_register_instance(self, target, branch, log, variant=None):
     gpu = {"gpu_backend": self._deploy_cfg.get("gpu_backend") or "",
            "amd_gfx": self._deploy_cfg.get("amd_gfx") or ""}
     for inst in self.cfg.get("instances") or []:
-        if inst.get("webui_root") and _same_path(inst["webui_root"], target):
+        if inst.get("webui_root") and _same_install(inst["webui_root"], target):
             inst["webui_branch"] = branch
             inst["webui_variant"] = variant or ""
             inst.update(gpu)
@@ -2469,9 +2478,21 @@ def _deploy_flow_comfy(self, target, use_portable):
                 pass
             return e
         _drop_broken_bundled_git(target, log)
+        # 选的是已有安装：官方便携包外层（源码在里层 ComfyUI/，Python 是 python_embeded）、
+        # 秋叶整合包里层（Python 在上一级 python/）——按 comfy_layout 认出真正的源码目录和
+        # 自带 Python。以前直接把所选目录当源码目录：外层没有 main.py 就在外层重新克隆一份，
+        # 也认不出 python_embeded，又去下便携 Python / 建 venv。登记实例仍用用户选的目录
+        reg_target = target
+        exist_dir, exist_py = cm.comfy_layout(target)
+        if exist_dir and not _same_path(exist_dir, target):
+            log(f"[部署] 检测到已有 ComfyUI，源码在：{exist_dir}\n")
+            target = exist_dir
         env = make_env()
 
         bundled_python = os.path.join(target, "python", "python.exe")
+        if exist_py and os.path.isfile(exist_py):
+            bundled_python = exist_py       # 已有安装自带的 Python（python_embeded / 上一级 python / venv）
+            log(f"[部署] 使用已有安装自带的 Python：{exist_py}\n")
         bundled_git = os.path.join(target, "git", "cmd", "git.exe")
         custom_git = (dcfg.get("custom_git_path") or "").strip().strip('"')
         has_sys_git = bool(shutil.which("git")) or bool(custom_git and os.path.exists(custom_git))
@@ -2665,9 +2686,9 @@ def _deploy_flow_comfy(self, target, use_portable):
             log("[部署] 冒烟测试没通过（上面有具体报错）。大多数情况下直接启动仍可使用，"
                 "如果启动失败请把日志发给作者\n")
 
-        _deploy_register_instance(self, target, "comfyui", log)
+        _deploy_register_instance(self, reg_target, "comfyui", log)
         log("\n[部署] 全部完成！\n")
-        self._emit("deploy", "done", target=target, branch="comfyui")
+        self._emit("deploy", "done", target=reg_target, branch="comfyui")
     except _DeployCancelled:
         log("\n[部署] 已取消\n")
         self._emit("deploy", "cancelled")
@@ -3113,7 +3134,7 @@ def _api_gpu_switch(self, target, backend, gfx=None):
         return {"ok": False, "error": "请先选择 A 卡的型号（gfx 架构）"}
     iid = None
     for inst in self.cfg.get("instances") or []:
-        if inst.get("webui_root") and _same_path(inst["webui_root"], target):
+        if inst.get("webui_root") and _same_install(inst["webui_root"], target):
             iid = inst["id"]
             r = self._runners.get(iid)
             if r is not None and r.running():
