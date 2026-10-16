@@ -199,6 +199,18 @@ EXTENSION_CATALOG = [
         {"author": True},
     ),
     (
+        "MOSS-Image（OpenMOSS 文生图模型）",
+        "在 Forge Neo 里使用 OpenMOSS 的 MOSS-Image（Base / SFT，擅长中英文文字渲染、Layout 排版）。"
+        "装好重启后顶部 UI Preset 选 moss、Checkpoint 选 MOSS 模型即可出图，和普通模型用法一样；"
+        "支持 LoRA、Hires. fix、img2img / 局部重绘、Layout JSON、GGUF / INT8 压缩版。"
+        "模型在 WebUI 里的「MOSS-Image → 模型下载」一键下载，会按显存推荐组合"
+        "（24G 用官方完整版，12G 左右用压缩版，更小的显存用「逐层搬运」）。"
+        "首次启动会自动给 Forge Neo 本体打一个小补丁（新增 moss 预设），不需要手动操作。仅支持 Neo。",
+        {"classic": None, "neo": "https://github.com/wangjue520/sd-forge-moss-image.git"},
+        "sd-forge-moss-image",
+        {"author": True},
+    ),
+    (
         "Model Keyword（触发词库）",
         "自动补全模型/LoRA 触发词的关键词库，Tag Autocomplete 会读取它的 "
         "lora-keyword.txt 来补全 LoRA 触发词。装完后可以在扩展设置里禁用它本身，"

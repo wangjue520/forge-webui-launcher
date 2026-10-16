@@ -357,7 +357,23 @@
 :root[data-ui-theme="rhine"] .pm-t b { color: var(--rh-brass); }
 :root[data-ui-theme="rhine"] .pm-live { width: 5px; height: 5px; background: var(--rh-olive-2); }
 :root[data-ui-theme="rhine"] .pm-val { font: 600 11px var(--rh-sans); }
-:root[data-ui-theme="rhine"] .sidebar-footer { padding: 12px 22px 0 28px; border-top: 1px solid var(--rh-hair); }
+:root[data-ui-theme="rhine"] .sidebar-footer { padding: 12px 22px 0 28px; border-top: 1px solid var(--rh-hair); flex: none; }
+/* 窗口矮时侧栏放不下 10 块档案板：底部状态栏（点一下启动 / 停止）必须始终露出——
+   先把档案板压扁、间距收紧；仍放不下就让目录区内部滚动，而不是把状态栏挤出侧栏 */
+@media (max-height: 800px) {
+  :root[data-ui-theme="rhine"] #sidebar { padding-top: 22px; }   /* 底部 44px 留给页脚信息条 #rh-foot，不能压 */
+  :root[data-ui-theme="rhine"] .brand { padding-bottom: 16px; }
+  :root[data-ui-theme="rhine"] #nav {
+    flex: 0 1 auto; min-height: 0; gap: 4px; padding-right: 26px;   /* 右侧留出抽出（+20px）的位置，滚动裁剪时不切边 */
+    overflow: hidden auto; scrollbar-width: none;
+  }
+  :root[data-ui-theme="rhine"] #nav::-webkit-scrollbar { display: none; }
+  :root[data-ui-theme="rhine"] .nav-item { min-height: 34px; }
+}
+@media (max-height: 680px) {
+  :root[data-ui-theme="rhine"] #nav { gap: 3px; }
+  :root[data-ui-theme="rhine"] .nav-item { min-height: 30px; font-size: 12px; }
+}
 :root[data-ui-theme="rhine"] .sidebar-footer::before { content: "SYSTEM STATUS"; font: 500 9px var(--rh-sans); letter-spacing: 1.6px; color: var(--rh-mut); }
 
 /* ============ 状态标签：方形状态灯 + 字 ============ */
