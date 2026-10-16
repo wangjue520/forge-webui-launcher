@@ -76,6 +76,14 @@ def guess_architecture(meta, keys):
         return kind, f"{ms_arch}（来自 modelspec 标准元数据）", note
 
     # 2) 键名启发式
+    # MOSS-Image 的三个组件（主模型 / 文本编码器 / VAE），社区 ComfyUI 压缩版带 weight_scale
+    quant = "（ComfyUI ConvRot 压缩版）" if has(".weight_scale") else ""
+    if has("video_embedder.") and has("video_head_modulation"):
+        return kind, f"MOSS-Image 主模型 DiT{quant}", "Forge Neo 装 sd-forge-moss-image 插件后，UI Preset 选 moss、Checkpoint 里选它"
+    if has("linear_attn.in_proj_qkv") and has("language_model."):
+        return kind, f"Qwen3.5 文本编码器{quant}", "MOSS-Image 用：moss 预设下在「VAE / Text Encoder」里选"
+    if has("bn.running_mean") and has("decoder.conv_in"):
+        return kind, "FLUX.2 VAE", "MOSS-Image 用：moss 预设下在「VAE / Text Encoder」里选"
     if has("double_blocks") or has("single_blocks"):
         arch = "Flux 系"
     elif has("conditioner.embedders.1") or has("label_emb") or has("add_embedding") \

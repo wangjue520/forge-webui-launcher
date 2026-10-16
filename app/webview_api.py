@@ -4185,6 +4185,61 @@ def merge_sidecar_from_liblib(model_path, lb, digest=None):
     return info
 
 
+# MOSS-Image（sd-forge-moss-image 插件）：官方 Base / SFT 是 diffusers 目录（权重分片），
+# 压缩版是单文件，都放在 模型库/MOSS-Image 或 WebUI 的 models/MOSS-Image。
+# 不进 LIBRARY_CATEGORIES（那张表还管启动参数和库内归位），只在模型管理页单独显示一个分类。
+MOSS_LABEL = "MOSS-Image（官方目录 / 压缩版）"
+
+
+def _moss_dir(base):
+    """base 下名为 MOSS-Image 的目录（不区分大小写），没有返回 None"""
+    found = ml.library_dir_variants(base, "MOSS-Image") if base and os.path.isdir(base) else []
+    return found[0] if found else None
+
+
+def _is_moss_bundle(path):
+    return os.path.isdir(path) and os.path.isfile(os.path.join(path, "model_index.json"))
+
+
+def _moss_bundle_info(path):
+    """官方目录：(总字节数, 是否带权重, [(组件, 字节数)])"""
+    total, parts, weights = 0, [], False
+    for comp in ("transformer", "text_encoder", "vae", "tokenizer", "scheduler"):
+        size = 0
+        for dirpath, _d, files in os.walk(os.path.join(path, comp)):
+            for fn in files:
+                try:
+                    size += os.path.getsize(os.path.join(dirpath, fn))
+                except OSError:
+                    pass
+                if fn.endswith(".safetensors"):
+                    weights = True
+        total += size
+        parts.append((comp, size))
+    return total, weights, parts
+
+
+def _moss_list(path):
+    """MOSS-Image 分类的列表：官方目录每个算一条，压缩版单文件各一条（不展开分片）"""
+    files = []
+    for name in sorted(os.listdir(path)):
+        full = os.path.join(path, name)
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        mtime_text = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
+        if _is_moss_bundle(full):
+            size, weights, _parts = _moss_bundle_info(full)
+            label = "官方完整版" if weights else "配置包（配合压缩版使用）"
+            files.append({"path": full, "rel": f"{name}（{label}）", "base": "MOSS-Image",
+                          "size": size, "size_text": _fmt_size(size), "mtime_text": mtime_text})
+        elif os.path.isfile(full) and name.lower().endswith(MODEL_EXTS):
+            files.append({"path": full, "rel": f"{name}（压缩版主模型）", "base": "MOSS-Image",
+                          "size": st.st_size, "size_text": _fmt_size(st.st_size), "mtime_text": mtime_text})
+    return files
+
+
 def _api_models_categories(self):
     root = (self.cfg.get("webui_root") or "").strip()
     cats = []
@@ -4193,6 +4248,8 @@ def _api_models_categories(self):
         # 开启共享模型库后，模型管理页管的是模型库（所有实例共用）
         cats = [{"label": c["label"], "path": c["path"], "is_lora": c["is_lora"], "key": c["key"]}
                 for c in ml.library_categories(lib)]
+        if (moss := _moss_dir(lib)):
+            cats.append({"label": MOSS_LABEL, "path": moss, "is_lora": False, "key": "moss", "moss": True})
         self._models_categories = cats
         return {"ok": True, "root": lib, "library": True, "categories":
                 [{"label": c["label"], "is_lora": c["is_lora"], "path": c["path"]} for c in cats]}
@@ -4225,6 +4282,8 @@ def _api_models_categories(self):
                 cats.append({"label": label, "path": path, "is_lora": is_lora,
                              "key": ml.library_key_for_folder(rel)})
         models_dir = os.path.join(root, "models")
+        if (moss := _moss_dir(models_dir)):
+            cats.append({"label": MOSS_LABEL, "path": moss, "is_lora": False, "key": "moss", "moss": True})
         if os.path.isdir(models_dir):
             for name in sorted(os.listdir(models_dir)):
                 sub = os.path.join(models_dir, name)
@@ -4251,6 +4310,13 @@ def _api_models_list(self, cat_index):
         cat = self._models_categories[int(cat_index)]
     except (IndexError, ValueError):
         return {"ok": False, "error": "类别无效", "files": []}
+    if cat.get("moss"):
+        try:
+            files = _moss_list(cat["path"])
+        except OSError as e:
+            return {"ok": False, "error": str(e), "files": []}
+        return {"ok": True, "is_lora": False, "files": files, "total": len(files), "no_info": 0,
+                "orphans": 0, "library": bool(_library_path(self))}
     files = []
     infos = set()    # .civitai.info 的主名：用来发现「只剩信息/预览、模型本体不在这」的情况
     try:
@@ -4290,6 +4356,22 @@ def _api_models_list(self, cat_index):
 def _api_models_detail(self, path):
     out = {"ok": True, "path": path, "preview": None, "file": None,
            "civitai": None, "safetensors": None}
+    if _is_moss_bundle(path):
+        # MOSS-Image 官方目录：按组件汇总大小，复用 safetensors 信息块的展示
+        size, weights, parts = _moss_bundle_info(path)
+        names = {"transformer": "主模型 DiT", "text_encoder": "文本编码器 Qwen3.5", "vae": "VAE（FLUX.2）",
+                 "tokenizer": "分词器", "scheduler": "采样器配置"}
+        out["file"] = {"name": os.path.basename(path), "size_text": _fmt_size(size),
+                       "mtime_text": datetime.fromtimestamp(os.stat(path).st_mtime).strftime("%Y-%m-%d %H:%M")}
+        out["safetensors"] = {
+            "kind": "官方完整版目录" if weights else "官方配置包（不含权重）",
+            "arch": f"MOSS-Image {os.path.basename(path)}（diffusers 格式）",
+            "note": ("Forge Neo 装 sd-forge-moss-image 插件后，UI Preset 选 moss、Checkpoint 选 "
+                     f"MOSS-Image-{os.path.basename(path)}" if weights else
+                     "只有配置和分词器，配合压缩版主模型 / 文本编码器使用"),
+            "train_rows": [[names[c], _fmt_size(s)] for c, s in parts], "tags": [],
+        }
+        return out
     try:
         st = os.stat(path)
         out["file"] = {
@@ -4351,6 +4433,8 @@ def _api_models_detail(self, path):
 
 
 def _api_models_hash_lookup(self, path):
+    if os.path.isdir(path):
+        return {"ok": False, "error": "MOSS-Image 官方目录不在 Civitai 上，不需要按哈希查询"}
     if self._hash_thread and self._hash_thread.is_alive():
         return {"ok": False, "error": "已有查询在进行中"}
     api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
@@ -4492,6 +4576,9 @@ def _api_models_batch_cancel(self):
 
 
 def _api_models_delete(self, path):
+    if os.path.isdir(path):
+        # 官方目录有 26G，误删代价太大：只给出位置，让用户自己在资源管理器里删
+        return {"ok": False, "error": f"MOSS-Image 官方目录请在资源管理器里删除：{path}"}
     base, _ext = os.path.splitext(path)
     sidecars = [p for p in [base + ".civitai.info", base + ".json"] + _preview_candidates(path)
                 if os.path.exists(p) and p != path]
