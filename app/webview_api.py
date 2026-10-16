@@ -240,6 +240,16 @@ EXTENSION_CATALOG = [
         "sd-dynamic-prompts",
     ),
     (
+        "Config-Presets（参数预设一键切换）",
+        "在 txt2img / img2img 页面加一个「配置预设」下拉框，一键切换整套出图参数："
+        "分辨率、步数、CFG、采样器、Hires. fix、批量数等，比如「快速草图 ↔ 高质量出图」「手机壁纸尺寸」。"
+        "点 🖌️ 可以把当前页面上的参数存成自己的预设，其他插件的参数（XYZ 图表、ControlNet 等）也能加进去。"
+        "预设保存在插件目录的 config-txt2img.json / config-img2img.json 里。"
+        "不需要额外的 Python 依赖，Classic / Neo 都能用。",
+        "https://github.com/Zyin055/Config-Presets.git",
+        "Config-Presets",
+    ),
+    (
         "TIPO（提示词自动生成）",
         "输入少量标签或一句描述，自动生成完整的 Danbooru 风格提示词。"
         "模型专为图像生成训练，体积小、NSFW 也能用，抽卡式出图很合适。"
