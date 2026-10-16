@@ -187,6 +187,18 @@ EXTENSION_CATALOG = [
         {"author": True},
     ),
     (
+        "Anima 相机控制（3D 可视化相机角度）",
+        "在页面里直接拖拽 3D 场景控制相机：拖粉色点调方位（前/后/左/右）、青色点调高度（俯/平/仰视）、"
+        "黄色点或滚轮调距离（特写~远景 6 档），自动生成带权重的结构化相机提示词附加到正面提示词，"
+        "Anima / Illustrious 这类懂 Danbooru 相机标签的模型效果最佳。"
+        "移植自 ComfyUI 插件 Comfyui-Anima_camera_angle，标签文案和各轴权重都可在面板里自定义。"
+        "提示：默认权重较大，出图出现噪点/伪影时在「标签 → 参数控制」里把 XY 乘数降到 1~3。"
+        "不需要额外的 Python 依赖，Classic / Neo 都能用（Classic 已实测）。",
+        "https://github.com/wangjue520/sd-webui-anima-camera-angle.git",
+        "sd-webui-anima-camera-angle",
+        {"author": True},
+    ),
+    (
         "Model Keyword（触发词库）",
         "自动补全模型/LoRA 触发词的关键词库，Tag Autocomplete 会读取它的 "
         "lora-keyword.txt 来补全 LoRA 触发词。装完后可以在扩展设置里禁用它本身，"
