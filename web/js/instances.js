@@ -81,10 +81,32 @@
       const wasActive = App.instances.active;
       setInstances(r);
       // 当前实例被删掉了（后端已经切到别的实例）→ 重载让各页面换成新实例的配置
-      if (wasActive && r.active !== wasActive) reloadKeepPage();
+      if (wasActive && r.active !== wasActive) { reloadKeepPage(); return; }
+      checkKindChanged(r);
     } catch (e) { console.error(e); }
   }
   App.refreshInstances = refresh;
+
+  /* 后端按目录重新检测实例类型（cm.reconcile_kind）后发现记录错了会改掉：
+     当前实例的类型变了 → 各页面都按 App.cfg.webui_branch 渲染，必须整页重载；
+     别的实例被纠正 → 列表已经刷新，提示一下就行 */
+  const toastedFix = new Set();
+  function checkKindChanged(r) {
+    const me = (r.instances || []).find((i) => i.id === r.active);
+    if (me && App.cfg && me.branch && me.branch !== App.cfg.webui_branch) {
+      if (App.kindReloadPending) return;
+      App.kindReloadPending = true;
+      App.toast(`按目录重新检测：当前实例实际是 ${me.kind_label}，已自动更正`, "ok", 3000);
+      setTimeout(reloadKeepPage, 900);
+      return;
+    }
+    (r.kind_fixed || []).forEach((id) => {
+      if (id === r.active || toastedFix.has(id)) return;
+      toastedFix.add(id);
+      const i = (r.instances || []).find((x) => x.id === id);
+      if (i) App.toast(`实例「${i.name}」按目录重新检测为 ${i.kind_label}，已自动更正`, "ok", 4000);
+    });
+  }
 
   function reloadKeepPage() {
     try {

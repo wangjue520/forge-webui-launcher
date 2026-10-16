@@ -118,6 +118,15 @@
     try {
       const r = await App.api.instance_config_update(editIid, { [key]: val });
       if (r && r.ok === false) { App.toast(r.error || "配置保存失败", "error"); return; }
+      // 选的分支和目录不是一类（ComfyUI 目录选了 Forge，或反过来）：后端已按目录改回
+      if (r && r.kind_fixed) {
+        editCfg.webui_branch = r.webui_branch;
+        if (editingIsActive()) App.cfg.webui_branch = r.webui_branch;
+        building = true;
+        try { $("#s-branch").value = r.webui_branch; } finally { building = false; }
+        rebuildBranchDependent();
+        App.toast(`这个实例的目录是 ${r.kind_label}，分支只能选同类的，已按目录改回`, "error", 5000);
+      }
       // 改的是当前实例才刷新启动页的参数预览；改别的实例不动预览
       if (r && r.cmd_args != null && editingIsActive()) App.refreshCmdPreview(r.cmd_args);
     } catch (e) {

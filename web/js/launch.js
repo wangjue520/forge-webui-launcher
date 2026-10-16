@@ -226,6 +226,8 @@
           const r = await App.api.instance_update(id, { webui_root: $("#launch-root").value.trim() });
           const me = r && r.instances && r.instances.find((i) => i.id === id);
           if (me && me.branch !== App.cfg.webui_branch) {
+            if (App.kindReloadPending) return;   // instances.js 已经在安排重载了
+            App.kindReloadPending = true;
             App.toast(`检测到这是 ${me.kind_label}，已切换实例类型`, "ok");
             setTimeout(() => {
               try { sessionStorage.setItem("skip-splash", "1"); sessionStorage.setItem("return-page", "launch"); } catch (e) {}

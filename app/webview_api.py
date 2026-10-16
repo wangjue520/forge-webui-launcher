@@ -498,6 +498,10 @@ class LauncherApi:
         # 一键启动：每个实例一个 InstanceRunner（process_manager.py）
         self._runners = {}
         self._runners_lock = threading.Lock()
+        # 改实例配置（顶层投影 ⇄ 实例）的几处要串行：pywebview 每个 JS 调用各占一个
+        # 线程，「一键启动」页换根目录时 update_config 和 instance_update 会同时到，
+        # 两边的 absorb_active 交错就会把旧分支盖回去（ComfyUI 实例被记成 Forge Neo）
+        self._cfg_lock = threading.RLock()
         self._open_lock = threading.Lock()
         self._last_open_url = None
         self._last_open_url_ts = 0.0
@@ -775,6 +779,9 @@ class LauncherApi:
             self._auto_pick_started = True
             self._spawn(lambda: _auto_pick_install(self), name="auto-pick-install")
             self._spawn(lambda: _ensure_shortcuts(self), name="shortcuts")
+        # 每次打开 / 刷新页面都按目录重新认一遍各实例的类型，记录错了就在这里纠正，
+        # 后面返回给前端的 config / 实例列表就已经是对的
+        self._reconcile_kinds()
         local_ver = updater.get_local_info(self.cfg)
         deploy_branches = [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS]
         # 当前活动实例是 ComfyUI 时把 ComfyUI 排到第一位（Forge 用户顺序不变）：
@@ -799,13 +806,36 @@ class LauncherApi:
         }
 
     def update_config(self, changes):
+        fixed = []
         if isinstance(changes, dict):
-            self.cfg.update(changes)
-            try:
-                cm.save_config(self.cfg)
-            except OSError:
-                pass
-        return {"ok": True, "cmd_args": cm.build_commandline_args(self.cfg)}
+            with self._cfg_lock:
+                self.cfg.update(changes)
+                # 换了根目录（一键启动页的输入框走的就是这里）→ 按新目录重新认定当前实例类型
+                if "webui_root" in changes:
+                    fixed = cm.reconcile_all_kinds(self.cfg, only={self.cfg.get("active_instance")})
+                try:
+                    cm.save_config(self.cfg)
+                except OSError:
+                    pass
+            if fixed:
+                self._emit("instances", "changed")
+        return {"ok": True, "cmd_args": cm.build_commandline_args(self.cfg),
+                "kind_fixed": bool(fixed)}
+
+    def _reconcile_kinds(self, only=None):
+        """
+        按目录重新检测实例类型（ComfyUI / Forge），纠正记录错的实例并保存。
+        only = 只检查这些实例 id；None = 全部。返回被纠正的实例 id 列表。
+        刷新页面（get_state）、实例列表刷新、扩展页、启动前、高级选项改分支时都会调。
+        """
+        with self._cfg_lock:
+            fixed = cm.reconcile_all_kinds(self.cfg, only=only)
+            if fixed:
+                try:
+                    cm.save_config(self.cfg)
+                except OSError:
+                    pass
+        return fixed
 
     def get_cmd_args(self):
         return {"ok": True, "cmd_args": cm.build_commandline_args(self.cfg)}
@@ -934,16 +964,23 @@ class LauncherApi:
         return cm.instance_cfg(self.cfg, iid)
 
     def _instance_set_root(self, iid, root):
-        inst = cm.find_instance(self.cfg, iid)
-        if inst is None:
-            return
-        if iid == self.cfg.get("active_instance"):
-            self.cfg["webui_root"] = root
-        inst["webui_root"] = root
-        try:
-            cm.save_config(self.cfg)
-        except OSError:
-            pass
+        """记下实例的根目录，并按新目录重新认定实例类型。返回类型是否被纠正。"""
+        with self._cfg_lock:
+            inst = cm.find_instance(self.cfg, iid)
+            if inst is None:
+                return False
+            cm.absorb_active(self.cfg)
+            inst["webui_root"] = root
+            fixed = bool(cm.reconcile_kind(inst))
+            if iid == self.cfg.get("active_instance"):
+                cm.project_active(self.cfg)
+            try:
+                cm.save_config(self.cfg)
+            except OSError:
+                pass
+        if fixed:
+            self._emit("instances", "changed")
+        return fixed
 
     def _runner_ports_in_use(self, except_iid):
         """其他正在运行的实例占用的端口（多开时分配端口要避开）"""
@@ -2062,13 +2099,14 @@ def _auto_pick_install(self):
     inst = cm.find_instance(self.cfg, iid)
     if not inst or self._runner(iid).running():
         return
-    cm.absorb_active(self.cfg)
-    inst["webui_root"] = pick["path"]
-    inst["webui_branch"] = pick["branch"]
-    inst["webui_variant"] = pick.get("variant") or ""
-    inst["name"] = pick["label"]
-    cm.project_active(self.cfg)
-    cm.save_config(self.cfg)
+    with self._cfg_lock:
+        cm.absorb_active(self.cfg)
+        inst["webui_root"] = pick["path"]
+        inst["webui_branch"] = pick["branch"]
+        inst["webui_variant"] = pick.get("variant") or ""
+        inst["name"] = pick["label"]
+        cm.project_active(self.cfg)
+        cm.save_config(self.cfg)
     self._emit("app", "installs_detected", picked=pick["path"], label=pick["label"],
                count=len(found), new_machine=bool(self.cfg.get("_new_machine")))
 
@@ -2097,7 +2135,9 @@ def _instances_payload(self):
 
 
 def _api_instances_list(self):
-    return {"ok": True, **_instances_payload(self)}
+    # 「刷新」实例列表时顺带按目录重新认一遍类型；前端看到 kind_fixed 里有当前实例就整页重载
+    fixed = self._reconcile_kinds()
+    return {"ok": True, "kind_fixed": fixed, **_instances_payload(self)}
 
 
 def _api_instance_add(self, root, name=""):
@@ -2156,29 +2196,26 @@ def _api_instance_remove(self, iid):
 
 def _api_instance_update(self, iid, changes):
     """实例管理页可以直接改的几项：名字 / 端口 / 根目录"""
-    inst = cm.find_instance(self.cfg, iid)
-    if not inst or not isinstance(changes, dict):
-        return {"ok": False, "error": "实例不存在"}
-    cm.absorb_active(self.cfg)
-    for k in ("name", "port", "webui_root"):
-        if k in changes:
-            v = str(changes[k] or "").strip()
-            if k == "port" and v and not v.isdigit():
-                return {"ok": False, "error": "端口必须是数字"}
-            if k == "name" and not v:
-                continue
-            inst[k] = v
-            if k == "webui_root" and v:
-                kind = cm.detect_kind(v)
-                if kind == "comfyui":
-                    inst["webui_branch"] = "comfyui"
-                elif kind == "forge" and inst.get("webui_branch") == "comfyui":
-                    inst["webui_branch"] = _guess_forge_branch(v)
-    if iid == self.cfg.get("active_instance"):
-        cm.project_active(self.cfg)
-    cm.save_config(self.cfg)
+    with self._cfg_lock:
+        inst = cm.find_instance(self.cfg, iid)
+        if not inst or not isinstance(changes, dict):
+            return {"ok": False, "error": "实例不存在"}
+        cm.absorb_active(self.cfg)
+        for k in ("name", "port", "webui_root"):
+            if k in changes:
+                v = str(changes[k] or "").strip()
+                if k == "port" and v and not v.isdigit():
+                    return {"ok": False, "error": "端口必须是数字"}
+                if k == "name" and not v:
+                    continue
+                inst[k] = v
+        # 换了目录：ComfyUI ↔ WebUI 跟着目录走（规则见 cm.reconcile_kind）
+        fixed = bool("webui_root" in changes and cm.reconcile_kind(inst))
+        if iid == self.cfg.get("active_instance"):
+            cm.project_active(self.cfg)
+        cm.save_config(self.cfg)
     self._emit("instances", "changed")
-    return {"ok": True, **_instances_payload(self)}
+    return {"ok": True, "kind_fixed": [iid] if fixed else [], **_instances_payload(self)}
 
 
 def _api_instance_switch(self, iid):
@@ -2202,19 +2239,32 @@ def _api_instance_config_get(self, iid):
 
 def _api_instance_config_update(self, iid, changes):
     """高级选项页按实例保存：只接受实例级键，写进指定实例（可以不是当前实例）"""
-    inst = cm.find_instance(self.cfg, iid)
-    if not inst or not isinstance(changes, dict):
-        return {"ok": False, "error": "实例不存在"}
-    # 先把当前实例的顶层投影收回去，避免 save_config 时把旧值盖回来
-    cm.absorb_active(self.cfg)
-    for k, v in changes.items():
-        if k in cm.INSTANCE_KEYS:
-            inst[k] = v
-    if iid == self.cfg.get("active_instance"):
-        cm.project_active(self.cfg)
-    cm.save_config(self.cfg)
-    eff = cm.instance_cfg(self.cfg, iid)
-    return {"ok": True, "cmd_args": cm.build_commandline_args(eff)}
+    with self._cfg_lock:
+        inst = cm.find_instance(self.cfg, iid)
+        if not inst or not isinstance(changes, dict):
+            return {"ok": False, "error": "实例不存在"}
+        # 先把当前实例的顶层投影收回去，避免 save_config 时把旧值盖回来
+        cm.absorb_active(self.cfg)
+        before = inst.get("webui_branch")
+        for k, v in changes.items():
+            if k in cm.INSTANCE_KEYS:
+                inst[k] = v
+        # 分支选成了和目录不同大类的（ComfyUI 目录选了 Forge，或反过来）→ 按目录改回来
+        fixed = False
+        if "webui_branch" in changes or "webui_root" in changes:
+            fixed = bool(cm.reconcile_kind(inst))
+        if iid == self.cfg.get("active_instance"):
+            cm.project_active(self.cfg)
+        cm.save_config(self.cfg)
+        eff = cm.instance_cfg(self.cfg, iid)
+    out = {"ok": True, "cmd_args": cm.build_commandline_args(eff)}
+    if fixed:
+        # 只是把误选的分支改回原样时实例没变，不用广播（否则前端会白白整页重载）
+        if inst.get("webui_branch") != before:
+            self._emit("instances", "changed")
+        out.update(kind_fixed=True, webui_branch=inst.get("webui_branch"),
+                   kind_label=cm.kind_label(inst.get("webui_branch"), inst.get("webui_variant")))
+    return out
 
 
 def _api_set_multi_ui(self, on):
@@ -5235,6 +5285,9 @@ def _api_open_output_folder(self, which):
 def _ext_target(self, iid=None):
     """「常用插件」页的安装目标实例：(实例配置, 实例信息 dict)。iid 为空 = 当前实例"""
     iid = iid or self.cfg.get("active_instance")
+    # 先按目录重新认一遍这个实例的类型：记录错了的话，扩展会装进错的目录
+    # （ComfyUI 实例被当成 WebUI → 往 ComfyUI 根目录建 extensions/）
+    fixed = bool(iid and self._reconcile_kinds(only={iid}))
     cfg = cm.instance_cfg(self.cfg, iid) if iid else None
     if cfg is None:
         cfg, iid = self.cfg, self.cfg.get("active_instance")
@@ -5253,7 +5306,11 @@ def _ext_target(self, iid=None):
         "kind_label": cm.kind_label(cfg.get("webui_branch"), cfg.get("webui_variant")),
         "root": root, "target_dir": target_dir or "",
         "running": bool(r and r.running()),
+        "active": iid == self.cfg.get("active_instance"),
+        "kind_fixed": fixed,
     }
+    if fixed:
+        self._emit("instances", "changed")
     return cfg, info, comfy_dir
 
 

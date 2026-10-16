@@ -187,6 +187,12 @@
       last = r || {};
       items = (r && r.items) || [];
       others = (r && r.others) || [];
+      // 后端每次读列表前都会按目录重新认一遍目标实例的类型。纠正的是当前实例时
+      // instances.js 会收到 changed 事件并整页重载；别的实例在这里提示一下
+      const t = last.target || {};
+      if (t.kind_fixed && !t.active) {
+        App.toast(`「${t.name}」按目录重新检测为 ${t.kind_label}，已自动更正`, "ok", 4000);
+      }
       renderTarget(last);
       if (r && r.has_root === false) {
         $("#ext-list").innerHTML = '<div class="hint" style="padding:10px">先在「一键启动」页给这个实例设置正确的根目录，才能检测/安装</div>';

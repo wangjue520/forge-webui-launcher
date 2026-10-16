@@ -999,6 +999,69 @@ def detect_kind(root):
     return None
 
 
+def reconcile_kind(inst):
+    """
+    按根目录的实际内容重新认定实例类型，纠正 ComfyUI ↔ Forge 的大类错位。
+
+    实例类型只记在 webui_branch 里，而它可能和目录对不上：比如从「一键启动」页
+    选目录时，全局 update_config 和 instance_update 两个调用并发，旧分支被
+    absorb_active 盖回去；或者在高级选项 / 部署页误选了另一类分支。错位后扩展页
+    会往 ComfyUI 目录里装 WebUI 扩展、启动参数也会用错。
+
+    只纠正大类：目录是 ComfyUI 就一定是 comfyui；目录是 Forge 而记录成 comfyui
+    时才重新猜 Forge 分支。同属 Forge 的 neo2 / neo / classic 是用户在高级选项里
+    选的参数体系，不动。目录无效或还没设置时不猜。
+
+    名字还是旧类型的自动名（「Forge Neo」「Forge Neo 2」这种）就跟着改；
+    用户自己起的名字不动。
+
+    返回 None 表示没有改动，否则返回 (旧分支, 新分支)。
+    """
+    if not inst:
+        return None
+    root = (inst.get("webui_root") or "").strip()
+    kind = detect_kind(root)
+    if not kind:
+        return None
+    old_b = inst.get("webui_branch") or ""
+    old_v = inst.get("webui_variant") or ""
+    if kind == "comfyui":
+        if old_b == "comfyui":
+            return None
+        new_b, new_v = "comfyui", ""
+    else:
+        if old_b and old_b != "comfyui":
+            return None
+        import install_finder  # install_finder 反过来 import 本模块，放函数里避免循环导入
+        new_b = install_finder.guess_forge_branch(root)
+        new_v = install_finder.forge_variant(root)
+    old_label = kind_label(old_b, old_v)
+    name = (inst.get("name") or "").strip()
+    inst["webui_branch"], inst["webui_variant"] = new_b, new_v
+    if not name or name == old_label or re.fullmatch(re.escape(old_label) + r" \d+", name):
+        inst["name"] = kind_label(new_b, new_v)
+    return old_b, new_b
+
+
+def reconcile_all_kinds(cfg, only=None):
+    """
+    对所有实例（或只对 only 里列出的实例 id）执行 reconcile_kind。
+    返回被纠正的实例 id 列表；有改动时会同步顶层投影，但不负责保存。
+    """
+    if not cfg.get("instances"):
+        return []
+    absorb_active(cfg)
+    fixed = []
+    for inst in cfg["instances"]:
+        if only is not None and inst.get("id") not in only:
+            continue
+        if reconcile_kind(inst):
+            fixed.append(inst.get("id"))
+    if fixed:
+        project_active(cfg)
+    return fixed
+
+
 def comfy_python(cfg, root):
     custom = (cfg.get("custom_python_path") or "").strip().strip('"')
     if custom:

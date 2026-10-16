@@ -431,7 +431,11 @@ class InstanceRunner:
     def precheck(self, root):
         root = (root or "").strip()
         cfg = self.cfg
-        if cm.is_comfy(cfg):
+        # 以目录实际类型为准：实例记录的分支可能是错的（见 cm.reconcile_kind），
+        # 按错的类型做预检会给出完全不相干的提示
+        kind = cm.detect_kind(root)
+        comfy = (kind == "comfyui") if kind else cm.is_comfy(cfg)
+        if comfy:
             return self._precheck_comfy(root, cfg)
         return self._precheck_forge(root, cfg)
 
@@ -574,6 +578,10 @@ class InstanceRunner:
         with self.lock:
             self.gen += 1
         root = (root or "").strip()
+        # 目录有效就先记下来并按目录重新认定实例类型，再按（纠正后的）类型校验/启动；
+        # 否则 ComfyUI 实例被误记成 Forge 时会报「目录下没有 webui.bat」
+        if cm.detect_kind(root):
+            self.api._instance_set_root(self.iid, root)
         cfg = dict(self.cfg)
         comfy = cm.is_comfy(cfg)
         if comfy:
