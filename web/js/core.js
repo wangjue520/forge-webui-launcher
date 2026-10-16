@@ -297,6 +297,10 @@
     const pill = $("#global-status");
     pill.dataset.state = state;
     $("#global-status-text").textContent = text;
+    // 侧栏状态标签兼做快捷开关：运行中/启动中点一下停止，否则点一下启动
+    const busy = state === "ready" || state === "running" || state === "starting";
+    $("#global-status-act").textContent = busy ? "停止 ■" : "启动 ▶";
+    pill.title = busy ? "点击停止" : "点击启动";
   };
 
   /* ---------- 页面导航 ---------- */

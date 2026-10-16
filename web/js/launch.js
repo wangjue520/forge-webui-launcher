@@ -169,6 +169,38 @@
     catch (e) { App.toast("停止失败：" + e.message, "error"); }
   }
 
+  // 侧栏底部状态标签的快捷开关：有实例在跑/在启动就全部停止，否则启动当前实例
+  async function onQuickToggle() {
+    const pill = $("#global-status");
+    const st = pill.dataset.state;
+    const busy = st === "ready" || st === "running" || st === "starting";
+    pill.disabled = true;
+    try {
+      if (busy) {
+        const multi = App.instances && App.instances.multi;
+        const ids = multi
+          ? App.instances.instances.filter((i) => i.status && (i.status.running ||
+              ["ready", "running", "starting"].includes(i.status.state))).map((i) => i.id)
+          : [];
+        if (!ids.length) return await onStop();
+        for (const id of ids) {
+          try { await App.api.launch_stop(id); }
+          catch (e) { App.toast("停止失败：" + e.message, "error"); }
+        }
+      } else {
+        const root = ($("#launch-root").value || App.cfg.webui_root || "").trim();
+        if (!root) {
+          App.toast(`还没设置 ${App.kindName ? App.kindName() : "WebUI"} 根目录`, "error");
+          App.showPage("launch");
+          return;
+        }
+        await startInstance(null, root);
+      }
+    } finally {
+      pill.disabled = false;
+    }
+  }
+
   // 出图目录的实际位置是从 WebUI 的 config.json 算出来的（官方默认 outputs，
   // 也有整合包/改过设置的是 output 或别的盘）。这里顺带按实际情况决定
   // 「当天」那两个按钮要不要显示 —— 没开「按日期分目录」的话它们没有意义。
@@ -213,6 +245,7 @@
 
       $("#launch-start").addEventListener("click", onStart);
       $("#launch-stop").addEventListener("click", onStop);
+      $("#global-status").addEventListener("click", onQuickToggle);
       $("#launch-log-clear").addEventListener("click", () => { $("#launch-log").textContent = ""; });
       $("#launch-open-browser").addEventListener("click", () => {
         if (launchUrl) App.api.open_url(launchUrl);
@@ -226,8 +259,6 @@
           const r = await App.api.instance_update(id, { webui_root: $("#launch-root").value.trim() });
           const me = r && r.instances && r.instances.find((i) => i.id === id);
           if (me && me.branch !== App.cfg.webui_branch) {
-            if (App.kindReloadPending) return;   // instances.js 已经在安排重载了
-            App.kindReloadPending = true;
             App.toast(`检测到这是 ${me.kind_label}，已切换实例类型`, "ok");
             setTimeout(() => {
               try { sessionStorage.setItem("skip-splash", "1"); sessionStorage.setItem("return-page", "launch"); } catch (e) {}

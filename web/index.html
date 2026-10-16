@@ -127,9 +127,9 @@
     <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
     <section class="perf-mon" id="perf-mon" aria-label="性能监控"></section>
     <div class="sidebar-footer">
-      <div id="global-status" class="status-pill" data-state="idle">
-        <span class="dot"></span><span id="global-status-text">未启动</span>
-      </div>
+      <button type="button" id="global-status" class="status-pill" data-state="idle" title="点击启动">
+        <span class="dot"></span><span id="global-status-text">未启动</span><span id="global-status-act" aria-hidden="true">启动 ▶</span>
+      </button>
     </div>
   </aside>
 

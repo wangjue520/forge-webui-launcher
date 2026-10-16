@@ -170,7 +170,12 @@ body {
 @keyframes pulse { 50% { opacity: .2; } }
 
 /* 侧栏里的状态标签（黑底上） */
-#sidebar .status-pill { width: 100%; background: var(--ink-2); border-color: rgba(255, 255, 255, .12); color: #a9abaf; }
+#global-status { font-family: inherit; text-align: left; cursor: pointer; }
+#global-status:disabled { cursor: progress; }
+#global-status-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#global-status-act { flex: none; font-size: 11px; opacity: .55; transition: opacity .15s; }
+#global-status:hover #global-status-act, #global-status:focus-visible #global-status-act { opacity: 1; }
+#sidebar .status-pill { width: 100%;background: var(--ink-2); border-color: rgba(255, 255, 255, .12); color: #a9abaf; }
 #sidebar .status-pill .dot { background: #5c5e63; }
 #sidebar .status-pill[data-state="starting"] { color: var(--yel); border-color: rgba(255, 242, 0, .5); }
 #sidebar .status-pill[data-state="ready"], #sidebar .status-pill[data-state="running"] { background: var(--yel); color: var(--ink); border-color: var(--yel); }
