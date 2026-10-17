@@ -132,11 +132,14 @@ SETTINGS_BRANCH_OPTIONS = [
 # 附加信息：{"author": True} = 作者自制（列表里打标）
 EXTENSION_CATALOG = [
     (
-        "简体中文汉化 (zh_CN)",
-        "把网页界面翻译成中文。装好后还需要去 Settings → User interface → "
+        "简体中文汉化 (zh_CN，补充翻译版)",
+        "把网页界面翻译成中文。基于 dtlnor 汉化（Anne 分支）补充完善：新增 1080 条词条，"
+        "补全主界面、设置页和 ADetailer 等扩展选项，共 6672 条。"
+        "装好后还需要去 Settings → User interface → "
         "Localization 选择 zh_CN，点 Apply settings 再 Reload UI 才会生效"
-        "（这一步是网页内设置，装完插件后系统不能替你点，需要手动选一次）。",
-        "https://github.com/dtlnor/stable-diffusion-webui-localization-zh_CN.git",
+        "（这一步是网页内设置，装完插件后系统不能替你点，需要手动选一次）；仍有少量英文时按 Ctrl+F5 强制刷新。"
+        "以前装过原版的会显示「换成推荐版本」，点一下就能升级。",
+        "https://github.com/wangjue520/stable-diffusion-webui-localization-zh_CN.git",
         "stable-diffusion-webui-localization-zh_CN",
     ),
     (
