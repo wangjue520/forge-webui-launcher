@@ -42,6 +42,47 @@
     } catch (e) { App.toast("展开路径失败：" + e.message, "error"); }
   }
 
+  const modelInfo = {};   // key -> { label, cached }
+
+  // 按钮文字跟着选中模型的缓存状态走：已在本地 =「加载模型」，没有 =「导入 / 下载…」
+  function updateLoadLabel() {
+    const info = modelInfo[$("#wd-model").value];
+    $("#wd-load").textContent = info && info.cached ? "加载模型" : "导入 / 下载…";
+  }
+
+  function markCached(key) {
+    if (!modelInfo[key] || modelInfo[key].cached) return;
+    modelInfo[key].cached = true;
+    const opt = $("#wd-model").querySelector(`option[value="${key}"]`);
+    if (opt) opt.textContent = modelInfo[key].label + "（已缓存）";
+    updateLoadLabel();
+  }
+
+  // 导入自己下好的模型：直接选文件（选文件夹的窗口里看不到文件，容易选错、以为没反应）
+  async function doImport() {
+    const r = await App.api.choose_files(["WD14 模型文件 (*.onnx;*.csv)", "所有文件 (*.*)"], true);
+    if (!r || !r.ok) { if (r && r.error) App.toast("打开文件选择失败：" + r.error, "error"); return; }
+    if (!r.paths || !r.paths.length) return;   // 取消了
+    loading = true; refreshRunBtn();
+    $("#wd-model-status").textContent = "导入中…";
+    $("#wd-model-status").dataset.status = "";
+    try {
+      const res = await App.api.wd14_import_model($("#wd-model").value, r.paths);
+      if (res && res.ok === false) {
+        loading = false; refreshRunBtn();
+        $("#wd-model-status").textContent = "导入失败";
+        $("#wd-model-status").dataset.status = "bad";
+        App.modal("导入失败", App.esc(res.error || ""), [{ id: "ok", label: "知道了", kind: "primary" }]);
+        return;
+      }
+      markCached($("#wd-model").value);
+      App.toast("模型文件已导入，正在准备独立运行环境（首次需要下载约几十 MB）…", "ok");
+    } catch (e) {
+      loading = false; refreshRunBtn();
+      App.toast("导入失败：" + e.message, "error");
+    }
+  }
+
   App.pages.wd14 = {
     async init() {
       modelProg = App.progress($("#wd-model-progress"));
@@ -60,7 +101,10 @@
           o.textContent = m.label + (m.cached ? "（已缓存）" : "");
           sel.appendChild(o);
           modelUrls[m.key] = m.urls || [];
+          modelInfo[m.key] = { label: m.label, cached: !!m.cached };
         });
+        sel.addEventListener("change", updateLoadLabel);
+        updateLoadLabel();
         if (r.model_ready) {
           modelReady = true;
           $("#wd-model-status").textContent = "模型已就绪";
@@ -78,6 +122,23 @@
       });
 
       $("#wd-load").addEventListener("click", async () => {
+        const key = $("#wd-model").value;
+        if (!(modelInfo[key] && modelInfo[key].cached)) {
+          // 本地还没有：先选「导入」还是「下载」，下载再二次确认，不再一点就开始下几百 MB
+          const label = (modelInfo[key] && modelInfo[key].label) || key;
+          const v = await App.modal("模型还没有下载",
+            App.esc(`「${label}」还不在本地。可以导入自己下好的 model.onnx 和 selected_tags.csv，也可以在线下载。`),
+            [{ id: "import", label: "从本地导入…", kind: "primary" },
+             { id: "download", label: "在线下载" },
+             { id: "cancel", label: "取消" }]);
+          if (v === "import") { await doImport(); return; }
+          if (v !== "download") return;
+          const ok = await App.modal("确认下载",
+            App.esc(`将下载「${label}」。\n\n会依次尝试国内镜像和 HuggingFace 官方源，支持断点续传；` +
+                    "首次使用还会安装独立运行环境（约几十 MB）。确定开始下载吗？"),
+            [{ id: "go", label: "开始下载", kind: "primary" }, { id: "cancel", label: "取消" }]);
+          if (ok !== "go") return;
+        }
         loading = true; refreshRunBtn();
         $("#wd-model-status").textContent = "加载中…";
         $("#wd-model-status").dataset.status = "";
@@ -113,25 +174,7 @@
           });
       });
 
-      $("#wd-import").addEventListener("click", async () => {
-        const r = await App.api.choose_directory("选择放着 model.onnx 和 selected_tags.csv 的文件夹", "");
-        if (!r || !r.ok || !r.path) return;
-        loading = true; refreshRunBtn();
-        $("#wd-model-status").textContent = "导入中…";
-        $("#wd-model-status").dataset.status = "";
-        try {
-          const res = await App.api.wd14_import_model($("#wd-model").value, r.path);
-          if (res && res.ok === false) {
-            loading = false; refreshRunBtn();
-            $("#wd-model-status").textContent = "导入失败";
-            $("#wd-model-status").dataset.status = "bad";
-            App.modal("导入失败", App.esc(res.error || ""), [{ id: "ok", label: "知道了", kind: "primary" }]);
-          }
-        } catch (e) {
-          loading = false; refreshRunBtn();
-          App.toast("导入失败：" + e.message, "error");
-        }
-      });
+      $("#wd-import").addEventListener("click", doImport);
 
       $("#wd-pick-files").addEventListener("click", async () => {
         const r = await App.api.choose_images(true);
@@ -220,6 +263,7 @@
         modelProg.set(pct, `${e.name}：${App.fmtBytes(e.downloaded)} / ${App.fmtBytes(e.total)}`);
       });
       App.on("wd14", "model_ready", () => {
+        markCached($("#wd-model").value);
         loading = false; modelReady = true;
         modelProg.hide();
         $("#wd-model-status").textContent = "模型已就绪";

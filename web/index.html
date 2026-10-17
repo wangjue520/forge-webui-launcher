@@ -711,9 +711,9 @@
           <div class="progress" id="wd-model-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
           <div class="row" style="margin-top:8px">
             <button class="btn btn-sm" id="wd-open-repo">打开模型下载页面</button>
-            <button class="btn btn-sm" id="wd-import">手动导入模型…</button>
+            <button class="btn btn-sm" id="wd-import">从本地导入…</button>
           </div>
-          <div class="hint">下载失败时走这条路：点「打开模型下载页面」，把 <b>model.onnx</b> 和 <b>selected_tags.csv</b> 两个文件下到同一个文件夹（model.onnx 比较大，用下载工具拖会快很多），然后点「手动导入模型…」选中那个文件夹。自动下载本身已经会依次尝试国内镜像和官方源，并且支持断点续传——中途断了再点一次「加载模型」会接着下，不用从头来。</div>
+          <div class="hint">模型还没下载时，按钮显示「导入 / 下载…」：可以选在线下载（会二次确认，依次尝试国内镜像和官方源，支持断点续传），也可以导入自己下好的文件——点「打开模型下载页面」下载 <b>model.onnx</b> 和 <b>selected_tags.csv</b>（model.onnx 比较大，用下载工具会快很多），再点「从本地导入…」，按住 Ctrl 同时选中这两个文件。</div>
         </div>
 
         <div class="card">

@@ -229,23 +229,35 @@ def import_model_files(base_dir, model_key, src_dir):
 
     if model_key not in MODEL_CATALOG:
         raise WD14TaggerError(f"未知的模型: {model_key}")
-    if not src_dir or not os.path.isdir(src_dir):
-        raise WD14TaggerError("选择的文件夹不存在")
 
     wanted = {"model.onnx": None, "selected_tags.csv": None}
-    for dirpath, _dirs, files in os.walk(src_dir):
-        for fn in files:
-            low = fn.lower()
-            if low in wanted and wanted[low] is None:
-                wanted[low] = os.path.join(dirpath, fn)
-        if all(wanted.values()):
-            break
+    if isinstance(src_dir, (list, tuple)):
+        # 直接选的两个文件：按扩展名认（下载工具 / 浏览器可能给文件改了名，比如 model (1).onnx）
+        files = [p for p in src_dir if p and os.path.isfile(p)]
+        for want, ext in (("model.onnx", ".onnx"), ("selected_tags.csv", ".csv")):
+            cands = [p for p in files if p.lower().endswith(ext)]
+            exact = [p for p in cands if os.path.basename(p).lower() == want]
+            if exact or len(cands) == 1:
+                wanted[want] = (exact or cands)[0]
+            elif len(cands) > 1:
+                raise WD14TaggerError(f"选了多个 {ext} 文件，不知道用哪个，请只选一个 {want}。")
+    else:
+        if not src_dir or not os.path.isdir(src_dir):
+            raise WD14TaggerError("选择的文件夹不存在")
+        for dirpath, _dirs, files in os.walk(src_dir):
+            for fn in files:
+                low = fn.lower()
+                if low in wanted and wanted[low] is None:
+                    wanted[low] = os.path.join(dirpath, fn)
+            if all(wanted.values()):
+                break
 
     missing = [k for k, v in wanted.items() if v is None]
     if missing:
         raise WD14TaggerError(
-            "选中的文件夹里缺少：" + "、".join(missing) +
-            "\n\n请确认这两个文件都已经下载完成，并且放在同一个文件夹里。")
+            "缺少：" + "、".join(missing) +
+            "\n\n需要同时选中 model.onnx 和 selected_tags.csv 两个文件（在文件选择窗口里按住 Ctrl 多选），"
+            "并确认它们都已经下载完成。")
 
     # 体积明显不对的话多半是下了个 HTML 错误页或者没下完
     if os.path.getsize(wanted["model.onnx"]) < 1024 * 1024:

@@ -888,6 +888,17 @@ class LauncherApi:
         except Exception as e:
             return {"ok": False, "error": str(e), "path": ""}
 
+    def choose_files(self, types=None, multiple=True):
+        """通用选文件：types 形如 ["模型文件 (*.onnx;*.csv)", "所有文件 (*.*)"]"""
+        try:
+            import webview
+            res = self._window.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=multiple,
+                file_types=tuple(types or ("所有文件 (*.*)",)))
+            return {"ok": True, "paths": list(res) if res else []}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "paths": []}
+
     def choose_images(self, multiple=True, video=False):
         try:
             import webview
@@ -6302,7 +6313,9 @@ def _api_wd14_import_model(self, model_key, src_dir):
     if self._wd14_load_thread and self._wd14_load_thread.is_alive():
         return {"ok": False, "error": "模型正在加载中，请等它结束"}
     try:
-        model_dir = wt.import_model_files(APP_DIR, model_key, (src_dir or "").strip())
+        # src_dir：文件夹路径，或直接选中的文件列表（model.onnx + selected_tags.csv）
+        src = list(src_dir) if isinstance(src_dir, (list, tuple)) else (src_dir or "").strip()
+        model_dir = wt.import_model_files(APP_DIR, model_key, src)
     except wt.WD14TaggerError as e:
         return {"ok": False, "error": str(e)}
     except Exception as e:
