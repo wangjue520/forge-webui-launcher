@@ -381,9 +381,17 @@ class InstanceRunner:
     def gen_alive(self, gen):
         return gen == self.gen
 
-    def _auto_open(self, cfg):
-        # 用户若已开了 --autolaunch（程序自己开浏览器），启动器就不再重复打开
-        return bool(cfg.get("auto_open_browser_on_ready", True)) and not bool(cfg.get("autolaunch"))
+    def _auto_open(self, cfg, root=None):
+        # WebUI 自己会开浏览器（--autolaunch，或 WebUI 设置里默认开启的「启动时在浏览器中打开」）时，
+        # 启动器就不再重复打开，否则每次一键启动都弹两个标签页
+        if not cfg.get("auto_open_browser_on_ready", True):
+            return False
+        if root is None:
+            return not bool(cfg.get("autolaunch"))
+        try:
+            return not cm.webui_opens_browser(cfg, root)
+        except Exception:
+            return not bool(cfg.get("autolaunch"))
 
     def _mark_ready(self, gen, url, text, auto_open):
         with self.lock:
@@ -677,7 +685,9 @@ class InstanceRunner:
         self.fatal_hint = ""
         self.set_status("starting", f"启动中，等待 {self.label()} 输出监听地址...", url=None)
         self.emit("state", running=True)
-        auto_open = self._auto_open(cfg)
+        auto_open = self._auto_open(cfg, root)
+        if not auto_open and cfg.get("auto_open_browser_on_ready", True):
+            log("[启动器] WebUI 启动后会自己打开浏览器，启动器不再重复打开\n")
         self.api._spawn(lambda: self._reader(gen, auto_open, comfy), name=f"launch-reader-{self.iid}")
         self.api._spawn(lambda: self._port_watcher(gen, auto_open), name=f"launch-port-{self.iid}")
         return {"ok": True, "port": port}

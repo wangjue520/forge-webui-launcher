@@ -1307,6 +1307,30 @@ def _drop_unsupported(args, root_dir, notes):
     return kept
 
 
+def webui_opens_browser(cfg, root_dir):
+    """Forge / A1111 启动后会不会自己打开浏览器。
+
+    除了 --autolaunch，WebUI 设置里还有「Launch the webui in browser on startup」（config.json 的
+    auto_launch_browser，默认 Local = 没有 --listen / --share 等对外监听时自动打开）。启动器就绪后
+    也会打开一次，两边都开就是两个标签页。"""
+    if is_comfy(cfg):
+        return bool(cfg.get("autolaunch"))
+    args = build_commandline_args(cfg, root_dir).split()
+    if "--autolaunch" in args:
+        return True
+    mode = "Local"
+    try:
+        with open(os.path.join(root_dir, "config.json"), "r", encoding="utf-8") as f:
+            mode = json.load(f).get("auto_launch_browser", "Local")
+    except (OSError, ValueError, AttributeError):
+        pass
+    if mode == "Remote":
+        return True
+    if mode == "Local":
+        return not any(a in args for a in ("--share", "--listen", "--ngrok", "--server-name"))
+    return False
+
+
 def build_commandline_args(cfg, root_dir=None, notes=None):
     """根据配置生成 COMMANDLINE_ARGS 字符串（只包含真实存在、真的会生效的命令行参数）。
     传入 root_dir 时，去掉该 WebUI 版本不认识的启动器参数（notes 收集提示）。"""
