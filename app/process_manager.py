@@ -745,7 +745,7 @@ class InstanceRunner:
                 log(f"[启动器] 检测到残缺的 venv 但删除失败（可能被占用），"
                     f"如启动报 No module named pip 请手动删除: {venv_dir}\n")
 
-        args_str = cm.build_commandline_args(cfg)
+        args_str = cm.build_commandline_args(cfg, root)
         notes = []
         env_overrides = cm.build_launch_env_overrides(cfg, root, notes)
         for n in notes:

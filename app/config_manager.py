@@ -839,7 +839,7 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
         # 用户自己的 Python 或系统 PATH 里的 Python（可能还装着别的工具）——
         # 必须套 venv，不能把 Forge 的 torch 等几个 GB 的依赖灌进去。
         overrides["VENV_DIR"] = "venv"
-    overrides["COMMANDLINE_ARGS"] = build_commandline_args(cfg)
+    overrides["COMMANDLINE_ARGS"] = build_commandline_args(cfg, root_dir, notes)
 
     # Forge 的 launch.py 会自己调 pip 装 torch 等依赖（2GB 级别），
     # 那部分不经过我们的代码，只能靠环境变量让它也走国内镜像。
@@ -1253,8 +1253,63 @@ def build_comfy_env(cfg, root_dir):
     return env
 
 
-def build_commandline_args(cfg):
-    """根据配置生成 COMMANDLINE_ARGS 字符串（只包含真实存在、真的会生效的命令行参数）"""
+# 启动器自己生成的开关型参数（不含用户的「额外参数」）。上游会删改参数，比如新版 Neo 去掉了
+# --normalvram，旧配置照旧加上就会 "unrecognized arguments" 直接启动失败；启动前按安装实际声明的参数过滤。
+_ARG_DECL_FILES = ("backend/args.py", "modules/cmd_args.py")
+_ARG_LITERAL_RE = re.compile(r"""["'](--[A-Za-z0-9][\w-]*)["']""")
+
+
+def _managed_flags():
+    flags = {"--fast-fp16", "--pin-shared-memory", "--expandable-segments", "--xformers", "--flash", "--sage",
+             "--cuda-malloc", "--always-offload-from-vram", "--reserve-vram", "--skip-python-version-check",
+             "--no-hashing"}
+    for options in (VRAM_MODE_OPTIONS_LEGACY, VRAM_MODE_OPTIONS_NEO2, PRECISION_MODE_OPTIONS_LEGACY,
+                    PRECISION_MODE_OPTIONS_NEO2, UNET_PRECISION_OPTIONS_NEO2, VAE_PRECISION_OPTIONS_NEO2,
+                    TEXT_ENC_PRECISION_OPTIONS_NEO2, ATTENTION_OPTIONS_NEO2):
+        flags.update(arg for _, _, arg in options if arg)
+    return flags
+
+
+def declared_args(root_dir):
+    """该 WebUI 的 argparse 里声明的全部参数名；找不到参数定义文件时返回 None（不做过滤）。"""
+    if not root_dir:
+        return None
+    files = [os.path.join(root_dir, rel) for rel in _ARG_DECL_FILES]
+    builtin = os.path.join(root_dir, "extensions-builtin")
+    if os.path.isdir(builtin):
+        files += [os.path.join(builtin, d, "preload.py") for d in os.listdir(builtin)]
+    found, flags = False, set()
+    for path in files:
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if path.endswith(_ARG_DECL_FILES) and "add_argument" in text:
+            found = True
+        flags.update(_ARG_LITERAL_RE.findall(text))
+    return flags if found else None
+
+
+def _drop_unsupported(args, root_dir, notes):
+    declared = declared_args(root_dir)
+    if declared is None:
+        return args
+    managed, kept = _managed_flags(), []
+    for item in args:
+        name = item.split()[0]
+        if name in managed and name not in declared:
+            if notes is not None:
+                notes.append(f"[启动器] 当前 WebUI 版本不支持 {name}（上游已删除或改名），本次启动已自动去掉；"
+                             "可以在「高级选项」里换一个设置。")
+            continue
+        kept.append(item)
+    return kept
+
+
+def build_commandline_args(cfg, root_dir=None, notes=None):
+    """根据配置生成 COMMANDLINE_ARGS 字符串（只包含真实存在、真的会生效的命令行参数）。
+    传入 root_dir 时，去掉该 WebUI 版本不认识的启动器参数（notes 收集提示）。"""
     if is_comfy(cfg):
         return " ".join(build_comfy_args(cfg))
     args = []
@@ -1343,6 +1398,8 @@ def build_commandline_args(cfg):
     port = str(cfg.get("port", "")).strip()
     if port:
         args.append(f"--port {port}")
+
+    args = _drop_unsupported(args, root_dir, notes)
 
     extra = cfg.get("extra_args", "").strip()
     if extra:
