@@ -40,6 +40,9 @@ BRANCH = "main"
 REPO_URL = f"https://github.com/{REPO}.git"
 ZIP_URL = f"https://codeload.github.com/{REPO}/zip/refs/heads/{BRANCH}"
 COMMITS_API = f"https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_page=1"
+# API 未登录每个 IP 每小时只有 60 次（共用出口 IP 的网络很容易用完，报 403 rate limit exceeded）；
+# 查不到时改读仓库里的 version.json，raw 文件不走 API 配额
+VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/version.json"
 
 BASE_VERSION = "3.0"
 VERSION_FILE = os.path.join(APP_DIR, "version.json")
@@ -172,12 +175,56 @@ def _candidate_urls(url, cfg, log_cb):
     return urls
 
 
+def _remote_version_file(cfg, log_cb):
+    """后备：读远端 version.json（发布时写入的版本号 / 提交 / 提交数）。直连和各加速代理都试一遍。"""
+    urls = _candidate_urls(VERSION_RAW, cfg, log_cb)
+    try:
+        import mirror_manager as mm
+        urls += [u for u in (mm.github_url(VERSION_RAW, True, i) for i in range(len(mm.GITHUB_PROXIES)))
+                 if u not in urls]
+    except Exception:
+        pass
+    last_error = None
+    for u in urls:
+        try:
+            resp = requests.get(u, headers={"User-Agent": _GH_HEADERS["User-Agent"]}, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            sha, count = str(data.get("commit") or ""), int(data.get("count") or 0)
+            if not sha or not count:
+                raise UpdateError("version.json 内容异常")
+            return {
+                "sha": sha,
+                "short": sha[:7],
+                "message": "",
+                "date": str(data.get("updated_at") or "")[:10],
+                "count": count,
+                "source": "version.json",
+            }
+        except Exception as e:
+            last_error = e
+    raise UpdateError(f"{len(urls)} 个地址都失败: {last_error}")
+
+
 def get_remote_info(cfg=None, log_cb=None):
     """
     远端 main 分支最新提交：{"sha","short","message","date","count"}。
     count 来自分页 Link 头（per_page=1 时 last 页码=总提交数），
     代理不透传该头时为 None，调用方自行兜底。
+    GitHub API 查不到（限流 / 被墙）时改读远端 version.json（source = "version.json"）。
     """
+    try:
+        return _remote_commits_api(cfg, log_cb)
+    except UpdateError as api_error:
+        if log_cb:
+            log_cb(f"[网络] GitHub API 查询失败（{api_error}），改读版本文件 version.json")
+        try:
+            return _remote_version_file(cfg, log_cb)
+        except UpdateError as file_error:
+            raise UpdateError(f"{api_error}；读取 version.json 也失败（{file_error}）") from None
+
+
+def _remote_commits_api(cfg, log_cb):
     import re
     urls = _candidate_urls(COMMITS_API, cfg, log_cb)
     last_error = None
@@ -217,7 +264,10 @@ def check_update(cfg=None, log_cb=None):
     remote_version = (f"{BASE_VERSION}.{remote['count']}" if remote.get("count")
                       else f"{BASE_VERSION}+{remote['short']}")
     has_update = True
-    if local["sha"] and remote["sha"]:
+    if remote.get("source") == "version.json" and local.get("count"):
+        # version.json 记的是功能提交（之后还有一个 bump 提交），sha 对不上本地 HEAD，按提交数比较
+        has_update = remote["count"] > local["count"]
+    elif local["sha"] and remote["sha"]:
         has_update = not remote["sha"].startswith(local["sha"])
     return {
         "has_update": has_update,
