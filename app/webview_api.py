@@ -1037,8 +1037,8 @@ class LauncherApi:
     def launch_precheck(self, root, iid=None):
         return self._runner(iid).precheck(root)
 
-    def launch_start(self, root, fix_overrides=False, kill_pid=0, iid=None):
-        return self._runner(iid).start(root, fix_overrides, kill_pid)
+    def launch_start(self, root, fix_overrides=False, kill_pid=0, iid=None, rebuild_venv=False):
+        return self._runner(iid).start(root, fix_overrides, kill_pid, rebuild_venv)
 
     def launch_stop(self, iid=None):
         return self._runner(iid).stop()

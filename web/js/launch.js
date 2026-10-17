@@ -110,7 +110,7 @@
     try { pre = await App.api.launch_precheck(root, iid); }
     catch (e) { App.toast("启动前检查失败：" + e.message, "error"); return; }
 
-    let fixOverrides = false, killPid = 0;
+    let fixOverrides = false, killPid = 0, rebuildVenv = false;
 
     const errors = (pre.issues || []).filter((i) => i.level === "error");
     if (errors.length) {
@@ -128,6 +128,14 @@
         ]);
         if (v === "cancel") return;
         if (v === "fix") fixOverrides = true;
+      } else if (issue.id === "venv_mismatch") {
+        const v = await App.modal("venv 与 Python 版本不一致", App.esc(issue.text), [
+          { id: "rebuild", label: "重建 venv", kind: "primary" },
+          { id: "anyway", label: "仍然启动" },
+          { id: "cancel", label: "取消" },
+        ]);
+        if (v === "cancel" || !v) return;
+        if (v === "rebuild") rebuildVenv = true;
       } else if (issue.id === "driver_outdated") {
         const v = await App.modal("建议先升级显卡驱动", App.esc(issue.text), [
           { id: "driver", label: "去下载驱动", kind: "primary" },
@@ -155,7 +163,7 @@
     }
 
     try {
-      const r = await App.api.launch_start(root, fixOverrides, killPid, iid);
+      const r = await App.api.launch_start(root, fixOverrides, killPid, iid, rebuildVenv);
       if (r && r.ok === false) App.toast(r.error || "启动失败", "error");
     } catch (e) { App.toast("启动失败：" + e.message, "error"); }
     } finally {

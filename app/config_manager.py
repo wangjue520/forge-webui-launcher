@@ -574,6 +574,87 @@ def _quote_if_needed(path):
     return path
 
 
+_PY_DLL_RE = re.compile(r"^python3(\d+)\.dll$", re.IGNORECASE)
+
+
+def python_version_of(python_exe):
+    """python.exe 的大版本号 "3.12"；拿不到返回 None。
+    先看同目录的 python3XX.dll（不用启动进程，Windows 版 CPython / 嵌入式版都有），再退回实际运行一次。"""
+    python_exe = (python_exe or "").strip().strip('"')
+    if not python_exe or not os.path.isfile(python_exe):
+        return None
+    try:
+        for name in os.listdir(os.path.dirname(python_exe)):
+            m = _PY_DLL_RE.match(name)
+            if m:
+                return f"3.{m.group(1)}"
+    except OSError:
+        pass
+    try:
+        r = subprocess.run([python_exe, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
+                           capture_output=True, text=True, timeout=15,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = (r.stdout or "").strip()
+        return out if re.fullmatch(r"\d+\.\d+", out) else None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _read_pyvenv_cfg(root_dir):
+    """venv\\pyvenv.cfg 的键值（键小写）；没有返回 {}"""
+    cfg_path = os.path.join(root_dir, "venv", "pyvenv.cfg")
+    out = {}
+    try:
+        with open(cfg_path, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                key, sep, val = line.partition("=")
+                if sep:
+                    out[key.strip().lower()] = val.strip()
+    except OSError:
+        pass
+    return out
+
+
+def venv_python_version(root_dir):
+    """venv 建立时所用 Python 的大版本（pyvenv.cfg 的 version / version_info），如 "3.12"；拿不到返回 None"""
+    info = _read_pyvenv_cfg(root_dir)
+    m = re.match(r"(\d+)\.(\d+)", info.get("version") or info.get("version_info") or "")
+    return f"{m.group(1)}.{m.group(2)}" if m else None
+
+
+def venv_version_issue(root_dir, python_exe):
+    """
+    venv 和 Python 大版本对不上时返回说明文字，否则返回 None。
+
+    venv\\Lib\\site-packages 里的 numpy / torch 等二进制包是按建 venv 时的 Python 版本编译的
+    （文件名带 cp312 这类标记），换成别的大版本解释器就整批加载失败，表现为「检测不到显卡」秒退。
+    两种情况：
+      1) pyvenv.cfg 的 home 已指向另一个大版本（被改过——旧版启动器自动修复 home 时不比较版本）；
+      2) home 指向的 Python 已不存在，而这次能用的 Python 是另一个大版本（无法安全修复）。
+    """
+    venv_ver = venv_python_version(root_dir)
+    if not venv_ver:
+        return None
+    home = _read_pyvenv_cfg(root_dir).get("home", "")
+    home_exe = os.path.join(home, "python.exe") if home else ""
+    home_ver = python_version_of(home_exe) if home_exe and os.path.isfile(home_exe) else None
+    if home_ver == venv_ver:
+        return None  # venv 自己指向的解释器版本正确，能正常运行
+    use_ver = python_version_of(python_exe) if python_exe else None
+    if home_ver is None and (use_ver is None or use_ver == venv_ver):
+        return None  # 只是目录搬过家：home 失效但版本一致，启动时会自动改 home
+    actual = home_ver or use_ver
+    return (
+        f"WebUI 的 venv 是用 Python {venv_ver} 建的，但现在它会用 Python {actual} 来运行。\n\n"
+        f"venv 里的 numpy、torch 等二进制包只能在 Python {venv_ver} 下加载，"
+        "直接启动会报「检测不到显卡」或 DLL / 模块加载失败后闪退。\n\n"
+        "解决办法（二选一）：\n"
+        "  · 点「重建 venv」：删除旧 venv，WebUI 启动时用当前 Python 重新安装依赖"
+        "（需要联网下载几个 GB，第一次启动会比较久）；\n"
+        f"  · 或在「高级选项 → Python 解释器」里指定一个 Python {venv_ver}。"
+    )
+
+
 def sync_venv_pyvenv_cfg(root_dir, python_exe, log_cb=None):
     """
     检测并自动修复 venv\\pyvenv.cfg 里过期的 home 路径——不需要用户
@@ -612,6 +693,14 @@ def sync_venv_pyvenv_cfg(root_dir, python_exe, log_cb=None):
 
     expected_home = os.path.dirname(python_exe)
     if not expected_home:
+        return False
+
+    # 大版本不同绝不能改 home：venv 里的二进制包是按原版本编译的，改过去会整批加载失败
+    venv_ver, use_ver = venv_python_version(root_dir), python_version_of(python_exe)
+    if venv_ver and use_ver and venv_ver != use_ver:
+        if log_cb:
+            log_cb(f"[启动器] venv 是 Python {venv_ver} 建的，要用的 Python 是 {use_ver}，"
+                   "版本不同，不修改 venv\\pyvenv.cfg")
         return False
 
     def _norm(p):

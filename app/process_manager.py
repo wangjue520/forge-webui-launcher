@@ -221,29 +221,50 @@ def process_name_of(pid):
     return ""
 
 
-def _find_webui_user_bat_overrides(root):
-    """返回 [(变量名, 值, 行号), ...]，跳过被注释掉的行"""
-    bat_path = os.path.join(root, "webui-user.bat")
-    if not os.path.exists(bat_path):
-        return []
-    hits = []
+def _override_bat_files(root):
+    """webui.bat 启动时真正会执行、能覆盖启动器注入变量的 bat。
+
+    启动器直接运行 webui.bat：webui-user.bat 是反过来调用 webui.bat 的入口，
+    启动器这条链路里根本不会执行它，里面写什么都不生效，不能拿它报「配置冲突」。
+    Forge Neo / Classic 的 webui.bat 开头会 call webui.settings.bat——那才是会覆盖的文件；
+    个别整合包改过的 webui.bat 若确实 call 了 webui-user.bat，才把它算进来。"""
     try:
-        with open(bat_path, "r", encoding="utf-8", errors="replace") as f:
-            for i, line in enumerate(f, 1):
-                stripped = line.strip()
-                if stripped.upper().startswith(("REM", "::")):
-                    continue
-                m = _OVERRIDE_VAR_PATTERN.match(line)
-                if m and m.group(2).strip():
-                    hits.append((m.group(1).upper(), m.group(2).strip(), i))
+        with open(os.path.join(root, WEBUI_ENTRY_SCRIPT), "r", encoding="utf-8", errors="replace") as f:
+            entry = f.read().lower()
     except OSError:
         return []
+    files = []
+    for name in ("webui.settings.bat", "webui-user.bat"):
+        if name in entry and os.path.exists(os.path.join(root, name)):
+            files.append(name)
+    return files
+
+
+def _find_webui_user_bat_overrides(root):
+    """返回 [(文件名, 变量名, 值, 行号), ...]，只看 webui.bat 真正会执行的 bat，跳过被注释掉的行"""
+    hits = []
+    for name in _override_bat_files(root):
+        try:
+            with open(os.path.join(root, name), "r", encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f, 1):
+                    stripped = line.strip()
+                    if stripped.upper().startswith(("REM", "::")):
+                        continue
+                    m = _OVERRIDE_VAR_PATTERN.match(line)
+                    if m and m.group(2).strip():
+                        hits.append((name, m.group(1).upper(), m.group(2).strip(), i))
+        except OSError:
+            continue
     return hits
 
 
 def _clear_webui_user_bat_overrides(root):
-    """清空 webui-user.bat 里生效的变量赋值（保留行本身），先备份 .bak"""
-    bat_path = os.path.join(root, "webui-user.bat")
+    """清空会被 webui.bat 执行的 bat 里生效的变量赋值（保留行本身），先备份 .bak"""
+    for name in _override_bat_files(root):
+        _clear_bat_overrides(os.path.join(root, name))
+
+
+def _clear_bat_overrides(bat_path):
     backup_path = bat_path + ".bak"
     with open(bat_path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
@@ -554,14 +575,20 @@ class InstanceRunner:
 
         overrides = _find_webui_user_bat_overrides(root)
         if overrides:
-            detail = "\n".join(f"  第 {ln} 行: set {name}={val}" for name, val, ln in overrides)
+            files = sorted({fn for fn, *_ in overrides})
+            detail = "\n".join(f"  {fn} 第 {ln} 行: set {name}={val}" for fn, name, val, ln in overrides)
             issues.append({
                 "level": "warn", "id": "user_bat_overrides",
-                "text": "检测到 webui-user.bat 里写死了以下变量：\n\n" + detail + "\n\n"
+                "text": f"检测到 {'、'.join(files)} 里写死了以下变量（webui.bat 启动时会执行它）：\n\n" + detail + "\n\n"
                         "这几行是无条件执行的 set，会把启动器注入的路径/参数强行覆盖回去，"
                         "很可能导致启动失败（尤其是换过电脑、改过安装路径之后）。\n"
-                        "选择「清空并启动」会自动清空这几行（原文件备份为 webui-user.bat.bak）。",
+                        f"选择「清空并启动」会自动清空这几行（原文件备份为 .bak）。",
             })
+
+        # venv 和 Python 大版本对不上：二进制包整批加载失败，启动后秒退
+        vissue = cm.venv_version_issue(root, py_exe)
+        if vissue:
+            issues.append({"level": "warn", "id": "venv_mismatch", "text": vissue})
 
         left = self._leftover_issue(cfg, "WebUI")
         if left:
@@ -569,7 +596,7 @@ class InstanceRunner:
         return {"ok": True, "issues": issues}
 
     # ---------------------------------------------------------- 启动 ----
-    def start(self, root, fix_overrides=False, kill_pid=0):
+    def start(self, root, fix_overrides=False, kill_pid=0, rebuild_venv=False):
         if self.running():
             return {"ok": False, "error": f"{self.label()} 已在运行中"}
         # 先把上一轮代次作废：上一轮崩掉后它的读取线程可能正要做收尾
@@ -624,7 +651,7 @@ class InstanceRunner:
         if comfy:
             res = self._spawn_comfy(root, cfg, log)
         else:
-            res = self._spawn_forge(root, cfg, log, fix_overrides)
+            res = self._spawn_forge(root, cfg, log, fix_overrides, rebuild_venv)
         if not res.get("ok"):
             return res
 
@@ -683,15 +710,22 @@ class InstanceRunner:
             return {"ok": False, "error": f"启动失败: {e}"}
         return {"ok": True}
 
-    def _spawn_forge(self, root, cfg, log, fix_overrides):
+    def _spawn_forge(self, root, cfg, log, fix_overrides, rebuild_venv=False):
         import shutil
         if fix_overrides:
             try:
                 _clear_webui_user_bat_overrides(root)
-                log("[启动器] 已清空 webui-user.bat 里写死的 PYTHON/GIT/VENV_DIR/"
-                    "COMMANDLINE_ARGS（原文件备份为 webui-user.bat.bak）\n")
+                log("[启动器] 已清空写死的 PYTHON/GIT/VENV_DIR/COMMANDLINE_ARGS（原文件备份为 .bak）\n")
             except OSError as e:
-                return {"ok": False, "error": f"无法修改 webui-user.bat：{e}"}
+                return {"ok": False, "error": f"无法修改启动脚本：{e}"}
+
+        if rebuild_venv:
+            # 用户在「venv 与 Python 版本不一致」弹窗里选了重建：删掉旧 venv，webui.bat 会用当前 Python 重建并重装依赖
+            venv_old = os.path.join(root, "venv")
+            shutil.rmtree(venv_old, ignore_errors=True)
+            if os.path.isdir(venv_old):
+                return {"ok": False, "error": f"旧的 venv 删除失败（可能有文件被占用），请关掉 WebUI 后手动删除：{venv_old}"}
+            log(f"[启动器] 已删除旧的 venv，本次启动会用当前 Python 重建并安装依赖（需要联网，较久）: {venv_old}\n")
 
         # 先静默修复 venv\pyvenv.cfg 里过期的 home 路径，再判断 venv 是否残缺
         resolved_python = (cfg.get("custom_python_path") or "").strip() \
