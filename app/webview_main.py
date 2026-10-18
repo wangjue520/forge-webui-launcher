@@ -17,6 +17,12 @@ import os
 import sys
 import threading
 
+try:   # 上次 ZIP 更新时被界面占用、暂存起来的文件，趁界面还没打开先换上（必须在导入其它模块之前）
+    import updater
+    updater.apply_pending(print)
+except Exception:
+    pass
+
 import webview
 from webview.dom import DOMEventHandler
 

@@ -21,6 +21,7 @@
 维护者打包前可执行 `python app/updater.py --write-version` 把当前 git
 版本写进 version.json，让 ZIP 用户拿到的就是最新版本号。
 """
+import filecmp
 import json
 import os
 import shutil
@@ -317,9 +318,29 @@ def _update_via_git(git_exe, cfg, log_cb):
         _git(git_exe, "reset", "--hard", "FETCH_HEAD")
 
 
+# 覆盖时被占用、换不掉的文件先放这里，下次启动时在界面打开之前换上（见 apply_pending）
+PENDING_DIR = os.path.join(APP_DIR, "launcher_data", "pending_update")
+
+
+def _same_content(a, b):
+    try:
+        return os.path.getsize(a) == os.path.getsize(b) and filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return False
+
+
 def _overlay_copy(src_root, log_cb):
-    """把解压出来的仓库内容覆盖到启动器目录，跳过 PRESERVE_TOP 和缓存目录。"""
-    copied = 0
+    """
+    把解压出来的仓库内容覆盖到启动器目录，跳过 PRESERVE_TOP 和缓存目录。
+
+    启动器界面正开着：WebView2 以内存映射方式打开着 web/fonts 的字体、web/media 的
+    开屏视频，覆盖它们会报 [WinError 1224]（请求的操作无法在使用用户映射区域打开的
+    文件上执行）。以前一报错整个更新就中断在半路（前面的代码已换新、后面的还是旧的）。
+    现在：内容没变的文件不碰（字体视频基本不改）；变了但被占用的放进 PENDING_DIR，
+    下次启动时换上。
+    """
+    copied = same = staged = 0
+    shutil.rmtree(PENDING_DIR, ignore_errors=True)   # 上次没换上的作废，以这次的为准
     for dirpath, dirnames, filenames in os.walk(src_root):
         rel = os.path.relpath(dirpath, src_root)
         parts = [] if rel == "." else rel.split(os.sep)
@@ -336,11 +357,49 @@ def _overlay_copy(src_root, log_cb):
         for name in filenames:
             if not parts and name in PRESERVE_TOP:
                 continue
-            shutil.copy2(os.path.join(dirpath, name), os.path.join(dest_dir, name))
-            copied += 1
+            src, dst = os.path.join(dirpath, name), os.path.join(dest_dir, name)
+            if os.path.isfile(dst) and _same_content(src, dst):
+                same += 1
+                continue
+            try:
+                shutil.copy2(src, dst)
+                copied += 1
+            except OSError:
+                pending = os.path.join(PENDING_DIR, rel, name) if rel != "." else os.path.join(PENDING_DIR, name)
+                os.makedirs(os.path.dirname(pending), exist_ok=True)
+                shutil.copy2(src, pending)
+                staged += 1
     if log_cb:
-        log_cb(f"[更新] 已覆盖 {copied} 个文件（配置、便携环境、模型缓存均保留）")
+        log_cb(f"[更新] 已更新 {copied} 个文件，{same} 个没有变化（配置、便携环境、模型缓存均保留）")
+        if staged:
+            log_cb(f"[更新] 另有 {staged} 个文件正被启动器界面占用，已暂存，重启启动器时自动换上")
     return copied
+
+
+def apply_pending(log=None):
+    """
+    把上次更新时被占用、暂存起来的文件换上。启动最早期调用（界面还没打开，
+    没有谁占着它们）。换不上的留着下次再试。返回换上的文件数。
+    """
+    if not os.path.isdir(PENDING_DIR):
+        return 0
+    done = 0
+    for dirpath, _dirnames, filenames in os.walk(PENDING_DIR):
+        rel = os.path.relpath(dirpath, PENDING_DIR)
+        dest_dir = APP_DIR if rel == "." else os.path.join(APP_DIR, rel)
+        for name in filenames:
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+                os.replace(os.path.join(dirpath, name), os.path.join(dest_dir, name))
+                done += 1
+            except OSError:
+                pass
+    # 全换上了就把空目录清掉；还有剩的（仍被占用）留着下次
+    if not any(files for _d, _s, files in os.walk(PENDING_DIR)):
+        shutil.rmtree(PENDING_DIR, ignore_errors=True)
+    if done and log:
+        log(f"[更新] 已换上 {done} 个上次更新时被占用的文件")
+    return done
 
 
 def cleanup_legacy_layout(log_cb=None):
