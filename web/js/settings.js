@@ -144,6 +144,52 @@
     catch (e) { el.textContent = "检测失败：" + e.message; el.dataset.status = "bad"; }
   }
 
+  /* ---------- 启动器设置页：网络代理（全局，不分实例） ---------- */
+  function proxyStatus(text, status) {
+    const el = $("#s-proxy-status");
+    el.textContent = text || "";
+    el.dataset.status = status || "";
+  }
+
+  async function loadProxy() {
+    try {
+      const r = await App.api.proxy_get();
+      $("#s-proxy-on").checked = !!r.enabled;
+      $("#s-proxy-url").value = r.url || "";
+      proxyStatus(r.status, r.enabled ? "ok" : "");
+    } catch (e) { proxyStatus("读取代理设置失败：" + e.message, "bad"); }
+  }
+
+  async function saveProxy() {
+    const on = $("#s-proxy-on").checked;
+    try {
+      const r = await App.api.proxy_set(on, $("#s-proxy-url").value);
+      if (r && r.ok === false) { proxyStatus(r.error, "bad"); return; }
+      if (r.url) $("#s-proxy-url").value = r.url;
+      proxyStatus(r.status, on ? "ok" : "");
+      App.toast(on ? "代理已开启。已经在运行的 WebUI / ComfyUI 重启后生效" : "代理已关闭", "ok");
+    } catch (e) { proxyStatus("保存失败：" + e.message, "bad"); }
+  }
+
+  async function testProxy() {
+    const btn = $("#s-proxy-test");
+    const out = $("#s-proxy-result");
+    btn.disabled = true;
+    out.hidden = false;
+    out.dataset.status = "";
+    out.textContent = "正在通过代理访问 HuggingFace / GitHub / PyPI…";
+    try {
+      const r = await App.api.proxy_test($("#s-proxy-url").value);
+      if (r && r.ok === false) { out.textContent = r.error; out.dataset.status = "bad"; return; }
+      const res = r.results || [];
+      out.textContent = res.map((x) => `${x.name}：${x.ok ? "通 " + x.ms + " ms" : "不通（" + x.error + "）"}`).join("　");
+      const all = res.every((x) => x.ok);
+      out.dataset.status = all ? "ok" : (res.some((x) => x.ok) ? "warn" : "bad");
+      if (all && !$("#s-proxy-on").checked) out.textContent += "　——可以勾上「使用代理」再保存";
+    } catch (e) { out.textContent = "测试失败：" + e.message; out.dataset.status = "bad"; }
+    finally { btn.disabled = false; }
+  }
+
   /* ---------- 启动器设置页：启动器自更新 ---------- */
   const Updater = {
     lastInfo: null,   // 最近一次检查结果（update_info 事件）
@@ -316,6 +362,11 @@
       const ms = state.mirror_status;
       if (ms) $("#s-mirror-status").textContent = (typeof ms === "string") ? ms : (ms.text || "");
       $("#s-mirror-redetect").addEventListener("click", redetectMirror);
+
+      loadProxy();
+      $("#s-proxy-save").addEventListener("click", saveProxy);
+      $("#s-proxy-on").addEventListener("change", saveProxy);
+      $("#s-proxy-test").addEventListener("click", testProxy);
 
       App.on("settings", "mirror_status", (e) => {
         const el = $("#s-mirror-status");

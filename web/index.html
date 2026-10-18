@@ -376,6 +376,25 @@
           </div>
           <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。</div>
         </div>
+
+        <div class="card">
+          <div class="card-title">网络代理<span class="card-title-hint">所有实例共用，不分实例</span></div>
+          <label class="chk-row">
+            <input type="checkbox" id="s-proxy-on"><i></i>
+            <span>使用代理（WD14 下模型、插件、pip 和启动的 WebUI / ComfyUI 都走它）</span>
+          </label>
+          <div class="form-grid">
+            <label>代理地址</label>
+            <input type="text" id="s-proxy-url" placeholder="填端口就行，例如 7890（Clash）或 10809（v2rayN），也可以填 http://127.0.0.1:7890">
+          </div>
+          <div class="row" style="align-items:center">
+            <span class="hint" id="s-proxy-status"></span>
+            <button class="btn" id="s-proxy-save">保存</button>
+            <button class="btn" id="s-proxy-test">测试连接</button>
+          </div>
+          <div class="hint" id="s-proxy-result" hidden></div>
+          <div class="hint">开着代理软件、浏览器能上 HuggingFace，但 WD14 还是下不了模型？多半是代理软件没开 TUN/增强模式，命令行程序不走它。在这里填上代理软件的 HTTP 端口即可，效果等同于在 ComfyUI 启动脚本里写 <code>set HTTPS_PROXY=http://127.0.0.1:7890</code>。启动器马上生效；已经在运行的 WebUI / ComfyUI 要重启一次才会用上。</div>
+        </div>
       </section>
 
       <!-- ======== 环境部署 ======== -->

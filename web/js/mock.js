@@ -409,6 +409,11 @@
         negative: "lowres, bad hands", model: "ponyDiffusionV6", seed: "123456", sampler: "Euler a", source: "ComfyUI",
         exists: true, time_text: "2026-10-13 21:40", size_text: "1.45 MB", chars: ["hatsune_miku"],
         tags: ["1girl", "solo", "long_hair", "looking_at_viewer"], loras: [{ name: "detail_tweaker", weight: "0.6" }], collections: [], iid: "demo" }),
+      proxy_get: () => ok({ ok: true, enabled: false, url: "", status: "（预览模式）未开启" }),
+      proxy_set: (on, url) => ok({ ok: true, url: url ? "http://127.0.0.1:" + String(url).replace(/\D/g, "").slice(-5) : "",
+        status: on ? "（预览模式）已开启" : "（预览模式）未开启" }),
+      proxy_test: () => ok({ ok: true, url: "http://127.0.0.1:7890", results: [
+        { name: "HuggingFace（演示）", ok: true, ms: 0 }, { name: "GitHub（演示）", ok: false, ms: 0, error: "预览模式不联网" }] }),
       _noop: () => ok({}),
     },
   };

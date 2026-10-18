@@ -656,6 +656,15 @@ class InstanceRunner:
         except Exception as e:
             log(f"[启动器] 附加模型库参数失败（不影响启动）: {e}\n")
 
+        try:
+            import proxy_manager as pm
+            purl = pm.current(self.api.cfg)
+            if purl:
+                # 环境变量已经在启动器进程里设好了，子进程自动继承，这里只提示一下
+                log(f"[启动器] 网络代理已开启：HTTP_PROXY / HTTPS_PROXY = {purl}（本机地址不走代理）\n")
+        except Exception:
+            pass
+
         if comfy:
             res = self._spawn_comfy(root, cfg, log)
         else:

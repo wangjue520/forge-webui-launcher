@@ -506,6 +506,11 @@ class LauncherApi:
     def __init__(self):
         self._window = None
         self.cfg = cm.load_config()
+        try:
+            import proxy_manager as pm
+            pm.apply(self.cfg)      # 越早越好：后面的联网和子进程都从 os.environ 派生
+        except Exception:
+            pass
         self._installs_cache = None
         self._ask_seq = 0
         self._asks = {}            # ask_id -> {"event": Event, "value": ...}
@@ -6856,6 +6861,50 @@ def _api_redetect_network(self):
     return {"ok": True}
 
 
+def _api_proxy_get(self):
+    import proxy_manager as pm
+    return {"ok": True, "enabled": bool(self.cfg.get("proxy_enabled")),
+            "url": self.cfg.get("proxy_url", ""), "status": pm.describe(self.cfg)}
+
+
+def _api_proxy_set(self, enabled, url):
+    """保存并立即生效（启动器自身马上生效；已在运行的 WebUI/ComfyUI 要重启才会用上）"""
+    import proxy_manager as pm
+    url = (url or "").strip()
+    if enabled:
+        norm, err = pm.normalize(url)
+        if err:
+            return {"ok": False, "error": err}
+        url = norm
+    with self._cfg_lock:
+        changed = bool(enabled) != bool(self.cfg.get("proxy_enabled")) or (
+            enabled and url != self.cfg.get("proxy_url"))
+        self.cfg["proxy_enabled"] = bool(enabled)
+        if url:     # 关掉时地址留着，下次打开不用再填
+            self.cfg["proxy_url"] = url
+        if changed:
+            # 走不走代理，GitHub 能不能直连、该不该用镜像的结论都会变，下次联网重新探测
+            self.cfg["mirror_detected"] = ""
+            self.cfg["github_mirror_detected"] = ""
+        pm.apply(self.cfg)
+        try:
+            cm.save_config(self.cfg)
+        except OSError:
+            pass
+    if changed:
+        self._emit("settings", "mirror_status", ok=True, text=self._mirror_status_text())
+    return {"ok": True, "url": url, "status": pm.describe(self.cfg)}
+
+
+def _api_proxy_test(self, url):
+    """用填的地址（不必先保存）访问 HuggingFace / GitHub / PyPI，几秒到二十几秒"""
+    import proxy_manager as pm
+    norm, err = pm.normalize(url)
+    if err:
+        return {"ok": False, "error": err}
+    return {"ok": True, "url": norm, "results": pm.test(norm)}
+
+
 def _meta_require_current(self):
     if not self._meta_current or not self._meta_meta:
         return None
@@ -7466,6 +7515,9 @@ def _api_perf_start(self):
 for _name, _fn in {
     "_mirror_status_text": _api_mirror_status_text,
     "redetect_network": _api_redetect_network,
+    "proxy_get": _api_proxy_get,
+    "proxy_set": _api_proxy_set,
+    "proxy_test": _api_proxy_test,
     "deploy_env_detect": _api_deploy_env_detect,
     "deploy_check_dir": _api_deploy_check_dir,
     "deploy_precheck": _api_deploy_precheck,

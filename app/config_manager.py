@@ -71,6 +71,9 @@ DEFAULT_CONFIG = {
     "mirror_mode": "auto",
     "mirror_detected": "",   # 自动检测结果缓存（cn / global），清空可重新检测
     "github_mirror_detected": "",  # GitHub 专用探测缓存（ok / blocked），跟上面那个是独立的两套判断
+    # 手动网络代理（Clash 等本机代理的 HTTP 端口），全局生效，见 proxy_manager
+    "proxy_enabled": False,
+    "proxy_url": "",
     # 新版 Neo (neo2) 专属参数
     "reserve_vram_gb": "",       # --reserve-vram GB
     "unet_precision": "auto",
