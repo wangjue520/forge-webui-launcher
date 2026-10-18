@@ -178,6 +178,9 @@
       if (c.behind === 0) {
         st.dataset.status = "ok";
         st.textContent = "已经是最新版。";
+      } else if (c.partial) {
+        st.dataset.status = "warn";
+        st.textContent = `${c.branch} 分支有新版本（最近提交没拉下来，下面只列出版本标签和分支；网络好些时再点检查可看到提交列表）`;
       } else {
         st.dataset.status = "warn";
         const lt = c.latest || {};

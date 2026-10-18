@@ -69,7 +69,7 @@ HF_MIRROR = "https://hf-mirror.com"
 GITHUB_PROXIES = [
     "https://ghfast.top",
     "https://gh-proxy.com",
-    "https://github.moeyy.xyz",
+    "https://ghproxy.net",      # github.moeyy.xyz 2026 年已停服（域名解析不到）
 ]
 
 

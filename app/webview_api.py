@@ -5818,7 +5818,8 @@ def _api_ext_repo_versions(self, rel, iid=None):
 
 def _ext_repo_versions_body(self, cfg, info, git_exe, repo, env, local, log):
     remote = vm.check(lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t), git_exe, repo,
-                      local.get("remote"), vm.net_sources(_gh_proxies(cfg)), log, env)
+                      local.get("remote"), vm.net_sources(_gh_proxies(cfg)), log, env,
+                      cancelled=lambda: self._ext_cancel)
     if remote.get("ok"):
         self._ext_updates[os.path.normcase(repo)] = _update_summary(remote)
         log("[插件] 版本列表已更新\n")
@@ -6154,6 +6155,7 @@ def _ver_check_body(self, cfg, info, git_exe, log):
         self._ver_checks[os.path.normcase(info["repo"])] = chk
         b = chk.get("behind")
         log("[版本] 已经是最新版\n" if b == 0 else
+            "[版本] 有新版本（最近提交没拉下来，落后多少暂时算不出）\n" if chk.get("partial") else
             f"[版本] 有新版本：落后 {b if b is not None else '40+'} 个提交\n")
     else:
         log(f"[版本] {chk.get('error')}\n")

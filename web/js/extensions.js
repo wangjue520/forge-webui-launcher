@@ -223,15 +223,28 @@
   async function openVersions(rel, name) {
     let pick = null;
     let loaded = false;
-    const v = await App.modal(`「${name}」的版本`, '<div class="hint">正在联网获取版本列表…（走 GitHub 加速，一般几秒）</div>', [
+    let waiting = true;
+    let closed = false;
+    let timer = null;
+    const v = await App.modal(`「${name}」的版本`,
+      '<div class="hint">正在联网获取版本列表…（几个 GitHub 加速地址同时试，一般几秒）<span id="ext-ver-wait"></span></div>' +
+      '<div class="hint">过程看页面下方的日志；等太久可以点「关闭」，会同时中止联网。</div>', [
       { id: "switch", label: "切换到所选版本", kind: "primary" },
       { id: "cancel", label: "关闭" },
     ], {
       async onOpen(body) {
+        const t0 = Date.now();
+        timer = setInterval(() => {
+          const el = body.querySelector("#ext-ver-wait");
+          if (el) el.textContent = `　已等 ${Math.round((Date.now() - t0) / 1000)} 秒`;
+        }, 1000);
         let r;
         try { r = await App.api.ext_repo_versions(rel, targetId || null); }
         catch (e) { r = { ok: false, error: e.message }; }
-        if (!body.isConnected) return;
+        waiting = false;
+        clearInterval(timer);
+        // 弹窗 DOM 是单例：关掉后 body 还在页面上，得自己记着关没关，不然会写进下一个弹窗
+        if (closed) return;
         if (!r || r.ok === false) { body.innerHTML = `<div class="hint" data-status="bad">${App.esc((r && r.error) || "获取失败")}</div>`; return; }
         const l = r.local || {};
         const head = `<div class="kv-table">` +
@@ -250,11 +263,18 @@
         }
         const c = r.remote;
         const st = c.behind === 0 ? '<div class="hint" data-status="ok">已经是最新版</div>'
+          : c.partial ? '<div class="hint" data-status="warn">有新版本。最近提交没拉下来，下面先列出版本标签和分支（网络好些时重开可看到提交列表）</div>'
           : `<div class="hint" data-status="warn">落后 ${c.behind == null ? "40+" : c.behind} 个提交</div>`;
         body.innerHTML = head + st + '<div id="ext-ver-pick" class="ext-ver-pick"></div>';
         pick = App.verPicker(body.querySelector("#ext-ver-pick"), Object.assign({}, c, { history: r.history }));
         loaded = true;
         refresh();
+      },
+      onClose() {
+        closed = true;
+        clearInterval(timer);
+        // 还在联网就顺手中止，不然后台一直占着「插件任务」，别的操作都进不来
+        if (waiting) App.api.ext_cancel().catch(() => {});
       },
     });
     if (v !== "switch") return;

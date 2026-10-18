@@ -21,11 +21,13 @@ git 版本管理：WebUI / ComfyUI 本体和插件（Forge 扩展 / ComfyUI 节�
 本模块不直接起进程跑长命令：调用方传 run(program, args, cwd, env, timeout) -> 退出码
 （负责流式日志 / 取消 / 超时），短查询用 capture。
 """
+import concurrent.futures
 import json
 import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime
 
@@ -228,13 +230,34 @@ def capture(git_exe, repo, args, env=None, timeout=30):
         return -1, ""
 
 
+# 最近一次连通的前缀（本次运行内记住）。国内各加速代理时好时坏，
+# 串行挨个试的话一个卡住的代理就能拖几分钟；记住能通的那个，后面的命令先用它
+_last_ok = None
+_last_ok_lock = threading.Lock()
+
+
 def net_sources(gh_proxies):
     """联网命令的候选前缀：代理逐个，最后直连（空串）"""
     return [p.rstrip("/") + "/" + _GH for p in (gh_proxies or [])] + [""]
 
 
+def _ordered(sources):
+    """上次连通的前缀排到最前"""
+    with _last_ok_lock:
+        best = _last_ok
+    if best is not None and best in sources:
+        return [best] + [x for x in sources if x != best]
+    return list(sources)
+
+
+def _remember(prefix):
+    global _last_ok
+    with _last_ok_lock:
+        _last_ok = prefix
+
+
 def _net_cfg(prefix, url):
-    args = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60",
+    args = ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30",
             "-c", "credential.interactive=never"]
     if prefix and url.startswith(_GH):
         args = ["-c", f"url.{prefix}.insteadOf={_GH}"] + args
@@ -247,13 +270,29 @@ def _env(env):
     return e
 
 
-def net_capture(git_exe, repo, args, url, sources, env=None, timeout=45):
-    """联网的短查询（ls-remote）：按候选前缀依次试，返回第一个成功的 (0, stdout)"""
+def net_capture(git_exe, repo, args, url, sources, env=None, timeout=25):
+    """
+    联网的短查询（ls-remote）：所有候选前缀同时试，返回最先成功的 (0, stdout)。
+    以前是挨个试、每个等 60 秒，国内碰上一个卡住的代理弹窗就一直转圈。
+    """
+    cands = sources if url.startswith(_GH) else [""]
+    if len(cands) <= 1:
+        rc, out = capture(git_exe, repo, _net_cfg(cands[0] if cands else "", url) + list(args),
+                          _env(env), timeout)
+        return rc, out
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(cands))
+    futs = {pool.submit(capture, git_exe, repo, _net_cfg(prefix, url) + list(args), _env(env), timeout): prefix
+            for prefix in cands}
     rc, out = -1, ""
-    for prefix in sources if url.startswith(_GH) else [""]:
-        rc, out = capture(git_exe, repo, _net_cfg(prefix, url) + list(args), _env(env), timeout)
-        if rc == 0:
-            return rc, out
+    try:
+        for f in concurrent.futures.as_completed(futs):
+            rc, out = f.result()
+            if rc == 0:
+                _remember(futs[f])
+                return rc, out
+    finally:
+        # 没跑完的让它们自己超时退出，不在这里等
+        pool.shutdown(wait=False, cancel_futures=True)
     return rc, out
 
 
@@ -261,7 +300,7 @@ def net_run(run, git_exe, repo, args, url, sources, log, env=None, timeout=1200,
     """联网的长命令（fetch）：流式日志，按候选前缀依次试"""
     repo = os.path.abspath(repo)
     rc = 1
-    cands = sources if url.startswith(_GH) else [""]
+    cands = _ordered(sources) if url.startswith(_GH) else [""]
     for i, prefix in enumerate(cands):
         if cancelled():
             return 1
@@ -271,6 +310,8 @@ def net_run(run, git_exe, repo, args, url, sources, log, env=None, timeout=1200,
             log(f"[版本] 经 {prefix.split('/https://')[0]} 加速连接 GitHub ...\n")
         rc = run(git_exe, ["-C", repo] + _net_cfg(prefix, url) + list(args), repo, _env(env), timeout)
         if rc == 0:
+            if url.startswith(_GH):
+                _remember(prefix)
             return 0
     return rc
 
@@ -399,14 +440,15 @@ def has_commit(git_exe, repo, sha, env=None):
     return capture(git_exe, repo, ["cat-file", "-e", sha + "^{commit}"], env)[0] == 0
 
 
-def fetch_branch(run, git_exe, repo, url, branch, sources, log, env=None, depth=50, cancelled=lambda: False):
+def fetch_branch(run, git_exe, repo, url, branch, sources, log, env=None, depth=50, cancelled=lambda: False,
+                 timeout=1800):
     """把远程分支拉到 refs/remotes/origin/<branch>。浅克隆补到 depth 段历史，完整克隆不加 --depth"""
     shallow = capture(git_exe, repo, ["rev-parse", "--is-shallow-repository"], env)[1] == "true"
     args = ["fetch", "--no-tags", "--prune"]
     if shallow:
         args.append(f"--depth={depth}")
     args += [url, f"+refs/heads/{branch}:refs/remotes/origin/{branch}"]
-    return net_run(run, git_exe, repo, args, url, sources, log, env, 1800, cancelled)
+    return net_run(run, git_exe, repo, args, url, sources, log, env, timeout, cancelled)
 
 
 def recent_commits(git_exe, repo, ref, n=40, env=None):
@@ -449,12 +491,21 @@ def check(run, git_exe, repo, url, sources, log, env=None, cancelled=lambda: Fal
         branch = refs["head"] or (refs["branches"][0]["name"] if refs["branches"] else "")
     if not branch:
         return {"ok": False, "error": "远程仓库里没有分支"}
-    if fetch_branch(run, git_exe, repo, url, branch, sources, log, env, cancelled=cancelled) != 0:
-        return {"ok": False, "error": "拉取远程版本信息失败"}
+    head = info.get("commit", "")
+    # 只是查版本，每个地址最多等 5 分钟（卡住不动的 30 秒就会被 lowSpeed 掐掉）
+    if fetch_branch(run, git_exe, repo, url, branch, sources, log, env, cancelled=cancelled, timeout=300) != 0:
+        if cancelled():
+            return {"ok": False, "error": "已取消"}
+        # ls-remote 已经拿到了标签和分支，最近提交拉不下来也先把这些给出去
+        tip = next((b["commit"] for b in refs["branches"] if b["name"] == branch), "")
+        log("[版本] 最近提交拉取失败，先列出版本标签和分支\n")
+        return {"ok": True, "partial": True, "branch": branch, "pinned": not info.get("branch"),
+                "behind": 0 if tip and tip == head else None,
+                "latest": {"commit": tip, "short": tip[:7], "date": "", "subject": ""} if tip else None,
+                "commits": [], "tags": refs["tags"], "branches": refs["branches"], "current": head}
     ref = f"refs/remotes/origin/{branch}"
     commits = recent_commits(git_exe, repo, ref, 40, env)
     behind = behind_count(git_exe, repo, ref, env)
-    head = info.get("commit", "")
     if behind is None:
         idx = next((i for i, c in enumerate(commits) if c["commit"] == head), None)
         behind = idx
