@@ -2760,7 +2760,7 @@ def _deploy_flow_comfy(self, target, use_portable):
                 node_ids, target, py, git_exe,
                 run=lambda prog, args, cwd, e, t: self._deploy_run_cmd(prog, args, cwd, log, env=e, timeout=t),
                 log=log, env=env, cancelled=self._deploy_cancel.is_set,
-                gh_proxies=_gh_proxies(dcfg, lambda m: log(m + "\n")),
+                gh_sources=_gh_sources(dcfg, lambda m: log(m + "\n")),
                 pip_mirror_argsets=pip_mirror_argsets)
             if self._deploy_cancel.is_set():
                 raise _DeployCancelled()
@@ -5454,15 +5454,26 @@ def _git_for(cfg, root):
     return "git" if shutil.which("git") else None
 
 
-def _gh_proxies(cfg, log=None):
-    """要走 GitHub 加速时返回代理前缀列表（按顺序尝试，最后直连），否则空"""
+def _gh_sources(cfg, log=None):
+    """
+    git 联网（插件 / 节点 / 版本管理）的候选地址，vm.net_sources 的格式。
+    GitHub 走不通一律切国内加速：
+      「总是使用官方源」           → 只直连
+      GitHub 不能直连 / 总是用镜像 → 国内加速在前，直连兜底
+      能直连（包括开了代理）       → 直连在前，国内加速兜底
+    最后这条以前只试直连：「能直连」只是某一次探测的结论，还永久缓存，
+    之后真去 clone 时被墙 / 限速很常见，直连一失败就装不上了。
+    """
     try:
         import mirror_manager as mm
+        if cfg.get("mirror_mode") == "never":
+            return [""]
+        mirrors = vm.net_sources(mm.GITHUB_PROXIES)[:-1]
         if mm.resolve_github_mode(cfg, log):
-            return list(mm.GITHUB_PROXIES)
+            return mirrors + [""]
+        return [""] + mirrors
     except Exception:
-        pass
-    return []
+        return [""]
 
 
 def _pip_mirror_argsets(cfg, log=None):
@@ -5710,7 +5721,7 @@ def _api_ext_install(self, names, iid=None):
                     ids, comfy_dir, py, git_exe,
                     run=lambda prog, args, cwd, e, t: _ext_run_cmd(self, prog, args, cwd, e, t),
                     log=log, env=env, cancelled=lambda: self._ext_cancel,
-                    gh_proxies=_gh_proxies(cfg, lambda m: log(m + "\n")),
+                    gh_sources=_gh_sources(cfg, lambda m: log(m + "\n")),
                     pip_mirror_argsets=_pip_mirror_argsets(cfg, lambda m: log(m + "\n")))
                 if self._ext_cancel:
                     log("\n[插件] 已取消\n")
@@ -5746,7 +5757,7 @@ def _api_ext_install(self, names, iid=None):
         try:
             log(f"[插件] 安装到：{info['name']}（{ext_dir}）\n")
             os.makedirs(ext_dir, exist_ok=True)
-            sources = vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n")))
+            sources = _gh_sources(cfg, lambda m: log(m + "\n"))
             env = _ext_env(cfg, info)
             for name, url, folder in selected:
                 if self._ext_cancel:
@@ -5754,14 +5765,20 @@ def _api_ext_install(self, names, iid=None):
                 log(f"\n[插件] 正在安装: {name}\n")
                 dest = os.path.join(ext_dir, folder)
                 rc = 1
-                # 代理逐个试，最后直连；远程地址始终记成 GitHub 原地址，以后更新不依赖某个代理
-                for i, prefix in enumerate(sources):
+                # 先同时测直连和各国内加速，从最快连通的那个下，其余按顺序当后备；
+                # 远程地址始终记成 GitHub 原地址，以后更新不依赖某个加速地址
+                ranked = vm.rank_sources(git_exe, ext_dir, url, sources, env, log)
+                if not ranked:
+                    log("[插件] GitHub 直连和国内加速地址都连不上。可以过一会儿再试，"
+                        "或在「启动器设置 → 网络代理」填上代理软件的端口\n")
+                for i, prefix in enumerate(ranked):
                     if self._ext_cancel:
                         break
                     if i:
                         log("[插件] 这个地址没连上，换下一个重试 ...\n")
+                    log(f"[插件] 下载（{vm.source_label(prefix)}）...\n")
                     args = (["-c", f"url.{prefix}.insteadOf=https://github.com/"] if prefix else []) + \
-                        ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60", "clone", url, dest]
+                        ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "clone", url, dest]
                     rc = _ext_run_cmd(self, git_exe, args, ext_dir, env, 900)
                     if rc == 0:
                         break
@@ -5823,7 +5840,7 @@ def _api_ext_repo_versions(self, rel, iid=None):
 
 def _ext_repo_versions_body(self, cfg, info, git_exe, repo, env, local, log):
     remote = vm.check(lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t), git_exe, repo,
-                      local.get("remote"), vm.net_sources(_gh_proxies(cfg)), log, env,
+                      local.get("remote"), _gh_sources(cfg), log, env,
                       cancelled=lambda: self._ext_cancel)
     if remote.get("ok"):
         self._ext_updates[os.path.normcase(repo)] = _update_summary(remote)
@@ -5855,7 +5872,7 @@ def _api_ext_check_updates(self, iid=None):
         from concurrent.futures import ThreadPoolExecutor
         log = lambda t: self._emit("ext", "log", text=t)
         env = _ext_env(cfg, info)
-        sources = vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n")))
+        sources = _gh_sources(cfg, lambda m: log(m + "\n"))
         log(f"\n[插件] 检查 {len(repos)} 个插件的更新 ...\n")
         quiet = lambda p, a, c, e, t: -1 if self._ext_cancel else _quiet_run(p, a, c, e, t)
         n_upd = [0]
@@ -5918,8 +5935,7 @@ def _api_ext_switch(self, rels, target=None, iid=None):
         log = lambda t: self._emit("ext", "log", text=t)
         run = lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t)
         env = _ext_env(cfg, info)
-        proxies = _gh_proxies(cfg, lambda m: log(m + "\n"))
-        sources = vm.net_sources(proxies)
+        sources = _gh_sources(cfg, lambda m: log(m + "\n"))
         py = cm.comfy_python(cfg, info["root"]) if comfy else None
         ok = fail = 0
         try:
@@ -5951,7 +5967,7 @@ def _api_ext_switch(self, rels, target=None, iid=None):
                 if comfy and not self._ext_cancel:
                     bad = comfy_nodes.install_node_deps(
                         repo, comfy_dir, py, run, log, env, lambda: self._ext_cancel,
-                        proxies, _pip_mirror_argsets(cfg))
+                        sources, _pip_mirror_argsets(cfg))
                     if bad:
                         log(f"[插件] {name}：有依赖没装上：{'、'.join(bad)}\n")
             if self._ext_cancel:
@@ -6152,7 +6168,7 @@ def _ver_check_body(self, cfg, info, git_exe, log):
     env = _ver_env(cfg, info)
     remote = vm.local_info(git_exe, info["repo"], env, with_dirty=False).get("remote") or info["official_url"]
     chk = vm.check(lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t), git_exe, info["repo"], remote,
-                   vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n"))), log, env,
+                   _gh_sources(cfg, lambda m: log(m + "\n")), log, env,
                    cancelled=lambda: self._ver_cancel)
     self._ver_proc = None
     if chk.get("ok"):
@@ -6185,13 +6201,13 @@ def _api_ver_switch(self, target=None, iid=None):
         log = lambda t: self._emit("ver", "log", text=t)
         run = lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t)
         env = _ver_env(cfg, info)
-        proxies = _gh_proxies(cfg, lambda m: log(m + "\n"))
+        sources = _gh_sources(cfg, lambda m: log(m + "\n"))
         res = {}
         try:
             local = vm.local_info(git_exe, repo, env, with_dirty=False)
             log(f"\n[版本] 「{info['name']}」当前版本：{vm.version_label(local)}\n")
             res = vm.switch(run, git_exe, repo, target, local.get("remote") or info["official_url"],
-                            vm.net_sources(proxies), log, env, keep_files=info["keep"],
+                            sources, log, env, keep_files=info["keep"],
                             backup_root=os.path.join(VERSION_BACKUP_DIR, "app", info["id"] or "default"),
                             cancelled=lambda: self._ver_cancel)
             if res.get("ok") and not res.get("unchanged"):
@@ -6203,7 +6219,7 @@ def _api_ver_switch(self, target=None, iid=None):
                     log("[版本] 补装新版本需要的依赖（ComfyUI 不会自己装）...\n")
                     bad = comfy_nodes.sync_comfy_requirements(
                         repo, cm.comfy_python(cfg, info["root"]), run, log, env,
-                        lambda: self._ver_cancel, proxies, _pip_mirror_argsets(cfg))
+                        lambda: self._ver_cancel, sources, _pip_mirror_argsets(cfg))
                     res["deps_failed"] = bad
                     log("[版本] 依赖已更新\n" if not bad else
                         f"[版本] 这些依赖没装上：{'、'.join(bad)}（可以稍后再点一次更新重试）\n")
@@ -6244,14 +6260,14 @@ def _api_ver_adopt(self, iid=None):
         try:
             log(f"\n[版本] 接管「{info['name']}」：{repo}\n")
             res = vm.adopt(run, git_exe, repo, info["official_url"], info["official_branch"],
-                           vm.net_sources(_gh_proxies(cfg, lambda m: log(m + "\n"))), log, env,
+                           _gh_sources(cfg, lambda m: log(m + "\n")), log, env,
                            keep_files=info["keep"], cancelled=lambda: self._ver_cancel)
             if res.get("ok"):
                 log("[版本] 接管完成，以后可以直接在这里更新 / 切换版本\n")
                 if info["kind"] == "comfyui" and not self._ver_cancel:
                     comfy_nodes.sync_comfy_requirements(
                         repo, cm.comfy_python(cfg, info["root"]), run, log, env,
-                        lambda: self._ver_cancel, _gh_proxies(cfg), _pip_mirror_argsets(cfg))
+                        lambda: self._ver_cancel, _gh_sources(cfg), _pip_mirror_argsets(cfg))
             else:
                 log(f"[版本] 接管失败：{res.get('error')}\n")
         finally:

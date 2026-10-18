@@ -65,11 +65,17 @@ PYTORCH_OFFICIAL_WHL = "https://download.pytorch.org/whl"
 HF_MIRROR = "https://hf-mirror.com"
 
 # GitHub 加速代理：这类服务变动频繁，所以准备多个候选依次尝试。
-# 用法是把原始 URL 拼在代理域名后面。
+# 用法是把原始 URL 拼在代理域名后面。git clone / release / raw 都支持（2026-10 实测）。
+# git 联网（插件、节点、版本管理）会同时测全部候选、挑最快的，多放几个不拖慢速度。
+# 已失效、别再加回来：github.moeyy.xyz（停服）、ghproxy.cc、hub.gitmirror.com、
+# kkgithub.com / bgithub.xyz / githubfast.com（整站镜像都已连不上）；
+# gitclone.com 只有缓存过的仓库能拉，其余 502，且缓存可能是旧版本
 GITHUB_PROXIES = [
     "https://ghfast.top",
     "https://gh-proxy.com",
-    "https://ghproxy.net",      # github.moeyy.xyz 2026 年已停服（域名解析不到）
+    "https://ghproxy.net",
+    "https://gh.llkk.cc",
+    "https://gh-proxy.org",
 ]
 
 

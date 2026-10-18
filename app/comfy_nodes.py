@@ -24,6 +24,8 @@ import re
 import shutil
 import tempfile
 
+import version_manager as vm
+
 MANAGER_ID = "comfyui-manager"
 MANAGER_LEGACY_URL = "https://github.com/Comfy-Org/ComfyUI-Manager.git"
 MANAGER_LEGACY_FOLDER = "comfyui-manager"
@@ -266,17 +268,18 @@ class DepInstaller:
     """
     往某个 ComfyUI 的 Python 里装依赖（节点安装、节点换版本、ComfyUI 本体换版本共用）。
       run(program, args, cwd, env, timeout) -> 退出码（调用方负责流式日志 / 取消 / 超时）
-      gh_proxies: GitHub 加速代理前缀列表（如 "https://ghfast.top"），按顺序尝试，最后直连
+      gh_sources: git 联网候选地址（vm.net_sources 格式，"" 为直连），按顺序尝试；
+        由 webview_api._gh_sources 生成：GitHub 走不通自动切国内加速
       pip_mirror_argsets: pip 镜像参数组列表（如 [["-i", 清华], ["-i", 阿里]]），
         按顺序尝试，官方源永远自动兜底
     用完调用 close() 删掉临时的 torch 约束文件。
     """
 
     def __init__(self, py, run, log, env=None, cancelled=lambda: False,
-                 gh_proxies=(), pip_mirror_argsets=None):
+                 gh_sources=(), pip_mirror_argsets=None):
         self.py, self.run, self.log, self.cancelled = py, run, log, cancelled
         self.env = env
-        self.sources = [p.rstrip("/") + "/https://github.com/" for p in gh_proxies] + [""]
+        self.sources = list(gh_sources) if gh_sources else [""]
         self.mirrors = [list(a) for a in (pip_mirror_argsets or [])]
         self.pins = _torch_constraints(py, env)
 
@@ -379,13 +382,13 @@ def node_env(comfy_dir, env=None):
 
 
 def sync_comfy_requirements(comfy_dir, py, run, log, env=None, cancelled=lambda: False,
-                            gh_proxies=(), pip_mirror_argsets=None):
+                            gh_sources=(), pip_mirror_argsets=None):
     """
     ComfyUI 本体换版本后补装依赖：ComfyUI 启动时不会自己装（新版前端包
     comfyui-frontend-package 的版本号每个版本都会变，不装就是旧界面甚至打不开）。
     已经装了内置 Manager 的，manager_requirements.txt 也一起更新。返回装不上的依赖列表
     """
-    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_proxies, pip_mirror_argsets)
+    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_sources, pip_mirror_argsets)
     try:
         if not dep.ok():
             log("[版本] 找不到这个 ComfyUI 用的 Python，依赖没法自动补装\n")
@@ -400,9 +403,9 @@ def sync_comfy_requirements(comfy_dir, py, run, log, env=None, cancelled=lambda:
 
 
 def install_node_deps(node_dir, comfy_dir, py, run, log, env=None, cancelled=lambda: False,
-                      gh_proxies=(), pip_mirror_argsets=None):
+                      gh_sources=(), pip_mirror_argsets=None):
     """节点换版本后重装它的依赖。返回 None = 全部装好；否则返回失败原因列表"""
-    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_proxies, pip_mirror_argsets)
+    dep = DepInstaller(py, run, log, node_env(comfy_dir, env), cancelled, gh_sources, pip_mirror_argsets)
     try:
         return dep.node_deps(node_dir, os.path.basename(node_dir))
     finally:
@@ -410,7 +413,7 @@ def install_node_deps(node_dir, comfy_dir, py, run, log, env=None, cancelled=lam
 
 
 def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: False,
-            gh_proxies=(), pip_mirror_argsets=None):
+            gh_sources=(), pip_mirror_argsets=None):
     """
     装一组节点。参数含义见 DepInstaller。
     返回 {"ok": [...], "failed": [(id, 原因)], "skipped": [...]}
@@ -424,7 +427,7 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
     cn = custom_nodes_dir(comfy_dir)
     os.makedirs(cn, exist_ok=True)
     env = node_env(comfy_dir, env)
-    dep = DepInstaller(py, run, log, env, cancelled, gh_proxies, pip_mirror_argsets)
+    dep = DepInstaller(py, run, log, env, cancelled, gh_sources, pip_mirror_argsets)
     sources = dep.sources
     pip = dep.pip
     install_deps = dep.node_deps
@@ -470,18 +473,23 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
         target = os.path.join(cn, folder)
 
         cloned = False
-        for prefix in sources:
+        # 先同时测所有地址，从最快连通的那个下；一个都连不上就别挨个死等了
+        ranked = vm.rank_sources(git_exe, cn, url, sources, env, log)
+        if not ranked:
+            log("[节点] GitHub 直连和国内加速地址都连不上。可以过一会儿再试，"
+                "或在「启动器设置 → 网络代理」填上代理软件的端口\n")
+        for prefix in ranked:
             if cancelled():
                 break
             args = []
             if prefix:
                 args += ["-c", f"url.{prefix}.insteadOf=https://github.com/"]
-            args += ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=60",
+            args += ["-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30",
                      "clone", "--depth", "1"]
             if node.get("recursive"):
                 args += ["--recursive", "--shallow-submodules"]
             args += [url, target]
-            log(f"[节点] 下载{'（经 ' + prefix.split('/https://')[0] + ' 加速）' if prefix else ''} ...\n")
+            log(f"[节点] 下载（{vm.source_label(prefix)}）...\n")
             rc = run(git_exe, args, cn, env, 900)
             if rc == 0 and os.path.isdir(target):
                 cloned = True

@@ -275,11 +275,17 @@ def net_capture(git_exe, repo, args, url, sources, env=None, timeout=25):
     联网的短查询（ls-remote）：所有候选前缀同时试，返回最先成功的 (0, stdout)。
     以前是挨个试、每个等 60 秒，国内碰上一个卡住的代理弹窗就一直转圈。
     """
+    rc, out, _prefix = _race(git_exe, repo, args, url, sources, env, timeout)
+    return rc, out
+
+
+def _race(git_exe, repo, args, url, sources, env, timeout):
+    """net_capture 的本体，额外返回胜出的前缀（并发调用时不能靠全局的 _last_ok 去读）"""
     cands = sources if url.startswith(_GH) else [""]
     if len(cands) <= 1:
-        rc, out = capture(git_exe, repo, _net_cfg(cands[0] if cands else "", url) + list(args),
-                          _env(env), timeout)
-        return rc, out
+        prefix = cands[0] if cands else ""
+        rc, out = capture(git_exe, repo, _net_cfg(prefix, url) + list(args), _env(env), timeout)
+        return rc, out, prefix
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=len(cands))
     futs = {pool.submit(capture, git_exe, repo, _net_cfg(prefix, url) + list(args), _env(env), timeout): prefix
             for prefix in cands}
@@ -289,11 +295,38 @@ def net_capture(git_exe, repo, args, url, sources, env=None, timeout=25):
             rc, out = f.result()
             if rc == 0:
                 _remember(futs[f])
-                return rc, out
+                return rc, out, futs[f]
     finally:
         # 没跑完的让它们自己超时退出，不在这里等
         pool.shutdown(wait=False, cancel_futures=True)
-    return rc, out
+    return rc, out, None
+
+
+def source_label(prefix):
+    """候选前缀 → 给人看的名字"""
+    if not prefix:
+        return "GitHub 直连"
+    return prefix.split("://", 1)[-1].split("/", 1)[0]
+
+
+def rank_sources(git_exe, cwd, url, sources, env=None, log=None, timeout=20):
+    """
+    下载前用 ls-remote 同时测一遍所有候选，最先连通的排第一，其余保持原顺序当后备。
+    返回排好的列表；一个都连不上返回 []（调用方直接报失败，不再挨个死等）。
+    不是 GitHub 地址、或只有一个候选时原样返回，不测。
+    """
+    cands = list(sources) if url.startswith(_GH) else [""]
+    if len(cands) <= 1:
+        return cands
+    if log:
+        log(f"[网络] 同时测试 {len(cands)} 个地址（GitHub 直连 + 国内加速）...\n")
+    t0 = time.monotonic()
+    rc, _out, best = _race(git_exe, cwd, ["ls-remote", url, "HEAD"], url, cands, env, timeout)
+    if rc != 0:
+        return []
+    if log:
+        log(f"[网络] 选用 {source_label(best)}（{time.monotonic() - t0:.1f} 秒连通）\n")
+    return [best] + [x for x in cands if x != best]
 
 
 def net_run(run, git_exe, repo, args, url, sources, log, env=None, timeout=1200, cancelled=lambda: False):
@@ -307,7 +340,7 @@ def net_run(run, git_exe, repo, args, url, sources, log, env=None, timeout=1200,
         if i:
             log("[版本] 这个地址没连上，换下一个重试 ...\n")
         if prefix:
-            log(f"[版本] 经 {prefix.split('/https://')[0]} 加速连接 GitHub ...\n")
+            log(f"[版本] 经 {source_label(prefix)} 加速连接 GitHub ...\n")
         rc = run(git_exe, ["-C", repo] + _net_cfg(prefix, url) + list(args), repo, _env(env), timeout)
         if rc == 0:
             if url.startswith(_GH):

@@ -374,7 +374,7 @@
             <span class="hint" id="s-mirror-status"></span>
             <button class="btn" id="s-mirror-redetect">重新检测网络环境</button>
           </div>
-          <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。</div>
+          <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。反过来也一样：即使检测为能直连，装插件 / 节点时 GitHub 连不上也会自动切到国内加速（会同时测几个地址，挑最快的）；只有选「总是使用官方源」才只走直连。</div>
         </div>
 
         <div class="card">
