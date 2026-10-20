@@ -2870,16 +2870,23 @@ def _deploy_flow_comfy(self, target, use_portable):
         self._emit("deploy", "state", running=False)
 
 
+# torch 小版本 → 官方 torch 在 Linux 上锁定的 triton 小版本（PyPI 上 torch 的 requires_dist）。
+# 2.9 之前是 triton 3.(m-4)，之后不再一一对应（2.10 / 2.11 都是 3.6，2.12 / 2.13 都是 3.7），
+# 以前按公式算，torch 2.13 会去装不存在的 triton-windows 3.9。新 torch 出来后照官方依赖补一行。
+_TORCH_TRITON = {6: 2, 7: 3, 8: 4, 9: 5, 10: 6, 11: 6, 12: 7, 13: 7, 14: 8}
+
+
 def _triton_spec_for_torch(torch_ver):
     """
-    torch 版本 → 对应的 triton-windows 版本范围（pip 规格），不支持返回 None。
-    triton-windows 跟着官方 triton 走：torch 2.6 配 3.2、2.7 配 3.3 …… 2.9 配 3.5，
-    即 triton 3.(m-4) 对应 torch 2.m。版本对不上 import 时会直接崩，所以必须钉住小版本。
+    torch 版本 → 对应的 triton-windows 版本范围（pip 规格），不认识的版本返回 None。
+    triton-windows 跟着官方 triton 的版本号走，版本对不上 import 时会直接崩，所以必须钉住小版本。
     """
     m = re.match(r"(\d+)\.(\d+)", torch_ver or "")
-    if not m or int(m.group(1)) != 2 or int(m.group(2)) < 6:
+    if not m or int(m.group(1)) != 2:
         return None
-    minor = int(m.group(2)) - 4
+    minor = _TORCH_TRITON.get(int(m.group(2)))
+    if minor is None:
+        return None
     return f"triton-windows>=3.{minor},<3.{minor + 1}"
 
 
@@ -2909,7 +2916,9 @@ def _ensure_triton(self, py, cwd, log, env, cfg, pip_mirror_argsets=None):
         return
     spec = _triton_spec_for_torch(torch_ver)
     if not spec:
-        log(f"[部署] torch {torch_ver} 太旧，没有对应的 triton-windows，跳过\n")
+        old = re.match(r"2\.(\d+)", torch_ver) and int(re.match(r"2\.(\d+)", torch_ver).group(1)) < min(_TORCH_TRITON)
+        log(f"[部署] torch {torch_ver} {'太旧，没有' if old else '较新，启动器还没收录'}对应的 triton-windows，跳过"
+            f"{'' if old else '（不影响正常使用；需要的话可以手动 pip install triton-windows 对应版本）'}\n")
         return
     log(f"\n[部署] 安装 triton（{spec}，配 torch {torch_ver}；SageAttention 等加速要用）...\n")
     for i, extra in enumerate(list(pip_mirror_argsets or []) + [[]]):
