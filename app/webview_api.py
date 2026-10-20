@@ -1412,6 +1412,8 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
                 return
         else:
             log("[部署] 检测到已有安装，跳过 git clone 步骤\n")
+            if branch in _NEO_KEYS:
+                variant = _deploy_reconcile_variant(self, target, variant, git_exe, deploy_env, log)
 
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
@@ -1718,6 +1720,66 @@ def _drop_broken_bundled_git(target, log):
         return
     log(f"[部署] 目录里已有的便携 Git 运行不了（{detail}），删除后重新准备\n")
     shutil.rmtree(git_root, ignore_errors=True)
+
+
+def _deploy_reconcile_variant(self, target, variant, git_exe, env, log):
+    """
+    部署到已有安装时，源码不会重新拉取，所以要看目录里实际是哪个仓库，再决定登记成什么：
+      - 选了 H3、目录里是官方 Neo → 问用户：切到 H3 仓库 / 按普通 Neo 登记 / 取消
+        （以前直接登记成 H3，实例名写着 H3，UI Preset 里却没有 h3）
+      - 选了普通 Neo、目录里其实是 H3 → 按 H3 登记（H3 = Neo + MiniMax-H3，不切源码）
+    返回最终登记用的 variant。
+    """
+    import install_finder
+    actual = install_finder.forge_variant(target)
+    if variant != "h3":
+        if actual == "h3":
+            log("[部署] 这个目录里装的是 Forge Neo · H3 分支，按 H3 实例登记（源码不动）\n")
+        return actual
+    if actual == "h3":
+        return "h3"
+    is_git = bool(vm.git_dir_of(target))
+    remote = vm.read_remote_url(target).strip() if is_git else ""
+    detail = (f"这个目录里已经装好了 Forge，但源码是「{remote or '官方 Forge Neo'}」，不是 H3 分支，"
+              "所以 UI Preset 里不会有 h3，也用不了 MiniMax-H3 视频生成。\n\n"
+              "要把源码切换到 H3 仓库（wangjue520/sd-webui-forge-neo-h3）吗？\n"
+              "· 只换源码：venv / 模型 / 插件 / 出图都不动\n"
+              "· 你改过的源码文件会先备份到启动器目录 launcher_data\\version_backup\n"
+              "· 下次启动时 WebUI 会自己补装 H3 需要的依赖")
+    log(f"[部署] 选的是 H3，但目录里的源码不是 H3 分支（{remote or '整合包，没有 .git'}）\n")
+    choice = self._ask(
+        "deploy", "目录里不是 H3 分支", detail,
+        [
+            {"id": "switch", "label": "切换到 H3 仓库（推荐）", "kind": "primary"},
+            {"id": "keep", "label": "不切换，按普通 Neo 登记", "kind": "normal"},
+            {"id": "cancel", "label": "取消部署", "kind": "danger"},
+        ],
+        cancel_event=self._deploy_cancel)
+    if choice == "cancel" or choice is None:
+        raise _DeployCancelled()
+    if choice == "keep":
+        log("[部署] 保持原来的源码，按普通 Forge Neo 登记\n")
+        return ""
+    run = lambda p, a, c, e, t: self._deploy_run_cmd(p, a, c, log, env=e, timeout=t)
+    sources = _gh_sources(self._deploy_cfg, lambda m: log(m + "\n"))
+    cancelled = self._deploy_cancel.is_set
+    if is_git:
+        res = vm.switch_repo(run, git_exe, target, H3_REPO, H3_BRANCH, sources, log, env,
+                             keep_files=vm.WEBUI_KEEP_FILES,
+                             backup_root=os.path.join(VERSION_BACKUP_DIR, "app", "deploy-h3"), cancelled=cancelled)
+    else:
+        res = vm.adopt(run, git_exe, target, H3_REPO, H3_BRANCH, sources, log, env,
+                       keep_files=vm.WEBUI_KEEP_FILES, cancelled=cancelled)
+    if cancelled():
+        raise _DeployCancelled()
+    if res.get("ok"):
+        log("[部署] 源码已切换到 H3 分支\n")
+        if res.get("conflicts"):
+            log(f"[部署] 有 {len(res['conflicts'])} 个改过的文件换成了 H3 的版本，原来的在：{res.get('backup')}\n")
+        return "h3"
+    log(f"[部署] 切换到 H3 仓库失败：{res.get('error')}。先按普通 Neo 登记，"
+        "网络好了再选「Neo · H3」对这个目录点一次「开始部署」就会重试\n")
+    return ""
 
 
 def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
@@ -6133,8 +6195,15 @@ def _api_ver_info(self, iid=None):
     if info["kind"] == "comfyui":
         local["app_version"] = _comfy_existing_version(repo)
     remote_slug = vm.repo_slug(local.get("remote", ""))
+    official = remote_slug == vm.repo_slug(info["official_url"]) if remote_slug else None
+    # 实例记成 H3、源码却不是 H3 分支（或反过来）：前端提示切仓库 / 改实例类型
+    mismatch = False
+    if info["kind"] != "comfyui" and official is False:
+        import install_finder
+        mismatch = (cfg.get("webui_variant") == "h3") != (install_finder.forge_variant(info["root"]) == "h3")
     return {"ok": True, "target": info, "has_root": True, "has_git": bool(git_exe), "local": local,
-            "official": remote_slug == vm.repo_slug(info["official_url"]) if remote_slug else None,
+            "official": official, "official_name": vm.repo_slug(info["official_url"]),
+            "variant": cfg.get("webui_variant") or "", "variant_mismatch": mismatch,
             "history": vm.load_history(VERSION_HISTORY_PATH, repo),
             "check": self._ver_checks.get(os.path.normcase(repo)),
             "running": info["running"], "busy": _ver_busy(self)}
@@ -6278,6 +6347,76 @@ def _api_ver_adopt(self, iid=None):
     self._emit("ver", "state", running=True)
     self._ver_thread = self._spawn(work, name="ver-adopt")
     return {"ok": True}
+
+
+def _api_ver_switch_repo(self, iid=None):
+    """远程地址不是启动器的仓库时（比如实例记成 H3、源码却是官方 Neo）：换成启动器的仓库和分支"""
+    if _ver_busy(self):
+        return {"ok": False, "error": "已有版本任务在进行中"}
+    cfg, info = _ver_target(self, iid)
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，请先在「一键启动」页停止它再切换"}
+    git_exe = _git_for(cfg, info["root"])
+    repo = info["repo"]
+    if not git_exe or not repo or not vm.git_dir_of(repo):
+        return {"ok": False, "error": "这个实例不是 git 安装的，请先「接管为 Git 管理」"}
+    self._ver_cancel = False
+
+    def work():
+        log = lambda t: self._emit("ver", "log", text=t)
+        run = lambda p, a, c, e, t: _ver_run(self, p, a, c, e, t)
+        env = _ver_env(cfg, info)
+        res = {}
+        try:
+            local = vm.local_info(git_exe, repo, env, with_dirty=False)
+            log(f"\n[版本] 「{info['name']}」切换到启动器的仓库 {info['official_url']}（{info['official_branch']} 分支）\n")
+            res = vm.switch_repo(run, git_exe, repo, info["official_url"], info["official_branch"],
+                                 _gh_sources(cfg, lambda m: log(m + "\n")), log, env, keep_files=info["keep"],
+                                 backup_root=os.path.join(VERSION_BACKUP_DIR, "app", info["id"] or "default"),
+                                 cancelled=lambda: self._ver_cancel)
+            if res.get("ok"):
+                if local.get("commit"):
+                    vm.record_history(VERSION_HISTORY_PATH, repo, local["commit"], vm.version_label(local))
+                self._ver_checks.pop(os.path.normcase(repo), None)
+                new = vm.local_info(git_exe, repo, env, with_dirty=False)
+                log(f"[版本] 已切换到：{new.get('remote')} · {vm.version_label(new)}（{new.get('date', '')}）\n")
+                if info["kind"] == "comfyui" and not self._ver_cancel:
+                    bad = comfy_nodes.sync_comfy_requirements(
+                        repo, cm.comfy_python(cfg, info["root"]), run, log, env,
+                        lambda: self._ver_cancel, _gh_sources(cfg), _pip_mirror_argsets(cfg))
+                    res["deps_failed"] = bad
+                elif info["kind"] != "comfyui":
+                    log("[版本] 下次启动时 WebUI 会自动补装新版本需要的依赖，第一次启动会慢一点\n")
+            else:
+                log(f"[版本] 切换失败：{res.get('error')}\n")
+        finally:
+            self._ver_proc = None
+            self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
+                       backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
+
+    self._emit("ver", "state", running=True)
+    self._ver_thread = self._spawn(work, name="ver-switch-repo")
+    return {"ok": True}
+
+
+def _api_ver_fix_variant(self, iid=None):
+    """实例类型（普通 Neo / H3）按目录里实际的源码改过来，不动任何文件"""
+    import install_finder
+    cfg, info = _ver_target(self, iid)
+    if info["kind"] == "comfyui" or not info["root"]:
+        return {"ok": False, "error": "只有 Forge 实例需要这个"}
+    actual = install_finder.forge_variant(info["root"])
+    with self._cfg_lock:
+        target_id = info.get("id") or self.cfg.get("active_instance")
+        inst = cm.find_instance(self.cfg, target_id)
+        if inst is None:
+            return {"ok": False, "error": "找不到这个实例"}
+        inst["webui_variant"] = actual
+        if target_id == self.cfg.get("active_instance"):
+            self.cfg["webui_variant"] = actual
+        cm.save_config(self.cfg)
+    self._emit("instances", "changed")
+    return {"ok": True, "variant": actual, "kind_label": cm.kind_label(inst.get("webui_branch"), actual)}
 
 
 def _api_ver_cancel(self):
@@ -7596,6 +7735,8 @@ for _name, _fn in {
     "ver_check": _api_ver_check,
     "ver_switch": _api_ver_switch,
     "ver_adopt": _api_ver_adopt,
+    "ver_switch_repo": _api_ver_switch_repo,
+    "ver_fix_variant": _api_ver_fix_variant,
     "ver_cancel": _api_ver_cancel,
     "ver_open_backup": _api_ver_open_backup,
     "comfy_node_catalog": _api_comfy_node_catalog,

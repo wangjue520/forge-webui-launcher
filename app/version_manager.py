@@ -722,6 +722,30 @@ def switch(run, git_exe, repo, target, url, sources, log, env=None, keep_files=(
     return res
 
 
+def switch_repo(run, git_exe, repo, url, branch, sources, log, env=None, keep_files=(), backup_root=None,
+                cancelled=lambda: False):
+    """
+    把源码换成另一个仓库的某个分支（例如官方 Forge Neo → H3 分支）：改远程地址 → 拉分支 → 检出。
+    改过的源码文件照常备份并尝试合并；失败时远程地址改回原来的。返回值同 switch()，另带 old_url。
+    """
+    repo = os.path.abspath(repo)
+    url = normalize_url(url)
+    old_url = read_remote_url(repo).strip()
+    log(f"[版本] 远程仓库：{old_url or '（无）'} → {url}\n")
+    rc, _ = capture(git_exe, repo, ["config", "remote.origin.url", url], env)
+    if rc != 0:
+        return {"ok": False, "error": "改远程地址失败", "from": "", "to": "", "backup": "", "restored": [],
+                "conflicts": [], "old_url": old_url}
+    capture(git_exe, repo, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"], env)
+    res = switch(run, git_exe, repo, {"kind": "branch", "name": branch}, url, sources, log, env,
+                 keep_files=keep_files, backup_root=backup_root, cancelled=cancelled)
+    if not res.get("ok") and old_url:
+        capture(git_exe, repo, ["config", "remote.origin.url", old_url], env)
+        log("[版本] 没切换成功，远程地址已改回原来的\n")
+    res["old_url"] = old_url
+    return res
+
+
 def adopt(run, git_exe, repo, url, branch, sources, log, env=None, keep_files=(), cancelled=lambda: False):
     """
     接管没有 .git 的目录（整合包解压的）：git init → 拉官方分支 → 检出。

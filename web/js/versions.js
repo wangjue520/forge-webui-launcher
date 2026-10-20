@@ -100,6 +100,8 @@
     $("#ver-check").disabled = busy || !ready || !l.is_git;
     $("#ver-adopt").hidden = !(info && info.has_root && !l.is_git);
     $("#ver-adopt").disabled = busy || !ready || running;
+    $("#ver-switch-repo").disabled = busy || !ready || !l.is_git || running;
+    $("#ver-fix-variant").disabled = busy;
     $("#ver-apply").disabled = busy || running || !(picker && picker.selected());
     document.querySelectorAll("#ver-history [data-rollback]").forEach((b) => { b.disabled = busy || running; });
   }
@@ -131,9 +133,22 @@
     const msgs = [];
     if (info && info.running) msgs.push(`「${t.name}」正在运行：切换版本前请先在「一键启动」页停止它（运行中的文件被占用会切换失败）。`);
     if (info && info.has_root && !info.has_git) msgs.push("没有找到可用的 Git：可以在「一键启动」页指定 git.exe，或在「环境部署」页部署便携环境。");
-    if (info && info.official === false) msgs.push("这个仓库的远程地址不是启动器部署时用的官方仓库，更新会跟随它自己的远程地址。");
+    const off = info && info.official === false;
+    const mismatch = !!(info && info.variant_mismatch);
+    if (mismatch && info.variant === "h3") {
+      msgs.push(`这个实例记的是「Forge Neo · H3」，但目录里的源码不是 H3 分支（${(info.local || {}).remote || "未知仓库"}），` +
+        "所以 UI Preset 里没有 h3，也用不了 MiniMax-H3 视频生成。点「切换到 H3 仓库」把源码换过来；如果你本来就只想用普通 Neo，点右边的按钮改实例类型。");
+    } else if (mismatch) {
+      msgs.push("目录里的源码是 Forge Neo · H3 分支，但这个实例记成了普通 Forge Neo。点「按实际源码改实例类型」改成 H3 就行（不动任何文件）。");
+    } else if (off) {
+      msgs.push("这个仓库的远程地址不是启动器部署时用的官方仓库，更新会跟随它自己的远程地址。想换回来可以点「切换到启动器的仓库」。");
+    }
     warn.textContent = msgs.join("\n");
     warn.hidden = !msgs.length;
+    $("#ver-repo-fix").hidden = !off;
+    $("#ver-switch-repo").textContent = mismatch && info.variant === "h3"
+      ? "切换到 H3 仓库…" : `切换到启动器的仓库（${(info && info.official_name) || ""}）…`;
+    $("#ver-fix-variant").hidden = !mismatch;
   }
 
   function renderCurrent() {
@@ -283,6 +298,36 @@
           const r = await App.api.ver_adopt(targetId || null);
           if (r && r.ok === false) App.toast(r.error || "接管失败", "error", 6000);
         } catch (e) { App.toast("接管失败：" + e.message, "error"); }
+      });
+
+      $("#ver-switch-repo").addEventListener("click", async () => {
+        const t = (info && info.target) || {};
+        const ok = await App.confirm("切换仓库",
+          `把「${t.name || ""}」的源码换成 ${t.official_url}（${t.official_branch} 分支）的最新版。\n\n` +
+          "· 只换源码：venv / 模型 / 插件 / 出图都不动\n" +
+          "· 你改过的源码文件会先备份，再尝试合并到新源码里（webui-user.bat 会保留你的设置）\n" +
+          "· 切换前的版本会记进「切换记录」\n" +
+          (t.kind === "comfyui" ? "· 切换后会自动补装新版本需要的依赖\n" : "· 下次启动 WebUI 时它会自己补装依赖，第一次启动会慢一点\n"),
+          "开始切换");
+        if (!ok) return;
+        try {
+          const r = await App.api.ver_switch_repo(targetId || null);
+          if (r && r.ok === false) App.toast(r.error || "切换失败", "error", 6000);
+        } catch (e) { App.toast("切换失败：" + e.message, "error"); }
+      });
+      $("#ver-fix-variant").addEventListener("click", async () => {
+        const toH3 = !(info && info.variant === "h3");
+        const ok = await App.confirm("按实际源码改实例类型",
+          "不改任何文件，只把这个实例在启动器里记的类型改成和源码一致：" +
+          (toH3 ? "改成「Forge Neo · H3」。" : "改成普通「Forge Neo」。\n\n以后想用 H3 视频生成，再回来点「切换到 H3 仓库」。"),
+          "改实例类型");
+        if (!ok) return;
+        try {
+          const r = await App.api.ver_fix_variant(targetId || null);
+          if (r && r.ok === false) App.toast(r.error || "修改失败", "error", 6000);
+          else App.toast("实例类型已改为：" + (r.kind_label || ""), "ok");
+        } catch (e) { App.toast("修改失败：" + e.message, "error"); }
+        refresh();
       });
 
       App.on("ver", "log", (e) => log(e.text));

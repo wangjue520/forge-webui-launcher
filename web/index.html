@@ -506,6 +506,10 @@
             </div>
             <div class="ext-target-path" id="ver-target-path"></div>
             <div class="hint" id="ver-target-warn" data-status="warn" hidden></div>
+            <div class="action-row" id="ver-repo-fix" hidden>
+              <button class="btn btn-accent" id="ver-switch-repo">切换到启动器的仓库…</button>
+              <button class="btn" id="ver-fix-variant" hidden>不切换，按实际源码改实例类型</button>
+            </div>
           </div>
           <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「常用插件」页管理。</div>
 
