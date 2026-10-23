@@ -9,7 +9,7 @@ WWY LoRA 训练器（https://github.com/wangjue520/wwy-lora-trainer）的一键�
                                    scripts/setup_env.py 安装，和在训练器界面里点「安装训练环境」是同一套代码
 部署：便携 Python / Git（复用启动器部署的下载与校验）→ git 拉源码（GitHub 加速候选地址轮换）
       → 按启动器的网络设置写训练器配置 → 跑 setup_env.py 装训练环境。
-启动：用便携 Python 跑 app/main.py --no-browser，日志推到「LoRA 训练器」页，就绪后打开浏览器。
+启动：用便携 Python 跑 app/main.py --no-browser，日志进「一键启动」页的运行日志，就绪后打开浏览器。
 """
 import json
 import os
@@ -30,7 +30,8 @@ REPO = "https://github.com/wangjue520/wwy-lora-trainer"
 REF = "main"
 DEFAULT_PORT = 28100
 DIR_NAME = "WWY-LoRA-Trainer"
-SCOPE = "trainer"
+SCOPE = "trainer"          # 运行时的事件（一键启动页的训练器卡片和运行日志）
+DEPLOY_SCOPE = "deploy"    # 部署进度和日志直接进「环境部署」页，和部署 WebUI / ComfyUI 一样
 TORCH_VARIANTS = ("cu126", "cu128", "cu130")
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # 部署失败 / 中断后目录里可能留下的东西：这些之外还有别的文件就不往里装（免得 git checkout 覆盖用户文件）
@@ -91,6 +92,15 @@ def detect(root):
             d.update(deployable=False, reason="这个文件夹里已经有别的文件，请选一个空文件夹，或已经装好的训练器文件夹")
     d["ready"] = d["installed"] and d["env"] and d["engines"] and bool(d["python"])
     return d
+
+
+def settings_port(root):
+    """训练器自己设置里的端口（data/settings.json 的 port，没设过是 28100）"""
+    try:
+        with open(os.path.join(root, "data", "settings.json"), encoding="utf-8") as f:
+            return int(json.load(f).get("port") or DEFAULT_PORT)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return DEFAULT_PORT
 
 
 def candidate_roots(launcher_dir, cfg):
@@ -177,9 +187,9 @@ class _Cancelled(Exception):
 
 def deploy_flow(api, root, torch_variant):
     """在部署线程里跑。api = LauncherApi：复用它的便携环境下载、带取消 / 超时的命令执行和事件推送。"""
-    log = lambda t: api._emit(SCOPE, "log", text=t)
-    progress = lambda d, t: api._emit(SCOPE, "progress", downloaded=d, total=t)
-    step = lambda pct, text: api._emit(SCOPE, "step", pct=pct, text=text)
+    log = lambda t: api._emit(DEPLOY_SCOPE, "log", text=t)
+    progress = lambda d, t: api._emit(DEPLOY_SCOPE, "progress", downloaded=d, total=t)
+    step = lambda pct, text: api._emit(DEPLOY_SCOPE, "step", pct=pct, text=text)
     ok = False
     try:
         os.makedirs(root, exist_ok=True)
@@ -231,7 +241,7 @@ def deploy_flow(api, root, torch_variant):
             raise RuntimeError(f"训练环境没有装好（退出码 {rc}），详见上面的日志。网络问题的话重新点「一键部署」会接着装")
         ok = True
         step(100, "部署完成")
-        log("\n[训练器] 部署完成，点「启动训练器」就能用了\n")
+        log("\n[训练器] 部署完成，到「一键启动」页点训练器卡片上的「启动」就能用了\n")
     except Exception as e:
         if isinstance(e, _Cancelled) or api._deploy_cancel.is_set():   # 取消时正在跑的命令被结束，报错是取消造成的
             log("\n[训练器] 已取消部署。再点「一键部署」会接着装，已经下好的部分不用重下\n")
@@ -239,11 +249,13 @@ def deploy_flow(api, root, torch_variant):
         log(f"\n[训练器] 部署失败：{e}\n")
         if not isinstance(e, RuntimeError):
             log(traceback.format_exc()[-1500:] + "\n")
-        api._emit(SCOPE, "error", title="训练器部署失败", text=str(e))
+        api._emit(DEPLOY_SCOPE, "error", title="训练器部署失败", text=str(e))
     finally:
         api._deploy_running = False
         api._trainer_deploying = False
-        api._emit(SCOPE, "deploy_done", ok=ok)
+        api._emit(DEPLOY_SCOPE, "state", running=False)
+        api._emit(DEPLOY_SCOPE, "trainer_done", ok=ok, target=root)
+        api._emit(SCOPE, "changed")   # 一键启动页的训练器卡片跟着刷新
 
 
 def _fetch_source(api, root, git, env, log):
@@ -339,21 +351,22 @@ class TrainerRunner:
     def managed(self):
         return bool(self.proc and self.proc.poll() is None)
 
-    def start(self, root, port, open_browser):
+    def start(self, root, open_browser, port=None):
+        """port 不传：用训练器自己设置里的端口（被占用时训练器会自动换一个，地址从它的输出里认）"""
         with self.lock:
             if self.proc and self.proc.poll() is None:
                 return {"ok": False, "error": "训练器已经在运行"}
             d = detect(root)
             if not d["installed"] or not d["python"]:
                 return {"ok": False, "need_deploy": True, "error": "这个文件夹里还没有部署训练器，先点「一键部署」"}
-            self.port = int(port or DEFAULT_PORT)
+            self.port = int(port or settings_port(root))
             url = f"http://127.0.0.1:{self.port}/"
             if probe(url):
                 self.url, self.state = url, "ready"
                 if open_browser:
                     self.api.open_url(url)
                 return {"ok": True, "already": True, "url": url}
-            cmd = [d["python"], "-I", os.path.join(root, "app", "main.py"), "--no-browser", "--port", str(self.port)]
+            cmd = [d["python"], "-I", os.path.join(root, "app", "main.py"), "--no-browser"] + (["--port", str(port)] if port else [])
             env = clean_env({"WWY_LAUNCHER_DIR": LAUNCHER_DIR})
             self.api._emit(SCOPE, "log", text=f"[训练器] 启动：{' '.join(cmd)}\n")
             try:
@@ -373,6 +386,9 @@ class TrainerRunner:
             if proc is not self.proc or self.state == "ready":
                 return
             self.url, self.state = url, "ready"
+            m = re.search(r":(\d+)/?$", url)
+            if m:
+                self.port = int(m.group(1))
         self._emit_state()
         if open_browser:
             self.api.open_url(url)
