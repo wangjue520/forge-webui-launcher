@@ -56,6 +56,7 @@ PYTHON_VERSION_BY_BRANCH = {
     "neo": "3.13",
     "neo2": "3.13",
     "comfyui": "3.13",
+    "lora_trainer": "3.13",   # WWY LoRA 训练器（和它自己的 bat 引导的版本一致）
 }
 
 

@@ -91,6 +91,7 @@
     <symbol id="i-stack" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="5" rx="1"/><rect x="4" y="11" width="16" height="5" rx="1"/><path d="M7 20h10"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7"/><rect x="13" y="4" width="7" height="7"/><rect x="4" y="13" width="7" height="7"/><rect x="13" y="13" width="7" height="7"/></symbol>
     <symbol id="i-star" viewBox="0 0 24 24"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></symbol>
+    <symbol id="i-train" viewBox="0 0 24 24"><path d="M4 18l4-5 3 3 4-6 5 8"/><path d="M4 21h16"/><circle cx="17" cy="5" r="1.8"/></symbol>
     <symbol id="i-image" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M4 18l5-5 3 3 4-4 4 4"/></symbol>
   </defs>
 </svg>
@@ -122,6 +123,7 @@
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
       <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
       <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>WD14 反推</span></button>
+      <button class="nav-item" data-page="trainer"><svg><use href="#i-train"/></svg><span>LoRA 训练器</span></button>
       <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
     </nav>
     <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
@@ -776,6 +778,63 @@
       </section>
 
       <!-- ======== 图片信息 ======== -->
+      <!-- ======== LoRA 训练器（一键部署 / 一键启动，trainer.js） ======== -->
+      <section class="page" id="page-trainer">
+        <div class="card">
+          <div class="card-title">WWY LoRA 训练器<span class="card-title-hint">训练 Anima / SDXL / Krea 2 / MOSS-Image 的 LoRA，自带爬图、反推、标签编辑；独立的程序和训练环境，不影响 WebUI / ComfyUI</span></div>
+          <div class="env-grid" style="grid-template-columns: 90px 1fr">
+            <span class="env-label">训练器</span><span class="env-status" id="tr-st-app">检测中…</span>
+            <span class="env-label">Python</span><span class="env-status" id="tr-st-python">检测中…</span>
+            <span class="env-label">训练环境</span><span class="env-status" id="tr-st-env">检测中…</span>
+            <span class="env-label">运行状态</span><span class="env-status" id="tr-st-run">检测中…</span>
+          </div>
+          <div class="action-row">
+            <button class="btn btn-primary btn-lg" id="tr-start"><svg class="btn-icon"><use href="#i-launch"/></svg>启动训练器</button>
+            <button class="btn btn-lg" id="tr-stop" disabled>停止</button>
+            <button class="btn" id="tr-open" disabled>打开训练器界面</button>
+          </div>
+          <label class="chk-row"><input type="checkbox" id="tr-open-browser"><i></i><span>启动完成后自动在浏览器里打开训练器</span></label>
+        </div>
+
+        <div class="card">
+          <div class="card-title">安装目录<span class="card-title-hint">选一个空文件夹（纯英文路径最稳），或者已经装好的训练器文件夹</span></div>
+          <div class="row">
+            <input type="text" id="tr-root" placeholder="例如 D:\WWY-LoRA-Trainer">
+            <button class="btn" id="tr-browse">浏览…</button>
+            <button class="btn" id="tr-open-dir">打开文件夹</button>
+          </div>
+          <div class="hint" id="tr-root-hint"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">一键部署<span class="card-title-hint">便携 Python + Git → 训练器源码 → PyTorch 和训练引擎（sd-scripts / musubi-tuner）全自动</span></div>
+          <div class="row">
+            <span class="env-label" style="min-width:90px">PyTorch</span>
+            <select id="tr-torch">
+              <option value="auto">自动（按显卡选）</option>
+              <option value="cu128">CUDA 12.8（20 系及以后的 N 卡）</option>
+              <option value="cu130">CUDA 13.0（驱动较新的 30 系及以后）</option>
+              <option value="cu126">CUDA 12.6（GTX 9xx / 10xx 老显卡）</option>
+            </select>
+            <span class="env-label" style="min-width:60px;margin-left:12px">端口</span>
+            <input type="text" id="tr-port" style="width:90px" placeholder="28100">
+          </div>
+          <div class="hint" id="tr-torch-hint"></div>
+          <div class="action-row">
+            <button class="btn btn-primary btn-lg" id="tr-deploy"><svg class="btn-icon"><use href="#i-deploy"/></svg>一键部署</button>
+            <button class="btn btn-lg" id="tr-deploy-cancel" disabled>取消</button>
+          </div>
+          <div class="progress" id="tr-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+          <div class="hint">第一次部署要下载约 4~5 GB（PyTorch 约 2.7 GB），国内网络自动走镜像，按网速大约 10~30 分钟。网络断了再点「一键部署」会接着装，已经下好的部分不用重下。
+            已经装好的训练器再点一次就是「检查并补齐环境」，很快跳过装好的部分。训练器本身的更新在训练器界面「训练器设置」里点「一键更新」。</div>
+        </div>
+
+        <div class="console-wrap">
+          <div class="console-head"><span>训练器日志</span><button class="btn btn-xs" id="tr-log-clear">清空</button></div>
+          <pre class="console" id="tr-log"></pre>
+        </div>
+      </section>
+
       <section class="page" id="page-meta">
         <div class="meta-layout">
           <div class="meta-left">
@@ -1014,6 +1073,7 @@
 <script src="js/extensions.js"></script>
 <script src="js/versions.js"></script>
 <script src="js/wd14.js"></script>
+<script src="js/trainer.js"></script>
 <script src="js/imgcontainer.js"></script>
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
