@@ -51,6 +51,7 @@ import version_manager as vm
 import h3_models as h3m
 import amd_rocm
 import netspeed
+import lora_trainer as lt
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
@@ -58,6 +59,7 @@ from process_manager import (  # noqa: E402  进程工具与常量（V3 搬到 p
     WEBUI_ENTRY_SCRIPT, _NO_WINDOW, _URL_RE, _BIND_ERROR_RE, _OVERRIDE_VAR_PATTERN,
     kill_process_tree, _probe_executable, find_listening_pid, process_name_of,
     _find_webui_user_bat_overrides, _clear_webui_user_bat_overrides, InstanceRunner,
+    _non_ascii_or_space_issues,
 )
 
 MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf")
@@ -950,8 +952,8 @@ class LauncherApi:
         return {"ok": True}
 
     def webui_running(self):
-        """任一实例在运行（关窗确认、重启启动器都看这个）"""
-        return any(r.running() for r in list(self._runners.values()))
+        """任一实例在运行（关窗确认、重启启动器都看这个）；启动器开的 LoRA 训练器也算"""
+        return any(r.running() for r in list(self._runners.values())) or _trainer_managed(self)
 
     def _kill_all_runners(self):
         killed = False
@@ -959,6 +961,9 @@ class LauncherApi:
             if r.running():
                 r.stop()
                 killed = True
+        if _trainer_managed(self):
+            _trainer_runner(self).stop()
+            killed = True
         return killed
 
     def deploy_running(self):
@@ -971,6 +976,8 @@ class LauncherApi:
             if r.running():
                 inst = cm.find_instance(self.cfg, iid) or {}
                 names.append(inst.get("name") or r.label())
+        if _trainer_managed(self):
+            names.append("LoRA 训练器")
         self._emit("app", "confirm_exit", names=names)
 
     def exit_app(self, kill_webui=True):
@@ -2377,7 +2384,7 @@ def _api_set_multi_ui(self, on):
 
 
 def _api_set_hidden_pages(self, pages):
-    allowed = {"settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta", "outputs"}
+    allowed = {"settings", "launcher", "deploy", "civitai", "models", "extensions", "wd14", "meta", "outputs", "trainer"}
     self.cfg["hidden_pages"] = [p for p in (pages or []) if p in allowed]
     cm.save_config(self.cfg)
     return {"ok": True, "hidden_pages": self.cfg["hidden_pages"]}
@@ -6465,6 +6472,157 @@ def _api_ext_cancel(self):
 
 
 # ============================================================
+# LoRA 训练器：一键部署 / 一键启动（实现在 lora_trainer.py）
+# ============================================================
+def _trainer_runner(self):
+    r = getattr(self, "_trainer", None)
+    if r is None:
+        r = self._trainer = lt.TrainerRunner(self)
+    return r
+
+
+def _trainer_managed(self):
+    """启动器开的训练器进程还在（关窗确认 / 结束并退出用；训练器自己另开的不算）"""
+    r = getattr(self, "_trainer", None)
+    return bool(r and r.managed())
+
+
+def _trainer_root(self):
+    return (self.cfg.get("lora_trainer_root") or "").strip() or lt.default_root(APP_DIR, self.cfg)
+
+
+def _trainer_gpu_torch(self):
+    """按显卡推荐 PyTorch 的 CUDA 版本（nvidia-smi 只查一次）"""
+    if getattr(self, "_trainer_torch_rec", None) is None:
+        try:
+            self._trainer_torch_rec = lt.recommend_torch(_nvidia_gpu_names())
+        except Exception:
+            self._trainer_torch_rec = "cu128"
+    return self._trainer_torch_rec
+
+
+def _trainer_save(self, **kv):
+    with self._cfg_lock:
+        self.cfg.update(kv)
+        try:
+            cm.save_config(self.cfg)
+        except OSError:
+            pass
+
+
+def _api_trainer_status(self):
+    root = _trainer_root(self)
+    return {"ok": True, "root": root, "info": lt.detect(root), "run": _trainer_runner(self).status(),
+            "deploying": bool(self._deploy_running and getattr(self, "_trainer_deploying", False)),
+            "port": int(self.cfg.get("lora_trainer_port") or lt.DEFAULT_PORT),
+            "torch": self.cfg.get("lora_trainer_torch") or "auto", "torch_recommend": _trainer_gpu_torch(self),
+            "open_browser": self.cfg.get("lora_trainer_open_browser", True)}
+
+
+def _api_trainer_set(self, changes):
+    """界面上的训练器设置：目录 / 端口 / PyTorch 版本 / 就绪后自动打开浏览器"""
+    keys = {"root": "lora_trainer_root", "port": "lora_trainer_port", "torch": "lora_trainer_torch",
+            "open_browser": "lora_trainer_open_browser"}
+    kv = {keys[k]: v for k, v in (changes or {}).items() if k in keys}
+    if "lora_trainer_port" in kv:
+        try:
+            p = int(kv["lora_trainer_port"])
+            if not 1024 <= p <= 65535:
+                raise ValueError
+            kv["lora_trainer_port"] = p
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "端口要是 1024 ~ 65535 之间的数字"}
+    if "lora_trainer_root" in kv:
+        kv["lora_trainer_root"] = (kv["lora_trainer_root"] or "").strip().strip('"')
+    _trainer_save(self, **kv)
+    return _api_trainer_status(self)
+
+
+def _api_trainer_check_dir(self, root):
+    return {"ok": True, "info": lt.detect(root)}
+
+
+def _api_trainer_deploy(self, root=None, torch="auto"):
+    root = (root or _trainer_root(self)).strip().strip('"')
+    with self._deploy_lock:
+        if self._deploy_running:
+            return {"ok": False, "error": "已经有部署任务在进行（WebUI / ComfyUI 或训练器），等它结束再来"}
+        if not root:
+            return {"ok": False, "error": "请先选择训练器的安装目录"}
+        info = lt.detect(root)
+        if not info["installed"] and not info["deployable"]:
+            return {"ok": False, "error": info["reason"]}
+        if _trainer_runner(self).running():
+            return {"ok": False, "error": "训练器正在运行，先点「停止」再部署（装环境时会替换正在用的文件）"}
+        issues = _non_ascii_or_space_issues(root, "训练器目录")
+        try:
+            os.makedirs(root, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"无法创建目录：\n{root}\n\n{e}"}
+        self._deploy_cfg = dict(self.cfg)
+        self._deploy_cancel.clear()
+        self._deploy_running = True
+        self._trainer_deploying = True
+    _trainer_save(self, lora_trainer_root=root, lora_trainer_torch=torch or "auto")
+    # 「自动」：新装按显卡推荐；已经装好的训练环境沿用它原来的版本，不重装 PyTorch
+    variant = torch if torch in lt.TORCH_VARIANTS else ("" if info["env"] else _trainer_gpu_torch(self))
+    self._emit("trainer", "deploy_state", running=True)
+    for it in issues:   # 中文 / 空格路径：sd-scripts 等训练引擎在这种路径下容易出怪问题
+        self._emit("trainer", "log", text="[提示] " + re.sub(r"\s*\n+\s*", " ", it["text"]) + "\n")
+    try:
+        self._spawn(lambda: lt.deploy_flow(self, root, variant), name="trainer-deploy")
+    except Exception:
+        self._deploy_running = False
+        self._trainer_deploying = False
+        self._emit("trainer", "deploy_state", running=False)
+        return {"ok": False, "error": "无法启动部署线程：\n" + traceback.format_exc()[-500:]}
+    return {"ok": True}
+
+
+def _api_trainer_deploy_cancel(self):
+    if not getattr(self, "_trainer_deploying", False):
+        return {"ok": False, "error": "没有正在进行的训练器部署"}
+    return _api_deploy_cancel(self)
+
+
+def _api_trainer_start(self):
+    if getattr(self, "_trainer_deploying", False) and self._deploy_running:
+        return {"ok": False, "error": "训练器还在部署，装完再启动"}
+    root = _trainer_root(self)
+    r = _trainer_runner(self).start(root, self.cfg.get("lora_trainer_port") or lt.DEFAULT_PORT,
+                                    self.cfg.get("lora_trainer_open_browser", True))
+    if r.get("ok") and not self.cfg.get("lora_trainer_root"):
+        _trainer_save(self, lora_trainer_root=root)
+    return r
+
+
+def _api_trainer_stop(self):
+    return _trainer_runner(self).stop()
+
+
+def _api_trainer_open(self):
+    st = _trainer_runner(self).status()
+    if not st["url"]:
+        return {"ok": False, "error": "训练器还没有运行"}
+    return self.open_url(st["url"])
+
+
+def _api_trainer_open_dir(self):
+    root = _trainer_root(self)
+    if not os.path.isdir(root):
+        return {"ok": False, "error": "文件夹还不存在"}
+    try:
+        if sys.platform == "win32":
+            os.startfile(root)
+        else:
+            subprocess.Popen(["xdg-open", root])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+
+# ============================================================
 # WD14 反推
 # ============================================================
 
@@ -7749,6 +7907,15 @@ for _name, _fn in {
     "ver_cancel": _api_ver_cancel,
     "ver_open_backup": _api_ver_open_backup,
     "comfy_node_catalog": _api_comfy_node_catalog,
+    "trainer_status": _api_trainer_status,
+    "trainer_set": _api_trainer_set,
+    "trainer_check_dir": _api_trainer_check_dir,
+    "trainer_deploy": _api_trainer_deploy,
+    "trainer_deploy_cancel": _api_trainer_deploy_cancel,
+    "trainer_start": _api_trainer_start,
+    "trainer_stop": _api_trainer_stop,
+    "trainer_open": _api_trainer_open,
+    "trainer_open_dir": _api_trainer_open_dir,
     "wd14_models": _api_wd14_models,
     "wd14_load_model": _api_wd14_load_model,
     "wd14_import_model": _api_wd14_import_model,

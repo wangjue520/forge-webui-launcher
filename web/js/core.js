@@ -316,6 +316,7 @@
     outputs: "输出管理",
     extensions: "常用插件",
     wd14: "WD14 标签反推",
+    trainer: "LoRA 训练器",
     meta: "图片信息",
   };
 
@@ -323,7 +324,7 @@
   const PAGE_CODES = {
     launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY", versions: "VERSIONS",
     civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
-    wd14: "WD14 TAGGER", meta: "IMAGE META",
+    wd14: "WD14 TAGGER", trainer: "LORA TRAINER", meta: "IMAGE META",
   };
 
   App.showPage = function (name) {
@@ -546,7 +547,7 @@
     // js 没加载上时对应页面的按钮会完全没反应。缺模块就自动刷新一次——此时
     // 浏览器缓存已热，第二次几乎必好；用 sessionStorage 保证只刷一次不死循环
     const EXPECTED_PAGES = ["launch", "settings", "launcher", "deploy", "versions", "civitai", "models", "extensions", "wd14", "meta",
-                            "instances", "outputs"];
+                            "instances", "outputs", "trainer"];
     const missing = EXPECTED_PAGES.filter((p) => !App.pages[p]);
     if (missing.length) {
       console.error("页面模块未加载完整，自动刷新一次:", missing);
