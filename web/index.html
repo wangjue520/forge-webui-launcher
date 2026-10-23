@@ -847,6 +847,8 @@
       <section class="page" id="page-instances">
         <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、常用插件、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。要更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本，点实例下面或「部署新的实例」旁边的「版本管理…」。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
         <div id="inst-list"></div>
+        <!-- LoRA 训练器：不是实例，单独一行（trainer.js） -->
+        <div id="inst-trainer"></div>
         <div class="action-row">
           <button class="btn btn-primary" id="inst-add">添加已有安装</button>
           <button class="btn" id="inst-deploy">部署新的实例…</button>

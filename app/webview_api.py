@@ -2259,7 +2259,7 @@ def _api_instance_add(self, root, name=""):
         # 训练器不是实例：记成启动器管理的训练器，卡片出现在「一键启动」页
         if _trainer_runner(self).managed() and not _same_path(_trainer_root(self), root):
             return {"ok": False, "error": "启动器开的训练器正在运行，先在「一键启动」页停止它再换"}
-        _trainer_save(self, lora_trainer_root=root)
+        _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
         self._emit(lt.SCOPE, "changed")
         return {"ok": True, "trainer": True, "root": root}
     if not kind:
@@ -6498,6 +6498,8 @@ def _trainer_root(self):
     root = (self.cfg.get("lora_trainer_root") or "").strip()
     if root:
         return root
+    if self.cfg.get("lora_trainer_hidden"):   # 用户在实例管理页移除过：不再自动找回来
+        return ""
     root = lt.found_root(APP_DIR, self.cfg)
     if root:
         return root
@@ -6575,7 +6577,7 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
         self._deploy_cancel.clear()
         self._deploy_running = True
         self._trainer_deploying = True
-    _trainer_save(self, lora_trainer_root=root)
+    _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
     # 「自动」：新装按显卡推荐；已经装好的训练环境沿用它原来的版本，不重装 PyTorch
     variant = torch if torch in lt.TORCH_VARIANTS else ("" if info["env"] else _trainer_gpu_torch(self))
     self._emit("deploy", "state", running=True)
@@ -6610,6 +6612,27 @@ def _api_trainer_open(self):
     if not st["url"]:
         return {"ok": False, "error": "训练器还没有运行"}
     return self.open_url(st["url"])
+
+
+def _api_trainer_set_root(self, root):
+    """实例管理页训练器卡片的「更换…」：换成另一个已经装好的训练器文件夹"""
+    root = (root or "").strip().strip('"')
+    if not lt.is_trainer(root):
+        return {"ok": False, "error": "这个文件夹里没有 WWY LoRA 训练器。还没装的话，在「部署新的实例…」里选训练器部署一个"}
+    if _trainer_runner(self).managed() and not _same_path(_trainer_root(self), root):
+        return {"ok": False, "error": "启动器开的训练器正在运行，先停止它再换"}
+    _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
+    self._emit(lt.SCOPE, "changed")
+    return {"ok": True, "root": root}
+
+
+def _api_trainer_remove(self):
+    """从启动器里去掉训练器（不删文件）；之后不再自动找回来，要用再「添加已有安装」"""
+    if _trainer_runner(self).managed():
+        return {"ok": False, "error": "训练器正在运行，先停止它再移除"}
+    _trainer_save(self, lora_trainer_root="", lora_trainer_hidden=True)
+    self._emit(lt.SCOPE, "changed")
+    return {"ok": True}
 
 
 # ============================================================
@@ -7903,6 +7926,8 @@ for _name, _fn in {
     "trainer_start": _api_trainer_start,
     "trainer_stop": _api_trainer_stop,
     "trainer_open": _api_trainer_open,
+    "trainer_set_root": _api_trainer_set_root,
+    "trainer_remove": _api_trainer_remove,
     "wd14_models": _api_wd14_models,
     "wd14_load_model": _api_wd14_load_model,
     "wd14_import_model": _api_wd14_import_model,

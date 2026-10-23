@@ -228,6 +228,23 @@ class TrainerDirTest(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertIn("正在运行", r["error"])
 
+    def test_set_root_and_remove(self):
+        """实例管理页训练器卡片：更换目录只认训练器文件夹；移除后不再自动找回来，再添加就恢复"""
+        api = self.api
+        api._spawn = lambda fn, name="": fn()
+        self.assertFalse(wa._api_trainer_set_root(api, self.forge)["ok"])
+        other = make_trainer(self.tmp, "lora2")
+        self.assertTrue(wa._api_trainer_set_root(api, other)["ok"])
+        self.assertEqual(wa._trainer_root(api), other)
+        self.assertTrue(wa._api_trainer_remove(api)["ok"])
+        with mock.patch.object(wa.lt, "found_root", lambda *a: self.trainer), \
+             mock.patch.object(wa.lt, "scan_root", lambda *a: self.trainer):
+            self.assertEqual(wa._trainer_root(api), "")
+            self.assertEqual(api.cfg.get("lora_trainer_root"), "")
+        self.assertTrue(wa._api_instance_add(api, self.trainer)["ok"])
+        self.assertEqual(wa._trainer_root(api), self.trainer)
+        self.assertFalse(api.cfg["lora_trainer_hidden"])
+
 
 if __name__ == "__main__":
     unittest.main()
