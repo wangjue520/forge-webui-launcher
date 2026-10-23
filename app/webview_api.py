@@ -2255,6 +2255,13 @@ def _api_instance_add(self, root, name=""):
     if not root or not os.path.isdir(root):
         return {"ok": False, "error": "目录不存在"}
     kind = cm.detect_kind(root)
+    if not kind and lt.is_trainer(root):
+        # 训练器不是实例：记成启动器管理的训练器，卡片出现在「一键启动」页
+        if _trainer_runner(self).managed() and not _same_path(_trainer_root(self), root):
+            return {"ok": False, "error": "启动器开的训练器正在运行，先在「一键启动」页停止它再换"}
+        _trainer_save(self, lora_trainer_root=root)
+        self._emit(lt.SCOPE, "changed")
+        return {"ok": True, "trainer": True, "root": root}
     if not kind:
         return {"ok": False, "error": "这个目录看起来既不是 ComfyUI（没有 main.py）也不是 WebUI"
                                       "（没有 webui.bat）。还没安装的话，去「环境部署」页部署一个。"}
@@ -6488,7 +6495,28 @@ def _trainer_managed(self):
 
 
 def _trainer_root(self):
-    return (self.cfg.get("lora_trainer_root") or "").strip() or lt.default_root(APP_DIR, self.cfg)
+    root = (self.cfg.get("lora_trainer_root") or "").strip()
+    if root:
+        return root
+    root = lt.found_root(APP_DIR, self.cfg)
+    if root:
+        return root
+    _trainer_scan(self)
+    return lt.default_root(APP_DIR, self.cfg)
+
+
+def _trainer_scan(self):
+    """常用位置没找到训练器：后台在各个盘里找一次（每次打开启动器最多一次），找到就记下来、卡片跟着出现"""
+    if getattr(self, "_trainer_scanned", False):
+        return
+    self._trainer_scanned = True
+
+    def run():
+        root = lt.scan_root()
+        if root and not (self.cfg.get("lora_trainer_root") or "").strip():
+            _trainer_save(self, lora_trainer_root=root)
+            self._emit(lt.SCOPE, "changed")
+    self._spawn(run, name="trainer-scan")
 
 
 def _trainer_gpu_torch(self):

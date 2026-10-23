@@ -165,5 +165,50 @@ class ReconcileKindTest(unittest.TestCase):
         self.assertNotIn(("instances", "changed"), api.events)  # 原样改回，不广播
 
 
+def make_trainer(base, name="lora"):
+    root = os.path.join(base, name)
+    for p in (("app", "main.py"), ("app", "envsetup.py"), ("web", "index.html")):
+        _touch(os.path.join(root, *p))
+    return root
+
+
+class TrainerDirTest(unittest.TestCase):
+    """LoRA 训练器装在不叫常用名字的文件夹里（比如 G:\\lora）也要能认出来"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.forge = make_forge_neo(self.tmp)
+        self.trainer = make_trainer(self.tmp)
+        self.p1 = mock.patch.object(cm, "CONFIG_PATH", os.path.join(self.tmp, "launcher_config.json"))
+        self.p2 = mock.patch.object(cm, "write_theme_file", lambda cfg: None)
+        self.p1.start(); self.p2.start()
+        inst = cm.make_instance(None, id="a", webui_root=self.forge, webui_branch="neo2")
+        self.api = fake_api(make_cfg([inst], "a"))
+
+    def tearDown(self):
+        self.p1.stop(); self.p2.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_add_existing_trainer(self):
+        """「添加已有安装」选训练器目录：记成训练器，不变成实例"""
+        r = wa._api_instance_add(self.api, self.trainer)
+        self.assertTrue(r["ok"] and r["trainer"])
+        self.assertEqual(self.api.cfg["lora_trainer_root"], self.trainer)
+        self.assertEqual(len(self.api.cfg["instances"]), 1)
+        self.assertIn(("trainer", "changed"), self.api.events)
+        self.assertEqual(wa._trainer_root(self.api), self.trainer)
+
+    def test_status_scans_once_in_background(self):
+        self.api._spawn = lambda fn, name="": fn()   # 同步跑，方便断言
+        with mock.patch.object(wa.lt, "found_root", lambda *a: ""), \
+             mock.patch.object(wa.lt, "scan_root", mock.Mock(return_value=self.trainer)) as scan:
+            wa._trainer_root(self.api)
+            self.assertEqual(self.api.cfg["lora_trainer_root"], self.trainer)
+            self.assertIn(("trainer", "changed"), self.api.events)
+            self.api.cfg["lora_trainer_root"] = ""
+            wa._trainer_root(self.api)
+            self.assertEqual(scan.call_count, 1)            # 一次启动只扫一次
+
+
 if __name__ == "__main__":
     unittest.main()

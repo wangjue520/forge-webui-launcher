@@ -127,11 +127,40 @@ def candidate_roots(launcher_dir, cfg):
     return out
 
 
-def default_root(launcher_dir, cfg):
+def found_root(launcher_dir, cfg):
+    """启动器 / 实例旁边按常用文件夹名找到的训练器，没有返回 ""。"""
     for c in candidate_roots(launcher_dir, cfg):
         if is_trainer(c):
             return c
-    return os.path.join(os.path.dirname(launcher_dir), DIR_NAME)
+    return ""
+
+
+def default_root(launcher_dir, cfg):
+    return found_root(launcher_dir, cfg) or os.path.join(os.path.dirname(launcher_dir), DIR_NAME)
+
+
+def _last_used(root):
+    """训练器最近一次被用的时间：data/ 里文件的最新修改时间（任务队列、设置、草稿都在这里）"""
+    t = 0.0
+    try:
+        with os.scandir(os.path.join(root, "data")) as it:
+            for e in it:
+                try:
+                    t = max(t, e.stat().st_mtime)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    return t
+
+
+def scan_root(budget=6.0):
+    """文件夹不叫常用名字（比如 G:\\lora）时，在各个盘里按文件特征找。找到多个时挑环境装好的、最近用过的。"""
+    import install_finder
+    roots = install_finder.find_dirs(is_trainer, budget)
+    if not roots:
+        return ""
+    return max(roots, key=lambda r: (detect(r)["ready"], _last_used(r)))
 
 
 def recommend_torch(gpu_names):

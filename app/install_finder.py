@@ -83,25 +83,15 @@ def guess_forge_branch(root):
     return "neo2" if os.path.isfile(os.path.join(root, "pyproject.toml")) else "classic"
 
 
-def find_installs(budget=TIME_BUDGET):
-    """返回 [{"path", "kind": "forge"/"comfyui", "branch", "label"}]，按路径排序、去重"""
+def _walk(on_dir, budget):
+    """各个根目录往下 MAX_DEPTH 层挨个目录调 on_dir(d)；返回 True 表示命中，不再往里找。超时就停。"""
     t_end = time.monotonic() + budget
-    found, seen = [], set()
 
     def visit(d, depth):
         if time.monotonic() > t_end:
             return
-        kind = cm.detect_kind(d)
-        if kind:
-            real = os.path.normcase(os.path.abspath(cm.comfy_layout(d)[0] if kind == "comfyui" else d))
-            # ComfyUI 便携包外层和里层 ComfyUI 是同一个安装，只记一次（记用户更习惯选的外层）
-            if real not in seen:
-                seen.add(real)
-                branch = _branch_of(d, kind)
-                variant = forge_variant(d) if kind == "forge" else ""
-                found.append({"path": d, "kind": kind, "branch": branch, "variant": variant,
-                              "label": cm.kind_label(branch, variant)})
-            return                                          # 安装目录里面不再往下找
+        if on_dir(d):
+            return
         if depth >= MAX_DEPTH:
             return
         try:
@@ -116,5 +106,40 @@ def find_installs(budget=TIME_BUDGET):
 
     for r in _roots():
         visit(r, 0)
+
+
+def find_installs(budget=TIME_BUDGET):
+    """返回 [{"path", "kind": "forge"/"comfyui", "branch", "label"}]，按路径排序、去重"""
+    found, seen = [], set()
+
+    def on_dir(d):
+        kind = cm.detect_kind(d)
+        if not kind:
+            return False
+        real = os.path.normcase(os.path.abspath(cm.comfy_layout(d)[0] if kind == "comfyui" else d))
+        # ComfyUI 便携包外层和里层 ComfyUI 是同一个安装，只记一次（记用户更习惯选的外层）
+        if real not in seen:
+            seen.add(real)
+            branch = _branch_of(d, kind)
+            variant = forge_variant(d) if kind == "forge" else ""
+            found.append({"path": d, "kind": kind, "branch": branch, "variant": variant,
+                          "label": cm.kind_label(branch, variant)})
+        return True                                         # 安装目录里面不再往下找
+
+    _walk(on_dir, budget)
     found.sort(key=lambda x: x["path"].lower())
     return found
+
+
+def find_dirs(match, budget=TIME_BUDGET):
+    """和 find_installs 同样的范围里找 match(d) 为真的目录（比如 LoRA 训练器），按路径排序"""
+    found = []
+
+    def on_dir(d):
+        if match(d):
+            found.append(d)
+            return True
+        return bool(cm.detect_kind(d))                      # WebUI / ComfyUI 里面不会再有
+
+    _walk(on_dir, budget)
+    return sorted(found, key=str.lower)

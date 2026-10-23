@@ -123,6 +123,37 @@ class DetectTest(unittest.TestCase):
         make_trainer(existing)
         self.assertEqual(lt.default_root(launcher, {}), existing)
 
+    def test_scan_finds_trainer_by_files_not_name(self):
+        import install_finder
+        drive = os.path.join(self.tmp, "G")
+        lora = os.path.join(drive, "lora")                    # 文件夹名不是常用名字
+        old = os.path.join(drive, "pkgtest1", "WWY-LoRA-Trainer")
+        make_trainer(lora)
+        make_trainer(old)
+        os.makedirs(os.path.join(drive, "lora", "datasets", "x"))
+        _touch(os.path.join(drive, "notes", "app", "main.py"))   # 只有 main.py 的不算
+        saved = install_finder._roots
+        install_finder._roots = lambda: [drive]
+        try:
+            self.assertEqual(install_finder.find_dirs(lt.is_trainer), sorted([lora, old], key=str.lower))
+            # 两个都没装好环境：挑最近用过的
+            _touch(os.path.join(old, "data", "queue.json"))
+            os.utime(os.path.join(old, "data", "queue.json"), (1, 1))
+            _touch(os.path.join(lora, "data", "queue.json"))
+            self.assertEqual(lt.scan_root(), lora)
+            # 环境装好的优先
+            link_python(old)
+            os.makedirs(os.path.join(old, "env", "Scripts" if os.name == "nt" else "bin"))
+            _touch(os.path.join(old, "env", "Scripts", "python.exe") if os.name == "nt"
+                   else os.path.join(old, "env", "bin", "python"))
+            for n in ("sd-scripts", "musubi-tuner"):
+                os.makedirs(os.path.join(old, "engines", n))
+            self.assertEqual(lt.scan_root(), old)
+            install_finder._roots = lambda: [os.path.join(self.tmp, "empty")]
+            self.assertEqual(lt.scan_root(), "")
+        finally:
+            install_finder._roots = saved
+
     def test_settings_port(self):
         root = os.path.join(self.tmp, "t")
         self.assertEqual(lt.settings_port(root), lt.DEFAULT_PORT)
