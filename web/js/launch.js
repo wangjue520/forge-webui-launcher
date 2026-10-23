@@ -291,16 +291,22 @@
         const i = ((App.instances && App.instances.instances) || []).find((x) => x.id === iid);
         return i ? i.name : "";
       };
+      // 日志流换了来源（别的实例 / LoRA 训练器）时插一行分隔标题
+      const logFrom = (src, title, text) => {
+        if (src !== logSrc) {
+          const first = logSrc === null;
+          logSrc = src;
+          if (title && !(first && src !== "trainer" && !(App.instances && App.instances.multi))) log(`—— ${title}的日志 ——`);
+        }
+        log(text);
+      };
+      App.launchLog = logFrom;
       App.on("launch", "log", (e) => {
         const multi = App.instances && App.instances.multi;
-        if (!multi) { if (mine(e)) log(e.text); return; }
+        if (!multi) { if (mine(e)) logFrom("inst", App.kindName ? App.kindName() + " " : "", e.text); return; }
         const iid = e.iid || App.instances.active || "";
-        if (iid !== logSrc) {
-          logSrc = iid;
-          const name = logSourceName(iid);
-          if (name) log(`—— 实例「${name}」的日志 ——`);
-        }
-        log(e.text);
+        const name = logSourceName(iid);
+        logFrom(iid, name ? `实例「${name}」` : "", e.text);
       });
       $("#launch-log-clear").addEventListener("click", () => { logSrc = null; });
       App.on("launch", "status", (e) => {

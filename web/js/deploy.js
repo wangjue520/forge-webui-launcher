@@ -164,10 +164,9 @@
     }
     if (!(await App.confirm("部署 LoRA 训练器", `即将把 WWY LoRA 训练器部署到：\n${target}\n\n`
       + "会自动下载便携 Python / Git、训练器源码、PyTorch 和训练引擎（约 4~5 GB，按网速大约 10~30 分钟），期间可以随时取消。"
-      + "\n\n部署进度和日志在「LoRA 训练器」页，装好后在那里一键启动。", "开始部署"))) return;
+      + "\n\n装好后在「一键启动」页启动。", "开始部署"))) return;
     const r = await App.api.trainer_deploy(target, "auto");
-    if (r && r.ok === false) { App.toast(r.error || "部署没能开始", "error", 6000); return; }
-    App.showPage("trainer");
+    if (r && r.ok === false) App.toast(r.error || "部署没能开始", "error", 6000);
   }
 
   function syncNodesCard() {
@@ -283,6 +282,9 @@
   }
 
   App.pages.deploy = {
+    // 一键启动页训练器卡片上的「补齐环境」：切到训练器这一项
+    selectTrainer() { $("#deploy-branch").value = TRAINER; syncNodesCard(); syncGpu(); syncTrainer(); },
+
     init(state) {
       log = App.makeLogger($("#deploy-log"));
       prog = App.progress($("#deploy-progress"));
@@ -372,6 +374,16 @@
           App.esc(`${name} 已部署到：\n${e.target}\n\n现在可以直接去「一键启动」页启动了。`),
           [{ id: "go", label: "去一键启动", kind: "primary" }, { id: "stay", label: "留在这里" }]
         ).then((v) => { if (v === "go") App.showPage("launch"); });
+      });
+      // LoRA 训练器的部署（lora_trainer.py）：进度按步骤给百分比，完成后去一键启动页启动
+      App.on("deploy", "step", (e) => prog.set(e.pct, e.text));
+      App.on("deploy", "trainer_done", async (e) => {
+        setRunning(false);
+        if (!e.ok) { prog.hide(); return; }
+        prog.set(100, "部署完成");
+        const v = await App.modal("部署完成", App.esc(`WWY LoRA 训练器已部署到：\n${e.target}\n\n到「一键启动」页，点顶部训练器卡片上的「启动」就能用了。`),
+          [{ id: "go", label: "去一键启动", kind: "primary" }, { id: "stay", label: "留在这里" }]);
+        if (v === "go") App.showPage("launch");
       });
       App.on("deploy", "cancelled", () => { setRunning(false); prog.hide(); App.toast("已取消部署"); });
       App.on("deploy", "switch_done", async (e) => {

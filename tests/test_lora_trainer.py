@@ -123,6 +123,12 @@ class DetectTest(unittest.TestCase):
         make_trainer(existing)
         self.assertEqual(lt.default_root(launcher, {}), existing)
 
+    def test_settings_port(self):
+        root = os.path.join(self.tmp, "t")
+        self.assertEqual(lt.settings_port(root), lt.DEFAULT_PORT)
+        _touch(os.path.join(root, "data", "settings.json"), json.dumps({"port": 28200}))
+        self.assertEqual(lt.settings_port(root), 28200)
+
     def test_recommend_torch(self):
         self.assertEqual(lt.recommend_torch(["NVIDIA GeForce GTX 1080 Ti"]), "cu126")
         self.assertEqual(lt.recommend_torch(["NVIDIA GeForce RTX 4090"]), "cu128")
@@ -163,7 +169,7 @@ class DeployFlowTest(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def done(self, api):
-        return [d for s, t, d in api.events if t == "deploy_done"][-1]
+        return [d for s, t, d in api.events if t == "trainer_done"][-1]
 
     def test_fresh_deploy(self):
         api = FakeApi({"mirror_mode": "always"})
@@ -171,6 +177,9 @@ class DeployFlowTest(unittest.TestCase):
         self.assertTrue(self.done(api)["ok"])
         self.assertFalse(api._deploy_running)
         self.assertEqual(api.cmds[0][0], "portable")
+        # 部署的日志 / 进度进「环境部署」页（deploy），结束时让一键启动页的训练器卡片刷新
+        self.assertTrue(all(s == "deploy" for s, t, d in api.events if t in ("log", "step", "progress", "trainer_done")))
+        self.assertIn(("trainer", "changed", {}), api.events)
         self.assertEqual(api.cmds[0][1], "lora_trainer")
         flat = [" ".join(c[1]) for c in api.cmds[1:]]
         self.assertTrue(any("fetch" in c for c in flat))
@@ -250,14 +259,14 @@ class RunnerTest(unittest.TestCase):
         api = FakeApi()
         r = lt.TrainerRunner(api)
         port = free_port()
-        self.assertTrue(r.start(self.root, port, True)["ok"])
+        self.assertTrue(r.start(self.root, True, port)["ok"])
         self.assertTrue(self.wait(lambda: r.state == "ready"))
         url = f"http://127.0.0.1:{port}/"
         self.assertEqual(r.status()["url"], url)
         self.assertTrue(self.wait(lambda: api.opened == [url]))   # 就绪后打开一次浏览器
         self.assertTrue(r.managed())
         self.assertTrue(any("LoRA 训练器已启动" in d.get("text", "") for s, t, d in api.events if t == "log"))
-        self.assertFalse(r.start(self.root, port, True)["ok"])   # 已经在跑
+        self.assertFalse(r.start(self.root, True, port)["ok"])   # 已经在跑
         r.stop()
         self.assertTrue(self.wait(lambda: not r.managed()))
         self.assertEqual(r.status()["state"], "stopped")
@@ -265,7 +274,7 @@ class RunnerTest(unittest.TestCase):
 
     def test_not_deployed(self):
         r = lt.TrainerRunner(FakeApi())
-        res = r.start(os.path.join(self.tmp, "nothing"), free_port(), False)
+        res = r.start(os.path.join(self.tmp, "nothing"), False, free_port())
         self.assertFalse(res["ok"])
         self.assertTrue(res.get("need_deploy"))
 
