@@ -381,9 +381,14 @@
         setRunning(false);
         if (!e.ok) { prog.hide(); return; }
         prog.set(100, "部署完成");
-        const v = await App.modal("部署完成", App.esc(`WWY LoRA 训练器已部署到：\n${e.target}\n\n到「一键启动」页，点顶部训练器卡片上的「启动」就能用了。`),
-          [{ id: "go", label: "去一键启动", kind: "primary" }, { id: "stay", label: "留在这里" }]);
-        if (v === "go") App.showPage("launch");
+        const v = await App.modal("部署完成", App.esc(`WWY LoRA 训练器已部署到：\n${e.target}\n\n现在启动吗？启动好会自动在浏览器里打开。以后在「一键启动」页顶部的训练器卡片上启动 / 停止。`),
+          [{ id: "start", label: "启动训练器", kind: "primary" }, { id: "stay", label: "稍后" }]);
+        if (v !== "start") return;
+        App.showPage("launch");   // 训练器的启动日志在一键启动页的运行日志里
+        try {
+          const r = await App.api.trainer_start();
+          if (r && r.ok === false) App.toast(r.error || "启动失败", "error", 6000);
+        } catch (err) { App.toast("启动失败：" + err.message, "error"); }
       });
       App.on("deploy", "cancelled", () => { setRunning(false); prog.hide(); App.toast("已取消部署"); });
       App.on("deploy", "switch_done", async (e) => {

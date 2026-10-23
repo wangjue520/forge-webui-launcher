@@ -36,6 +36,10 @@ TORCH_VARIANTS = ("cu126", "cu128", "cu130")
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 # 部署失败 / 中断后目录里可能留下的东西：这些之外还有别的文件就不往里装（免得 git checkout 覆盖用户文件）
 _LEFTOVERS = {"python", "git", ".git", ".launcher_tmp"}
+# 跑训练器的 Python 时一律带上：-I 会忽略 PYTHONUTF8 / PYTHONIOENCODING / PYTHONUNBUFFERED 这些环境变量，
+# 中文 Windows 上输出就成了 GBK，打印「⚠」这类字符直接 UnicodeEncodeError 崩掉（换源 / 换线路的提示里就有）；
+# -X utf8 是命令行开关，-I 管不着；-u 让日志实时出来
+PY_FLAGS = ["-I", "-X", "utf8", "-u"]
 _READY_RE = re.compile(r"(?:本机访问|LoRA 训练器已启动|训练器已经在运行)：\s*(https?://\S+)")
 
 
@@ -231,7 +235,7 @@ def deploy_flow(api, root, torch_variant):
         step(15, "安装训练环境（PyTorch + 训练引擎，约 4 GB）")
         log("\n[训练器] 安装训练环境：PyTorch（约 2.7 GB）+ sd-scripts / musubi-tuner 训练引擎 + 反推依赖。\n"
             "         下载量大，10 MB/s 网速大约 10 分钟；已经装好的部分会自动跳过。\n")
-        args = ["-I", os.path.join(root, "scripts", "setup_env.py")]
+        args = PY_FLAGS + [os.path.join(root, "scripts", "setup_env.py")]
         if torch_variant in TORCH_VARIANTS:
             args += ["--torch", torch_variant]
         rc = _run_setup(api, py, args, root, clean_env({k: env[k] for k in ("TEMP", "TMP", "PIP_CACHE_DIR")}), log, step)
@@ -366,7 +370,7 @@ class TrainerRunner:
                 if open_browser:
                     self.api.open_url(url)
                 return {"ok": True, "already": True, "url": url}
-            cmd = [d["python"], "-I", os.path.join(root, "app", "main.py"), "--no-browser"] + (["--port", str(port)] if port else [])
+            cmd = [d["python"]] + PY_FLAGS + [os.path.join(root, "app", "main.py"), "--no-browser"] + (["--port", str(port)] if port else [])
             env = clean_env({"WWY_LAUNCHER_DIR": LAUNCHER_DIR})
             self.api._emit(SCOPE, "log", text=f"[训练器] 启动：{' '.join(cmd)}\n")
             try:

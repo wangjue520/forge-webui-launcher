@@ -186,6 +186,7 @@ class DeployFlowTest(unittest.TestCase):
         self.assertTrue(any(c.endswith(lt.REPO + ".git") for c in flat))   # 远程地址改回 GitHub 原地址
         setup = next(c for c in flat if "setup_env.py" in c)
         self.assertIn("--torch cu128", setup)
+        self.assertIn("-X utf8", setup)   # -I 下 PYTHONIOENCODING 不生效，中文 Windows 上不加会按 GBK 输出、打印「⚠」就崩
         self.assertTrue(lt.detect(self.root)["ready"])
         with open(os.path.join(self.root, "data", "settings.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["network"], "cn")
@@ -265,6 +266,8 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(r.status()["url"], url)
         self.assertTrue(self.wait(lambda: api.opened == [url]))   # 就绪后打开一次浏览器
         self.assertTrue(r.managed())
+        started = next(d["text"] for s, t, d in api.events if t == "log" and "启动：" in d.get("text", ""))
+        self.assertIn("-X utf8", started)
         self.assertTrue(any("LoRA 训练器已启动" in d.get("text", "") for s, t, d in api.events if t == "log"))
         self.assertFalse(r.start(self.root, True, port)["ok"])   # 已经在跑
         r.stop()
