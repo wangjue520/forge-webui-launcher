@@ -12,9 +12,13 @@
   function render() {
     const box = $("#launch-trainer");
     const i = (st && st.info) || {};
-    box.hidden = !(i.installed || (st && st.deploying));
+    const run = (st && st.run) || {};
+    const on = run.state && run.state !== "stopped";
+    box.hidden = !(i.installed || (st && st.deploying) || on);
     if (box.hidden) return;
-    const run = st.run || {};
+    // 在跑的可能是另一个文件夹里的训练器（比如部署新的那份时，旧的还开着）：卡片显示实际在跑的那份
+    const other = on && run.root && run.root.toLowerCase() !== (st.root || "").toLowerCase();
+    const root = other ? run.root : st.root;
     const [pill, text] = STATE[run.state] || STATE.stopped;
     const port = run.state !== "stopped" && run.port ? ` :${run.port}` : "";
     let btns;
@@ -30,9 +34,9 @@
         <div class="ic-head">
           <span class="ic-kind" data-kind="trainer">LoRA 训练器</span>
           <b class="ic-name">WWY LoRA 训练器</b>
-          ${i.version ? `<em class="ic-cur">V${App.esc(i.version)}</em>` : ""}
+          ${i.version && !other ? `<em class="ic-cur">V${App.esc(i.version)}</em>` : ""}
         </div>
-        <div class="ic-root" title="${App.esc(st.root)}">${App.esc(st.root)}</div>
+        <div class="ic-root" title="${App.esc(root)}">${App.esc(root)}</div>
         <div class="ic-foot">
           <span class="status-pill" data-state="${pill}"><span class="dot"></span><span>${text}${port}</span></span>
           <span class="ic-btns">${btns}</span>

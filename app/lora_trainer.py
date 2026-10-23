@@ -351,32 +351,83 @@ def probe(url, timeout=1.5):
         return False
 
 
+def _same_dir(a, b):
+    try:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    except (TypeError, ValueError):
+        return False
+
+
+def _free_port(start):
+    import socket
+    for p in range(start, start + 50):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            if s.connect_ex(("127.0.0.1", p)) != 0:
+                return p
+    return start
+
+
+_MAIN_PY_RE = re.compile(r'([A-Za-z]:\\[^"]*?|/[^"\s]*?)[\\/]app[\\/]main\.py', re.IGNORECASE)
+
+
+def root_of_pid(pid):
+    """训练器进程跑的是哪个文件夹：命令行里 <训练器目录>\\app\\main.py 的那个目录
+    （训练器的 bat、启动器、训练器自己重启都带完整路径）。认不出返回 ""。"""
+    if not pid:
+        return ""
+    try:
+        if os.name == "nt":
+            ps = ("[Console]::OutputEncoding=[Text.Encoding]::UTF8;"
+                  f"(Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}').CommandLine")
+            out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
+                                 timeout=15, creationflags=_NO_WINDOW).stdout.decode("utf-8", "replace")
+        else:
+            with open(f"/proc/{int(pid)}/cmdline", "rb") as f:
+                out = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
+    except Exception:
+        return ""
+    m = _MAIN_PY_RE.search(out)
+    return m.group(1) if m else ""
+
+
 class TrainerRunner:
     """启动器里只有一个训练器进程。训练器自己点「重启训练器」时会另起一个进程、旧的退出，
-    这时进程不归启动器管了，但端口上还是训练器：状态按端口算，停止时按端口找进程。"""
+    这时进程不归启动器管了，但端口上还是训练器：状态按端口算，停止时按端口找进程。
+    端口上的训练器不一定是当前选的那个文件夹（比如在启动器外面开的另一份），status 的 root 是它实际的文件夹。"""
 
     def __init__(self, api):
         self.api = api
         self.proc = None
+        self.root = ""           # 启动器开的那个训练器的文件夹
         self.url = ""
         self.port = DEFAULT_PORT
         self.state = "stopped"   # stopped / starting / ready
         self.stopped_at = 0.0
         self.lock = threading.Lock()
+        self._pid_root = (None, "")   # 端口上那个进程 → 文件夹（查命令行要起 PowerShell，按进程缓存）
 
     def _emit_state(self):
         self.api._emit(SCOPE, "state", **self.status())
 
+    def _external_root(self):
+        pid = find_listening_pid(self.port)
+        if pid != self._pid_root[0]:
+            self._pid_root = (pid, root_of_pid(pid))
+        return self._pid_root[1]
+
     def status(self):
         alive = bool(self.proc and self.proc.poll() is None)
         url = self.url or f"http://127.0.0.1:{self.port}/"
+        root = ""
         if alive:
-            state = self.state
+            state, root = self.state, self.root
         elif time.time() - self.stopped_at > 5 and probe(url, 0.8):   # 刚停止时端口还没关，别误判成在运行
             state = "ready"   # 训练器自己重启过，或者是在启动器外面打开的
+            root = self._external_root()
         else:
             state = "stopped"
-        return {"state": state, "url": url if state == "ready" else "", "managed": alive, "port": self.port}
+        return {"state": state, "url": url if state == "ready" else "", "managed": alive, "port": self.port, "root": root}
 
     def running(self):
         return self.status()["state"] != "stopped"
@@ -388,6 +439,8 @@ class TrainerRunner:
         """port 不传：用训练器自己设置里的端口（被占用时训练器会自动换一个，地址从它的输出里认）"""
         with self.lock:
             if self.proc and self.proc.poll() is None:
+                if self.root and not _same_dir(self.root, root):
+                    return {"ok": False, "error": f"启动器开的另一个训练器（{self.root}）还在运行，先停止它"}
                 return {"ok": False, "error": "训练器已经在运行"}
             d = detect(root)
             if not d["installed"] or not d["python"]:
@@ -395,10 +448,16 @@ class TrainerRunner:
             self.port = int(port or settings_port(root))
             url = f"http://127.0.0.1:{self.port}/"
             if probe(url):
-                self.url, self.state = url, "ready"
-                if open_browser:
-                    self.api.open_url(url)
-                return {"ok": True, "already": True, "url": url}
+                ext = self._external_root()
+                if not ext or _same_dir(ext, root):
+                    self.url, self.state = url, "ready"
+                    if open_browser:
+                        self.api.open_url(url)
+                    return {"ok": True, "already": True, "url": url}
+                # 端口上是另一个文件夹的训练器：训练器自己遇到这种情况只会说「已经在运行」然后退出，换个空端口给它
+                port = _free_port(self.port + 1)
+                self.api._emit(SCOPE, "log", text=f"[训练器] 端口 {self.port} 被 {ext} 的训练器占用，这一份改用 {port}\n")
+                self.port = port
             cmd = [d["python"]] + PY_FLAGS + [os.path.join(root, "app", "main.py"), "--no-browser"] + (["--port", str(port)] if port else [])
             env = clean_env({"WWY_LAUNCHER_DIR": LAUNCHER_DIR})
             self.api._emit(SCOPE, "log", text=f"[训练器] 启动：{' '.join(cmd)}\n")
@@ -408,7 +467,7 @@ class TrainerRunner:
                                              stdin=subprocess.DEVNULL, **kw)
             except OSError as e:
                 return {"ok": False, "error": f"启动失败：{e}"}
-            self.url, self.state = "", "starting"
+            self.url, self.state, self.root = "", "starting", root
         self._emit_state()
         threading.Thread(target=self._reader, args=(self.proc, open_browser), daemon=True, name="trainer-log").start()
         threading.Thread(target=self._watch_port, args=(self.proc, open_browser), daemon=True, name="trainer-port").start()

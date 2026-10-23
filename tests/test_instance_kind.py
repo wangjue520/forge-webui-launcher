@@ -209,6 +209,25 @@ class TrainerDirTest(unittest.TestCase):
             wa._trainer_root(self.api)
             self.assertEqual(scan.call_count, 1)            # 一次启动只扫一次
 
+    def test_deploy_blocked_only_for_running_folder(self):
+        """别的文件夹里的训练器在跑，部署到新的空文件夹不该被拦"""
+        api = self.api
+        api._deploy_lock = threading.Lock()
+        api._deploy_running = False
+        api._deploy_cancel = threading.Event()
+        api._spawn = lambda fn, name="": None
+        api._trainer = mock.Mock()
+        api._trainer.status.return_value = {"state": "ready", "root": self.trainer, "url": "", "managed": False, "port": 28100}
+        api.cfg["lora_trainer_root"] = self.trainer
+        new = os.path.join(self.tmp, "new_trainer")
+        r = wa._api_trainer_deploy(api, new)
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(api.cfg["lora_trainer_root"], new)
+        api._deploy_running = False
+        r = wa._api_trainer_deploy(api, self.trainer)
+        self.assertFalse(r["ok"])
+        self.assertIn("正在运行", r["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

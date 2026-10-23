@@ -6560,8 +6560,11 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
         info = lt.detect(root)
         if not info["installed"] and not info["deployable"]:
             return {"ok": False, "error": info["reason"]}
-        if _trainer_runner(self).running():
-            return {"ok": False, "error": "训练器正在运行，先在「一键启动」页停止它再部署（装环境时会替换正在用的文件）"}
+        # 只拦部署到正在运行的那个文件夹（装环境会替换它正在用的文件）；别的文件夹里的训练器在跑不影响
+        run = _trainer_runner(self).status()
+        busy = run["root"] or _trainer_root(self)   # 认不出端口上那个进程的文件夹时，按当前选的算
+        if run["state"] != "stopped" and _same_path(busy, root):
+            return {"ok": False, "error": "这个文件夹里的训练器正在运行，先在「一键启动」页停止它再部署（装环境时会替换正在用的文件）"}
         issues = _non_ascii_or_space_issues(root, "训练器目录")
         try:
             os.makedirs(root, exist_ok=True)

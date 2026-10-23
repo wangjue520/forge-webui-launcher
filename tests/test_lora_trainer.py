@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 import lora_trainer as lt  # noqa: E402
 
@@ -274,9 +275,15 @@ class RunnerTest(unittest.TestCase):
         self.tmp = tempfile.mkdtemp()
         self.root = os.path.join(self.tmp, "t")
         make_trainer(self.root, FAKE_MAIN)
-        link_python(self.root)
+        # 直接用当前解释器：venv / 便携版的 python.exe 单独拷出去跑不起来（找不到 pyvenv.cfg / DLL）
+        self.p = mock.patch.object(lt, "python_of", lambda r: sys.executable if os.path.isdir(os.path.join(r, "app")) else "")
+        self.p.start()
+        self.runners = []
 
     def tearDown(self):
+        for r in self.runners:
+            r.stop()
+        self.p.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def wait(self, fn, timeout=15):
@@ -305,6 +312,35 @@ class RunnerTest(unittest.TestCase):
         self.assertTrue(self.wait(lambda: not r.managed()))
         self.assertEqual(r.status()["state"], "stopped")
         self.assertFalse(lt.probe(url, 0.5))
+
+    @unittest.skipUnless(os.name == "nt", "按端口找进程只在 Windows 上实现")
+    def test_other_folder_on_port(self):
+        """端口上已经是另一个文件夹的训练器：认出是谁，新的这份换个空端口启动，不当成「已经在运行」"""
+        port = free_port()
+        a = lt.TrainerRunner(FakeApi())
+        self.runners.append(a)
+        self.assertTrue(a.start(self.root, False, port)["ok"])
+        self.assertTrue(self.wait(lambda: a.state == "ready"))
+
+        other = os.path.join(self.tmp, "new")
+        make_trainer(other, FAKE_MAIN)
+        _touch(os.path.join(other, "data", "settings.json"), json.dumps({"port": port}))
+        api = FakeApi()
+        b = lt.TrainerRunner(api)
+        self.runners.append(b)
+        b.port = port
+        st = b.status()
+        self.assertEqual(st["state"], "ready")
+        self.assertTrue(lt._same_dir(st["root"], self.root))      # 从命令行认出在跑的是哪个文件夹
+        r = b.start(other, False)
+        self.assertTrue(r["ok"])
+        self.assertFalse(r.get("already"))
+        self.assertTrue(self.wait(lambda: b.state == "ready"))
+        self.assertNotEqual(b.port, port)
+        self.assertTrue(lt._same_dir(b.status()["root"], other))
+        self.assertTrue(lt.probe(f"http://127.0.0.1:{port}/", 0.5))   # 原来那份没被动
+        self.assertIn("-I", next(d["text"] for s, t, d in api.events if t == "log" and "启动：" in d.get("text", "")))
+        self.assertFalse(a.start(other, False)["ok"])   # 启动器开着另一个文件夹的训练器
 
     def test_not_deployed(self):
         r = lt.TrainerRunner(FakeApi())
