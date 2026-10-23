@@ -93,6 +93,15 @@
   async function checkDir() {
     const el = $("#deploy-dir-status");
     const target = $("#deploy-target").value;
+    if (isTrainer()) {
+      try {
+        const i = (await App.api.trainer_check_dir(target)).info;
+        el.textContent = i.installed ? (i.ready ? "这里已经装好了 LoRA 训练器，再部署就是检查并补齐环境" : "这里有训练器，训练环境还没装好，部署会接着装")
+          : (!i.deployable ? i.reason : (i.exists ? "可以部署到这个文件夹" : "文件夹还不存在，部署时自动创建"));
+        el.dataset.status = i.installed || i.deployable ? (i.ready ? "ok" : "") : "bad";
+      } catch (e) { el.textContent = "检测失败：" + e.message; el.dataset.status = "bad"; }
+      return;
+    }
     try {
       const r = await App.api.deploy_check_dir(target);
       el.textContent = r.message;
@@ -125,12 +134,48 @@
       nodeCatalogLoaded = true;
     } catch (e) { console.error(e); }
   }
+  /* ---------- LoRA 训练器：下拉框里的一项，实际部署走「LoRA 训练器」页的同一套流程 ---------- */
+  const TRAINER = "lora_trainer";
+  let instTarget = null;   // 选训练器之前安装目录框里的内容，切回 WebUI / ComfyUI 时还原
+  const isTrainer = () => $("#deploy-branch").value === TRAINER;
+
+  async function syncTrainer() {
+    const on = isTrainer();
+    $("#deploy-gpu-card").hidden = on;   // 训练器只用 N 卡的 CUDA 版 PyTorch，版本在「LoRA 训练器」页按显卡自动选
+    $("#deploy-trainer-hint").hidden = !on;
+    const t = $("#deploy-target");
+    if (on && instTarget === null) {
+      instTarget = t.value;
+      try { const r = await App.api.trainer_status(); t.value = (r && r.root) || ""; } catch (e) { t.value = ""; }
+    } else if (!on && instTarget !== null) {
+      t.value = instTarget;
+      instTarget = null;
+    }
+    checkDir();
+  }
+
+  async function startTrainer(target) {
+    if (!target) { App.toast("请先选择训练器的安装目录", "error"); return; }
+    let info = null;
+    try { info = (await App.api.trainer_check_dir(target)).info; } catch (e) { App.toast("检查失败：" + e.message, "error"); return; }
+    if (!info.installed && !info.deployable) {
+      await App.modal("无法开始部署", App.esc(info.reason || "这个目录不能用"), [{ id: "ok", label: "知道了", kind: "primary" }]);
+      return;
+    }
+    if (!(await App.confirm("部署 LoRA 训练器", `即将把 WWY LoRA 训练器部署到：\n${target}\n\n`
+      + "会自动下载便携 Python / Git、训练器源码、PyTorch 和训练引擎（约 4~5 GB，按网速大约 10~30 分钟），期间可以随时取消。"
+      + "\n\n部署进度和日志在「LoRA 训练器」页，装好后在那里一键启动。", "开始部署"))) return;
+    const r = await App.api.trainer_deploy(target, "auto");
+    if (r && r.ok === false) { App.toast(r.error || "部署没能开始", "error", 6000); return; }
+    App.showPage("trainer");
+  }
+
   function syncNodesCard() {
     const comfy = $("#deploy-branch").value === "comfyui";
     $("#deploy-branch-hint").hidden = $("#deploy-branch").value !== "neo2h3";
     $("#deploy-nodes-card").hidden = !comfy;
     // 「环境诊断」按 webui.bat/venv 结构检测，是 Forge 专属逻辑，ComfyUI 部署时用不上
-    $("#deploy-diag-card").hidden = comfy;
+    $("#deploy-diag-card").hidden = comfy || isTrainer();
     if (comfy) loadNodeCatalog();
   }
   function selectedNodes() {
@@ -147,6 +192,7 @@
       const target = $("#deploy-target").value.trim();
       const branch = $("#deploy-branch").value;
       const usePortable = $("#deploy-portable").checked;
+      if (branch === TRAINER) { await startTrainer(target); return; }
 
       let pre;
       try { pre = await App.api.deploy_precheck(target, branch, usePortable, gpuSel(), gfxSel()); }
@@ -251,7 +297,10 @@
       // H3 是新分支，不当默认；只有当前实例本身就是 H3 才默认选中它
       sel.value = ["classic", "comfyui"].includes(App.cfg.webui_branch) ? App.cfg.webui_branch
         : (App.cfg.webui_branch === "neo2" && App.cfg.webui_variant === "h3" ? "neo2h3" : "neo2");
-      sel.addEventListener("change", () => { syncNodesCard(); syncGpu(); });
+      const ot = document.createElement("option");
+      ot.value = TRAINER; ot.textContent = "WWY LoRA 训练器（训练 LoRA，独立程序，不影响 WebUI / ComfyUI）";
+      sel.appendChild(ot);
+      sel.addEventListener("change", () => { syncNodesCard(); syncGpu(); syncTrainer(); });
       syncNodesCard();
       $("#deploy-gpu").addEventListener("change", syncGpu);
       $("#deploy-gfx").addEventListener("change", syncGpu);

@@ -316,6 +316,7 @@
                 torch: "", cuda: "", version: "", deployable: true, reason: "", ready: false },
         run: { state: "stopped", url: "", managed: false, port: 28100 } }),
       trainer_set: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      trainer_check_dir: () => ok({ ok: true, info: { installed: false, deployable: true, exists: false, ready: false, reason: "" } }),
       trainer_deploy: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       trainer_start: () => ok({ ok: false, need_deploy: true, error: "这个文件夹里还没有部署训练器，先点「一键部署」" }),
       meta_preview: () => ok({ ok: true, preview: null }),

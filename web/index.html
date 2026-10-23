@@ -417,8 +417,9 @@
         </div>
 
         <div class="card">
-          <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge（Neo / H3 视频版 / Classic）或 ComfyUI；装到新目录会自动添加为新实例</span></div>
+          <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge（Neo / H3 视频版 / Classic）或 ComfyUI，装到新目录会自动添加为新实例；也可以部署 WWY LoRA 训练器</span></div>
           <select id="deploy-branch"></select>
+          <div class="hint" id="deploy-trainer-hint" hidden>WWY LoRA 训练器：训练 Anima / SDXL / Krea 2 / MOSS-Image 的 LoRA，自带爬图、反推、标签编辑。装在自己的文件夹里（默认在启动器旁边的 WWY-LoRA-Trainer），不会添加为实例。部署进度在「LoRA 训练器」页，装好后也在那里一键启动。</div>
           <div class="hint" id="deploy-branch-hint" data-status="warn" hidden>H3 视频版是新分支，还在快速迭代，原来的 Neo 照常可用、互不影响。跑视频生成需要显卡 ≥ 12GB 显存；内存 GGUF Q4 一套约占 33GB，建议 48GB 以上，64GB 最稳；部署完到「模型下载」页的「H3 视频模型一键下载」把模型配齐。</div>
         </div>
 
