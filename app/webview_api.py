@@ -6539,7 +6539,8 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
             os.makedirs(root, exist_ok=True)
         except OSError as e:
             return {"ok": False, "error": f"无法创建目录：\n{root}\n\n{e}"}
-        self._deploy_cfg = dict(self.cfg)
+        # 只要启动器的网络 / 代理设置；当前实例自己指定的 Python / Git / 显卡类型和训练器无关，别带进去
+        self._deploy_cfg = dict(self.cfg, custom_python_path="", custom_git_path="", gpu_backend="", amd_gfx="")
         self._deploy_cancel.clear()
         self._deploy_running = True
         self._trainer_deploying = True
