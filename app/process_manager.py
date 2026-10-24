@@ -51,6 +51,31 @@ _FATAL_HINTS = (
 )
 
 
+A1111_NOTICE = (
+    "这是 A1111 原版 WebUI（比如秋叶 sd-webui-aki 整合包），不是 Forge Neo。\n\n"
+    "A1111 在 2024 年 7 月的 1.10 版之后就没有再更新：Flux、Anima、MOSS-Image 这些新模型都用不了，"
+    "不少扩展的依赖也已经装不上，每次启动会比较慢。\n\n"
+    "建议用「部署新的实例…」装一个 Forge Neo。模型放进共享模型库，新旧两个都能用，不用重新下载。\n\n"
+    "这次照常启动，这个提醒只出现一次。")
+
+
+def _a1111_warned(api, root):
+    """这个 A1111 目录已经提醒过（启动过一次）"""
+    key = os.path.normcase(os.path.abspath(root))
+    return any(os.path.normcase(os.path.abspath(r)) == key for r in api.cfg.get("a1111_warned") or [])
+
+
+def _mark_a1111_warned(api, root):
+    if _a1111_warned(api, root):
+        return
+    with api._cfg_lock:
+        api.cfg["a1111_warned"] = list(api.cfg.get("a1111_warned") or []) + [os.path.abspath(root)]
+        try:
+            cm.save_config(api.cfg)
+        except OSError:
+            pass
+
+
 def _driver_issue_forge(root, cfg):
     """WebUI：已装的 torch，或者还没装时 WebUI 要装的 torch，驱动带不动 → 启动前提示升级驱动"""
     if cfg.get("gpu_backend") == "rocm":
@@ -544,6 +569,9 @@ class InstanceRunner:
             })
             return {"ok": False, "issues": issues}
 
+        if cm.is_a1111(root) and not _a1111_warned(self.api, root):
+            issues.append({"level": "warn", "id": "a1111_old", "text": A1111_NOTICE})
+
         issues += _non_ascii_or_space_issues(root, "WebUI ")
         drv = _driver_issue_forge(root, cfg)
         if drv:
@@ -676,6 +704,8 @@ class InstanceRunner:
             res = self._spawn_forge(root, cfg, log, fix_overrides, rebuild_venv)
         if not res.get("ok"):
             return res
+        if not comfy and cm.is_a1111(root):
+            _mark_a1111_warned(self.api, root)   # 真正启动过才算提醒过；在提醒里点了取消，下次还提醒
 
         base = self._base_port()
         self.watch_ports = [port] if port else (

@@ -139,6 +139,32 @@ def kind_label(branch, variant=None):
     return KIND_LABELS.get(branch, "WebUI")
 
 
+A1111_LABEL = "A1111"
+
+
+def is_a1111(root):
+    """A1111 原版 WebUI（秋叶 sd-webui-aki 整合包等）：有 webui.bat / launch.py，但没有 Forge 才有的
+    modules_forge / backend。启动器按 Forge 的方式启动它没问题，只是它根目录也有 pyproject.toml，
+    会被 guess_forge_branch 认成 Neo，界面上一直叫「Forge Neo」，用户以为自己用的就是 Neo。"""
+    root = (root or "").strip().strip('"')
+    return bool(root) and os.path.isfile(os.path.join(root, "webui.bat")) \
+        and os.path.isfile(os.path.join(root, "launch.py")) \
+        and not os.path.isdir(os.path.join(root, "modules_forge")) \
+        and not os.path.isdir(os.path.join(root, "backend"))
+
+
+def instance_display(inst):
+    """界面上显示的 (类型标签, 名字)。A1111 显示成「A1111」；名字还是自动起的（「Forge Neo」「Forge Neo 2」）
+    也跟着显示「A1111」，用户自己起的名字不动。只改显示，不动 webui_branch（启动参数照旧）。"""
+    label = kind_label(inst.get("webui_branch"), inst.get("webui_variant"))
+    name = inst.get("name", "")
+    if inst.get("webui_branch") != "comfyui" and is_a1111(inst.get("webui_root")):
+        if not name.strip() or re.fullmatch(re.escape(label) + r"( \d+)?", name.strip()):
+            name = A1111_LABEL
+        label = A1111_LABEL
+    return label, name
+
+
 def is_comfy(cfg):
     return (cfg or {}).get("webui_branch") == "comfyui"
 

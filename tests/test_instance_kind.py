@@ -246,5 +246,66 @@ class TrainerDirTest(unittest.TestCase):
         self.assertFalse(api.cfg["lora_trainer_hidden"])
 
 
+def make_a1111(base):
+    """秋叶 sd-webui-aki-v4.8 这类：webui.bat + launch.py + pyproject.toml，没有 modules_forge / backend"""
+    root = os.path.join(base, "sd-webui-aki-v4.8")
+    for p in ("webui.bat", "launch.py", "pyproject.toml", os.path.join("modules", "launch_utils.py")):
+        _touch(os.path.join(root, p))
+    return root
+
+
+class A1111Test(unittest.TestCase):
+    """A1111 被认成 Forge Neo：界面显示成 A1111，第一次启动提醒版本太老（只提醒一次，不拦启动）"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.a1111 = make_a1111(self.tmp)
+        self.forge = make_forge_neo(self.tmp)
+        _touch(os.path.join(self.forge, "launch.py"))
+        os.makedirs(os.path.join(self.forge, "modules_forge"))
+        self.p1 = mock.patch.object(cm, "CONFIG_PATH", os.path.join(self.tmp, "launcher_config.json"))
+        self.p2 = mock.patch.object(cm, "write_theme_file", lambda cfg: None)
+        self.p1.start(); self.p2.start()
+
+    def tearDown(self):
+        self.p1.stop(); self.p2.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_detect(self):
+        self.assertTrue(cm.is_a1111(self.a1111))
+        self.assertFalse(cm.is_a1111(self.forge))
+        self.assertFalse(cm.is_a1111(os.path.join(self.tmp, "nope")))
+        import install_finder
+        self.assertEqual(install_finder.guess_forge_branch(self.a1111), "neo2")   # 这就是被认成 Neo 的原因
+
+    def test_display(self):
+        a = cm.make_instance(None, id="a", name="Forge Neo", webui_root=self.a1111, webui_branch="neo2")
+        b = cm.make_instance(None, id="b", name="我的老 WebUI", webui_root=self.a1111, webui_branch="neo2")
+        c = cm.make_instance(None, id="c", name="Forge Neo 2", webui_root=self.forge, webui_branch="neo2")
+        self.assertEqual(cm.instance_display(a), ("A1111", "A1111"))
+        self.assertEqual(cm.instance_display(b), ("A1111", "我的老 WebUI"))
+        self.assertEqual(cm.instance_display(c), ("Forge Neo", "Forge Neo 2"))
+        api = fake_api(make_cfg([a, c], "a"))
+        shown = {i["id"]: (i["kind_label"], i["name"]) for i in wa._instances_payload(api)["instances"]}
+        self.assertEqual(shown, {"a": ("A1111", "A1111"), "c": ("Forge Neo", "Forge Neo 2")})
+        self.assertEqual(api.cfg["instances"][0]["name"], "Forge Neo")   # 只改显示，不改记录
+
+    def test_notice_once(self):
+        import process_manager as pm
+        inst = cm.make_instance(None, id="a", name="Forge Neo", webui_root=self.a1111, webui_branch="neo2")
+        api = fake_api(make_cfg([inst], "a"))
+        runner = pm.InstanceRunner(api, "a")
+        ids = lambda: [i.get("id") for i in runner.precheck(self.a1111).get("issues", [])]
+        self.assertIn("a1111_old", ids())
+        self.assertIn("a1111_old", ids())                 # 只做检查（比如点了取消）不算提醒过
+        pm._mark_a1111_warned(api, self.a1111)            # 真正启动后记下
+        self.assertNotIn("a1111_old", ids())
+        with open(cm.CONFIG_PATH, encoding="utf-8") as f:
+            self.assertIn("a1111_warned", f.read())       # 存进配置，重启启动器也不再提醒
+        forge = cm.make_instance(None, id="b", webui_root=self.forge, webui_branch="neo2")
+        api2 = fake_api(make_cfg([forge], "b"))
+        self.assertNotIn("a1111_old", [i.get("id") for i in pm.InstanceRunner(api2, "b").precheck(self.forge)["issues"]])
+
+
 if __name__ == "__main__":
     unittest.main()

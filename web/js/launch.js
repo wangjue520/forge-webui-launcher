@@ -120,7 +120,14 @@
     }
 
     for (const issue of (pre.issues || []).filter((i) => i.level === "warn")) {
-      if (issue.id === "user_bat_overrides") {
+      if (issue.id === "a1111_old") {
+        // 只是提醒（每个目录一次），不拦启动：关掉弹窗也照常启动
+        const v = await App.modal("这个 WebUI 版本太老了", App.esc(issue.text), [
+          { id: "go", label: "知道了，继续启动", kind: "primary" },
+          { id: "deploy", label: "去部署 Forge Neo" },
+        ]);
+        if (v === "deploy") { App.showPage("deploy"); return; }
+      } else if (issue.id === "user_bat_overrides") {
         const v = await App.modal("检测到配置冲突", App.esc(issue.text), [
           { id: "fix", label: "清空并启动", kind: "primary" },
           { id: "anyway", label: "保持原样直接启动" },

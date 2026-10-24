@@ -2229,11 +2229,12 @@ def _instances_payload(self):
         r = self._runners.get(iid)
         st = r.status() if r else {"iid": iid, "running": False, "state": "idle",
                                    "url": None, "text": "尚未启动", "port": None}
+        label, name = cm.instance_display(inst)   # A1111 不再显示成「Forge Neo」
         out.append({
-            "id": iid, "name": inst.get("name", ""),
+            "id": iid, "name": name,
             "branch": inst.get("webui_branch", ""),
             "kind": "comfyui" if inst.get("webui_branch") == "comfyui" else "forge",
-            "kind_label": cm.kind_label(inst.get("webui_branch"), inst.get("webui_variant")),
+            "kind_label": label,
             "root": inst.get("webui_root", ""),
             "port": inst.get("port", ""),
             "active": iid == self.cfg.get("active_instance"),
