@@ -2430,13 +2430,14 @@ def _nvidia_gpu_names():
     if not exe:
         return []
     try:
+        # 按字节读再解码：text=True 在系统编码对不上时 stdout 会变成 None（见 process_manager._run_output）
         r = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"],
-                           capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW)
+                           capture_output=True, timeout=15, creationflags=_NO_WINDOW)
     except Exception:
         return []
     if r.returncode != 0:
         return []
-    return [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    return [x.strip() for x in cm.decode_process_output(r.stdout or b"").splitlines() if x.strip()]
 
 
 def _pick_comfy_torch_tag(log):

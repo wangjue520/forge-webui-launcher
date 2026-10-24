@@ -170,15 +170,23 @@ def _probe_executable(cmd, timeout=15):
     return True, ""
 
 
+def _run_output(cmd, timeout):
+    """跑一个 Windows 自带的命令行工具，返回解码后的输出。
+
+    不用 text=True：netstat / tasklist 按控制台代码页输出（启动器的 bat 先 chcp 936，表头就是 GBK），
+    Python 却按系统 ANSI 代码页解码——日文 Windows（cp932）、开了「UTF-8 Beta」的系统上两边对不上，
+    解码在后台读线程里出错，stdout 直接变成 None，后面 .splitlines() 就是
+    「'NoneType' object has no attribute 'splitlines'」，启动前检查整个失败。"""
+    r = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=_NO_WINDOW)
+    return cm.decode_process_output(r.stdout or b"")
+
+
 def find_listening_pid(port):
     """返回正在 LISTEN 指定端口的进程 PID，找不到返回 None（仅 Windows）"""
     if os.name != "nt" or not port:
         return None
     try:
-        out = subprocess.run(
-            ["netstat", "-ano", "-p", "TCP"],
-            capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW,
-        ).stdout
+        out = _run_output(["netstat", "-ano", "-p", "TCP"], 10)
     except Exception:
         return None
     for line in out.splitlines():
@@ -210,10 +218,7 @@ def process_name_of(pid):
     if os.name != "nt":
         return ""
     try:
-        out = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-            capture_output=True, text=True, timeout=10, creationflags=_NO_WINDOW,
-        ).stdout.strip()
+        out = _run_output(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], 10).strip()
         if out.startswith('"'):
             return out.split('","')[0].strip('"')
     except Exception:
