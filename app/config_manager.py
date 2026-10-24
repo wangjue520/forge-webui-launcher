@@ -790,7 +790,11 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
     这样 webui.bat 内部 `if not defined XXX` 的判断才能按预期工作，
     走它自己的默认逻辑，而不是被我们塞进去一个空字符串搞坏判断）。
     """
-    overrides = {}
+    # WebUI 的输出接的是管道：不开实时输出时 print 的内容攒满几 KB 才送出来，运行日志里长时间一片空白、
+    # 认不出监听地址（A1111 启动信息几乎全走 print，装依赖时能好几分钟没一行）；
+    # 不指定 UTF-8 时按系统代码页输出，中文 Windows 上打印 GBK 里没有的字会报 'gbk' codec can't encode。
+    # 启动 ComfyUI 一直有这两项（build_comfy_env），WebUI 以前漏了
+    overrides = {"PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
     custom_python = (cfg.get("custom_python_path") or "").strip()
     bundled_python = ""
