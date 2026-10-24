@@ -13,6 +13,11 @@ git / pip 子进程、启动的 WebUI / ComfyUI 都是从这份环境派生的�
 
 NO_PROXY 一定要带上本机地址：WebUI 的 gradio 启动时会请求
 http://127.0.0.1:7860/ 自检，走了代理会报 502 起不来；启动器探测端口同理。
+这里没开代理也一样要带：httpx 在环境变量里找不到代理时会读 Windows 注册表的
+「系统代理」（Clash / v2rayN 开系统代理、或代理软件退出了注册表还开着），
+却不认注册表里的「本地地址不走代理」，只认 NO_PROXY，gradio 就报
+"When localhost is not accessible, a shareable link must be created"。
+所以起 WebUI / ComfyUI 的环境一律经过 with_local_bypass()。
 """
 import os
 import re
@@ -79,13 +84,31 @@ def _snapshot():
         _orig = {k: os.environ.get(k) for k in _PROXY_KEYS + _NO_PROXY_KEYS}
 
 
-def _no_proxy_value():
-    base = (_orig or {}).get("NO_PROXY") or (_orig or {}).get("no_proxy") or ""
-    items = [x.strip() for x in base.split(",") if x.strip()]
-    for h in LOCAL_BYPASS:
-        if h not in items:
+def _merge_local(base):
+    """已有的 NO_PROXY 原样保留，缺的本机地址补在后面"""
+    items = []
+    for h in [x.strip() for x in (base or "").split(",")] + LOCAL_BYPASS:
+        if h and h not in items:
             items.append(h)
     return ",".join(items)
+
+
+def _no_proxy_value():
+    return _merge_local((_orig or {}).get("NO_PROXY") or (_orig or {}).get("no_proxy") or "")
+
+
+def with_local_bypass(env):
+    """给子进程环境（dict）的 NO_PROXY 补上本机地址，不管代理开没开。原地修改并返回 env"""
+    keys = [k for k in env if k.upper() == "NO_PROXY"]
+    base = ",".join(env[k] for k in keys if env[k])
+    for k in keys:
+        del env[k]
+    value = _merge_local(base)
+    env["NO_PROXY"] = value
+    if os.name != "nt":
+        # Windows 的环境变量名不区分大小写，两套写进去会变成重复的同名变量；其他系统两套都有程序在读
+        env["no_proxy"] = value
+    return env
 
 
 def apply(cfg):

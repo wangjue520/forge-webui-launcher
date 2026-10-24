@@ -1054,7 +1054,8 @@ def build_subprocess_env(cfg, root_dir):
     # 而不是把部署卡死在没有输出的黑盒里
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GCM_INTERACTIVE"] = "never"
-    return env
+    import proxy_manager as pm
+    return pm.with_local_bypass(env)   # 没开代理也要带，见 proxy_manager 开头的说明
 
 
 # ============================================================
@@ -1283,7 +1284,8 @@ def build_comfy_env(cfg, root_dir):
         env["GIT_CONFIG_GLOBAL"] = _empty_gitconfig_path()
     except OSError:
         pass
-    return env
+    import proxy_manager as pm
+    return pm.with_local_bypass(env)
 
 
 # 启动器自己生成的开关型参数（不含用户的「额外参数」）。上游会删改参数，比如新版 Neo 去掉了

@@ -809,8 +809,9 @@ class InstanceRunner:
         for k, v in env_overrides.items():
             if k != "COMMANDLINE_ARGS":
                 log(f"[启动器] {k} = {v}\n")
-        log("\n")
         env = cm.build_subprocess_env(cfg, root)
+        log(f"[启动器] NO_PROXY = {env.get('NO_PROXY', '')}\n")
+        log("\n")
         try:
             self.proc = self._popen(
                 ["cmd.exe", "/c", WEBUI_ENTRY_SCRIPT] if os.name == "nt" else ["sh", "webui.sh"],
