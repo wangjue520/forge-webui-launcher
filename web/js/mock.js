@@ -317,6 +317,8 @@
       trainer_check_dir: () => ok({ ok: true, info: { installed: false, deployable: true, exists: false, ready: false, reason: "" } }),
       trainer_deploy: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       trainer_start: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      trainer_set_root: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      trainer_remove: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       meta_preview: () => ok({ ok: true, preview: null }),
       meta_parse: () => ok({ ok: true, source: "WebUI (Forge)", tone: "webui",
         file_info: "1408×960　·　PNG　·　1512 KB", has_meta: true, from_sidecar: false,

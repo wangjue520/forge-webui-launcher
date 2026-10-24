@@ -276,11 +276,12 @@
   }
 
   async function addInstance() {
-    const r = await App.api.choose_directory("选择已有的 ComfyUI 或 WebUI 安装目录", "");
+    const r = await App.api.choose_directory("选择已有的 ComfyUI、WebUI 或 LoRA 训练器的安装目录", "");
     if (!r || !r.ok || !r.path) return;
     try {
       const a = await App.api.instance_add(r.path);
       if (a && a.ok === false) { App.toast(a.error || "添加失败", "error", 6000); return; }
+      if (a.trainer) { App.toast("已添加 LoRA 训练器，在「一键启动」页启动", "ok"); return; }
       const added = (a.instances || []).find((x) => x.id === a.id);
       App.toast(`已添加实例「${added ? added.name : ""}」`, "ok");
       setInstances(a);

@@ -2255,6 +2255,13 @@ def _api_instance_add(self, root, name=""):
     if not root or not os.path.isdir(root):
         return {"ok": False, "error": "目录不存在"}
     kind = cm.detect_kind(root)
+    if not kind and lt.is_trainer(root):
+        # 训练器不是实例：记成启动器管理的训练器，卡片出现在「一键启动」页
+        if _trainer_runner(self).managed() and not _same_path(_trainer_root(self), root):
+            return {"ok": False, "error": "启动器开的训练器正在运行，先在「一键启动」页停止它再换"}
+        _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
+        self._emit(lt.SCOPE, "changed")
+        return {"ok": True, "trainer": True, "root": root}
     if not kind:
         return {"ok": False, "error": "这个目录看起来既不是 ComfyUI（没有 main.py）也不是 WebUI"
                                       "（没有 webui.bat）。还没安装的话，去「环境部署」页部署一个。"}
@@ -2423,13 +2430,14 @@ def _nvidia_gpu_names():
     if not exe:
         return []
     try:
+        # 按字节读再解码：text=True 在系统编码对不上时 stdout 会变成 None（见 process_manager._run_output）
         r = subprocess.run([exe, "--query-gpu=name", "--format=csv,noheader"],
-                           capture_output=True, text=True, timeout=15, creationflags=_NO_WINDOW)
+                           capture_output=True, timeout=15, creationflags=_NO_WINDOW)
     except Exception:
         return []
     if r.returncode != 0:
         return []
-    return [x.strip() for x in r.stdout.splitlines() if x.strip()]
+    return [x.strip() for x in cm.decode_process_output(r.stdout or b"").splitlines() if x.strip()]
 
 
 def _pick_comfy_torch_tag(log):
@@ -6488,7 +6496,30 @@ def _trainer_managed(self):
 
 
 def _trainer_root(self):
-    return (self.cfg.get("lora_trainer_root") or "").strip() or lt.default_root(APP_DIR, self.cfg)
+    root = (self.cfg.get("lora_trainer_root") or "").strip()
+    if root:
+        return root
+    if self.cfg.get("lora_trainer_hidden"):   # 用户在实例管理页移除过：不再自动找回来
+        return ""
+    root = lt.found_root(APP_DIR, self.cfg)
+    if root:
+        return root
+    _trainer_scan(self)
+    return lt.default_root(APP_DIR, self.cfg)
+
+
+def _trainer_scan(self):
+    """常用位置没找到训练器：后台在各个盘里找一次（每次打开启动器最多一次），找到就记下来、卡片跟着出现"""
+    if getattr(self, "_trainer_scanned", False):
+        return
+    self._trainer_scanned = True
+
+    def run():
+        root = lt.scan_root()
+        if root and not (self.cfg.get("lora_trainer_root") or "").strip():
+            _trainer_save(self, lora_trainer_root=root)
+            self._emit(lt.SCOPE, "changed")
+    self._spawn(run, name="trainer-scan")
 
 
 def _trainer_gpu_torch(self):
@@ -6532,8 +6563,11 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
         info = lt.detect(root)
         if not info["installed"] and not info["deployable"]:
             return {"ok": False, "error": info["reason"]}
-        if _trainer_runner(self).running():
-            return {"ok": False, "error": "训练器正在运行，先在「一键启动」页停止它再部署（装环境时会替换正在用的文件）"}
+        # 只拦部署到正在运行的那个文件夹（装环境会替换它正在用的文件）；别的文件夹里的训练器在跑不影响
+        run = _trainer_runner(self).status()
+        busy = run["root"] or _trainer_root(self)   # 认不出端口上那个进程的文件夹时，按当前选的算
+        if run["state"] != "stopped" and _same_path(busy, root):
+            return {"ok": False, "error": "这个文件夹里的训练器正在运行，先在「一键启动」页停止它再部署（装环境时会替换正在用的文件）"}
         issues = _non_ascii_or_space_issues(root, "训练器目录")
         try:
             os.makedirs(root, exist_ok=True)
@@ -6544,7 +6578,7 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
         self._deploy_cancel.clear()
         self._deploy_running = True
         self._trainer_deploying = True
-    _trainer_save(self, lora_trainer_root=root)
+    _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
     # 「自动」：新装按显卡推荐；已经装好的训练环境沿用它原来的版本，不重装 PyTorch
     variant = torch if torch in lt.TORCH_VARIANTS else ("" if info["env"] else _trainer_gpu_torch(self))
     self._emit("deploy", "state", running=True)
@@ -6579,6 +6613,27 @@ def _api_trainer_open(self):
     if not st["url"]:
         return {"ok": False, "error": "训练器还没有运行"}
     return self.open_url(st["url"])
+
+
+def _api_trainer_set_root(self, root):
+    """实例管理页训练器卡片的「更换…」：换成另一个已经装好的训练器文件夹"""
+    root = (root or "").strip().strip('"')
+    if not lt.is_trainer(root):
+        return {"ok": False, "error": "这个文件夹里没有 WWY LoRA 训练器。还没装的话，在「部署新的实例…」里选训练器部署一个"}
+    if _trainer_runner(self).managed() and not _same_path(_trainer_root(self), root):
+        return {"ok": False, "error": "启动器开的训练器正在运行，先停止它再换"}
+    _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
+    self._emit(lt.SCOPE, "changed")
+    return {"ok": True, "root": root}
+
+
+def _api_trainer_remove(self):
+    """从启动器里去掉训练器（不删文件）；之后不再自动找回来，要用再「添加已有安装」"""
+    if _trainer_runner(self).managed():
+        return {"ok": False, "error": "训练器正在运行，先停止它再移除"}
+    _trainer_save(self, lora_trainer_root="", lora_trainer_hidden=True)
+    self._emit(lt.SCOPE, "changed")
+    return {"ok": True}
 
 
 # ============================================================
@@ -7872,6 +7927,8 @@ for _name, _fn in {
     "trainer_start": _api_trainer_start,
     "trainer_stop": _api_trainer_stop,
     "trainer_open": _api_trainer_open,
+    "trainer_set_root": _api_trainer_set_root,
+    "trainer_remove": _api_trainer_remove,
     "wd14_models": _api_wd14_models,
     "wd14_load_model": _api_wd14_load_model,
     "wd14_import_model": _api_wd14_import_model,
