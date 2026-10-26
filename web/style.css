@@ -657,6 +657,12 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 }
 .wd-tag:hover { border-color: var(--text); }
 .wd-sep { font-size: 1px; letter-spacing: -1px; color: transparent; }   /* 选中复制时保留「, 」分隔，平时不占位 */
+.wd-text {
+  font: 12px/1.7 var(--mono); color: var(--text); user-select: text; cursor: text; word-break: break-word;
+  background: rgba(127, 127, 127, .07); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 6px 9px;
+}
+.wd-view { flex: none; }
+.wd-view .chip { padding: 4px 12px; }
 .wd-more { text-align: center; font-size: 12px; color: var(--text-faint); padding: 6px 0; }
 
 /* 底部操作条：列表长了也一直看得到 */
