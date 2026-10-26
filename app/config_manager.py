@@ -110,6 +110,11 @@ DEFAULT_CONFIG = {
     "lora_organize_template": "base/type",   # base / type / base/type / type/base / instance/base/type
     "lora_organize_include_sub": False,      # 是否连已在子文件夹里的也整理
     "wd14_model": "",             # WD14 反推页上次选的模型，下次打开自动选中
+    "wd14_general": 0.35,         # WD14 反推页的参数，改了就记住
+    "wd14_character": 0.85,
+    "wd14_include_rating": False,
+    "wd14_save_txt": True,
+    "wd14_auto_run": True,        # 加进图片后自动开始反推（模型已下载时）
 }
 
 CONFIG_VERSION = 3

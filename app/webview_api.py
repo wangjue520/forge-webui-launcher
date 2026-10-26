@@ -6760,8 +6760,43 @@ def _api_wd14_add_clipboard_image(self, b64_data, name=""):
     return {"ok": True, "path": path}
 
 
+class _Wd14Files:
+    """反推列表的缩略图：给加进列表的图片编个号，由 output_index 那套本机文件服务按号取图
+    （只认登记过的路径，URL 带 token）"""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.paths = []
+        self.ids = {}
+
+    def add(self, path):
+        with self.lock:
+            oid = self.ids.get(path)
+            if oid is None:
+                oid = self.ids[path] = len(self.paths)
+                self.paths.append(path)
+            return oid
+
+    def path_of(self, oid):
+        with self.lock:
+            return (self.paths[oid], 0) if 0 <= oid < len(self.paths) else (None, None)
+
+
+def _wd14_thumb_url(self, path):
+    try:
+        if getattr(self, "_wd14_files", None) is None:
+            self._wd14_files = _Wd14Files()
+            _srv, self._wd14_files_base, self._wd14_files_token = oi.start_file_server(self._wd14_files)
+        oid = self._wd14_files.add(path)
+        return f"{self._wd14_files_base}/f/{oid}?t={self._wd14_files_token}"
+    except Exception:
+        return ""   # 缩略图出不来不影响反推
+
+
 def _api_wd14_expand(self, paths):
-    return {"ok": True, "paths": _expand_to_image_files(paths or [])}
+    files = _expand_to_image_files(paths or [])
+    return {"ok": True, "paths": files,
+            "items": [{"path": p, "url": _wd14_thumb_url(self, p)} for p in files]}
 
 
 def _api_wd14_tag(self, images, general_thresh, character_thresh, include_rating, save_txt):
@@ -6825,18 +6860,22 @@ def _api_wd14_tag(self, images, general_thresh, character_thresh, include_rating
                                    done=done, total=item.get("total", total))
                         if item.get("ok"):
                             tag_string = item["tag_string"]
+                            txt_saved = False
                             if save_txt:
                                 try:
                                     txt_path = os.path.splitext(item["path"])[0] + ".txt"
                                     with open(txt_path, "w", encoding="utf-8") as f:
                                         f.write(tag_string)
-                                except OSError:
-                                    pass
+                                    txt_saved = True
+                                except OSError as e:
+                                    emit_log(f"保存 .txt 失败 {os.path.basename(item['path'])}: {e}")
                             self._emit("wd14", "tag_item",
-                                       path=item["path"], tags=tag_string)
+                                       path=item["path"], tags=tag_string, txt=txt_saved)
                         else:
                             emit_log(f"处理失败 {os.path.basename(item['path'])}: "
                                      f"{item.get('error')}")
+                            self._emit("wd14", "tag_item_failed",
+                                       path=item["path"], error=str(item.get("error") or "处理失败"))
                     elif line:
                         other_lines.append(line)
 
