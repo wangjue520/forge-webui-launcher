@@ -109,6 +109,7 @@ DEFAULT_CONFIG = {
     "lora_organize_enabled": True,
     "lora_organize_template": "base/type",   # base / type / base/type / type/base / instance/base/type
     "lora_organize_include_sub": False,      # 是否连已在子文件夹里的也整理
+    "wd14_model": "",             # WD14 反推页上次选的模型，下次打开自动选中
 }
 
 CONFIG_VERSION = 3

@@ -152,6 +152,14 @@
   };
 
   /* ---------- 日志 ---------- */
+  // 其它页面（部署 / 版本 / 插件 / 模型下载 / 反推）不再各自摆一个日志框，
+  // 日志统一进「一键启动」页的运行日志，来源变化时插一行分隔标题
+  App.pageLog = function (src, title) {
+    return function (text) {
+      if (App.launchLog) App.launchLog(src, title, String(text == null ? "" : text).replace(/\n$/, ""));
+    };
+  };
+
   App.makeLogger = function (el, maxLines) {
     const max = maxLines || 800;
     let count = 0;

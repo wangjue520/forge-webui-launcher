@@ -271,8 +271,7 @@
 
   App.pages.versions = {
     init() {
-      log = App.makeLogger($("#ver-log"), 800);
-      $("#ver-log-clear").addEventListener("click", () => { $("#ver-log").textContent = ""; });
+      log = App.pageLog("ver", "版本管理");
       $("#ver-target-sel").addEventListener("change", (e) => { targetId = e.target.value; refresh(); });
       $("#ver-check").addEventListener("click", doCheck);
       $("#ver-cancel").addEventListener("click", () => App.api.ver_cancel());

@@ -228,7 +228,7 @@
     let timer = null;
     const v = await App.modal(`「${name}」的版本`,
       '<div class="hint">正在联网获取版本列表…（几个 GitHub 加速地址同时试，一般几秒）<span id="ext-ver-wait"></span></div>' +
-      '<div class="hint">过程看页面下方的日志；等太久可以点「关闭」，会同时中止联网。</div>', [
+      '<div class="hint">过程看「一键启动」页的运行日志；等太久可以点「关闭」，会同时中止联网。</div>', [
       { id: "switch", label: "切换到所选版本", kind: "primary" },
       { id: "cancel", label: "关闭" },
     ], {
@@ -285,10 +285,9 @@
 
   App.pages.extensions = {
     init() {
-      log = App.makeLogger($("#ext-log"), 600);
+      log = App.pageLog("ext", "插件管理");
 
       $("#ext-refresh").addEventListener("click", refresh);
-      $("#ext-log-clear").addEventListener("click", () => { $("#ext-log").textContent = ""; });
       $("#ext-cancel").addEventListener("click", () => App.api.ext_cancel());
       $("#ext-target-sel").addEventListener("change", (e) => { targetId = e.target.value; refresh(); });
       $("#ext-open-dir").addEventListener("click", () => App.api.ext_open_dir(null, targetId || null));

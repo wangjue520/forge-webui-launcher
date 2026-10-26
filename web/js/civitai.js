@@ -219,7 +219,6 @@
     if (h3.running || !h3.info) return;
     const selection = h3.info.items.filter((it) => h3Checked(it.id))
       .map((it) => ({ id: it.id, q: h3File(it).q }));
-    $("#h3-log-wrap").hidden = false;
     h3SetRunning(true);
     try {
       const r = await App.api.h3_models_download(selection);
@@ -229,7 +228,7 @@
   function h3Init() {
     if (h3.inited) return;
     h3.inited = true;
-    h3.log = App.makeLogger($("#h3-log"), 300);
+    h3.log = App.pageLog("h3dl", "H3 模型下载");
     h3.prog = App.progress($("#h3-progress"));
     h3.prog.hide();
     $("#h3-list").addEventListener("change", () => {
@@ -238,7 +237,6 @@
     });
     $("#h3-start").addEventListener("click", h3Start);
     $("#h3-cancel").addEventListener("click", () => App.api.h3_models_cancel());
-    $("#h3-log-clear").addEventListener("click", () => { $("#h3-log").textContent = ""; });
     App.on("h3dl", "log", (e) => h3.log(e.text));
     App.on("h3dl", "item", (e) => {
       h3.states[e.id] = e.state;
@@ -275,7 +273,7 @@
     init(state) {
       h3Init();
       h3Refresh();
-      log = App.makeLogger($("#cv-log"), 400);
+      log = App.pageLog("civitai", "模型下载");
       prog = App.progress($("#cv-progress"));
       prog.hide();
 
@@ -355,7 +353,6 @@
         } catch (e) { App.toast("下载失败：" + e.message, "error"); setDownloading(false); }
       });
 
-      $("#cv-log-clear").addEventListener("click", () => { $("#cv-log").textContent = ""; });
 
       App.on("civitai", "log", (e) => log(e.text));
       App.on("civitai", "info", (e) => {
