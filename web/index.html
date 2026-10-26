@@ -705,56 +705,57 @@
 
       <!-- ======== WD14 反推 ======== -->
       <section class="page" id="page-wd14">
-        <div class="hint hint-block">这是内置在启动器里的独立反推工具，不依赖 webui 扩展，跟 Forge 是常规版还是 Neo 无关。模型首次使用时会自动从 HuggingFace 下载并缓存在本地（wd_tagger_models 文件夹），之后不用重复下载。也可以直接把图片或文件夹从资源管理器拖进下面的列表框里。推理运行在独立的虚拟环境（wd14_venv 文件夹）里，跟你系统 Python 里装的其他工具完全隔离，不会互相污染依赖版本。首次使用需要下载安装这个独立环境（约几十 MB），之后会跳过。</div>
+        <div class="wd-top">
+          <div class="card">
+            <div class="card-title">模型<span class="card-title-hint" id="wd-model-status">尚未加载</span></div>
+            <div class="row">
+              <select id="wd-model"></select>
+              <button class="btn btn-accent" id="wd-load">加载模型</button>
+            </div>
+            <div class="progress" id="wd-model-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+            <div class="row wd-model-links">
+              <button class="btn btn-xs" id="wd-open-repo">打开模型下载页面</button>
+              <button class="btn btn-xs" id="wd-import">从本地导入…</button>
+            </div>
+            <details class="wd-about">
+              <summary>说明</summary>
+              <div class="hint">内置的独立反推工具，不依赖 WebUI 扩展。模型缓存在 wd_tagger_models 文件夹，推理跑在独立的 wd14_venv 环境里（首次使用会下载约几十 MB），跟其它 Python 环境互不干扰。<br>在线下载走不通时：点「打开模型下载页面」下载 <b>model.onnx</b> 和 <b>selected_tags.csv</b>，再点「从本地导入…」，按住 Ctrl 同时选中这两个文件。</div>
+            </details>
+          </div>
 
-        <div class="card">
-          <div class="card-title">模型</div>
-          <div class="row">
-            <select id="wd-model"></select>
-            <button class="btn btn-accent" id="wd-load">加载模型</button>
-            <span class="hint" id="wd-model-status">尚未加载</span>
+          <div class="card">
+            <div class="card-title">参数</div>
+            <div class="wd-sliders">
+              <label for="wd-general">常规标签阈值</label>
+              <input type="range" id="wd-general" min="1" max="99" value="35">
+              <output id="wd-general-val">0.35</output>
+              <label for="wd-character">角色标签阈值</label>
+              <input type="range" id="wd-character" min="1" max="99" value="85">
+              <output id="wd-character-val">0.85</output>
+            </div>
+            <label class="chk-row"><input type="checkbox" id="wd-auto-run" checked><i></i><span>加入图片后自动开始反推</span></label>
+            <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>把结果保存为图片旁边的同名 .txt（LoRA 训练打标格式）</span></label>
+            <label class="chk-row"><input type="checkbox" id="wd-include-rating"><i></i><span>包含评分标签（safe / questionable / explicit）</span></label>
           </div>
-          <div class="progress" id="wd-model-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
-          <div class="row" style="margin-top:8px">
-            <button class="btn btn-sm" id="wd-open-repo">打开模型下载页面</button>
-            <button class="btn btn-sm" id="wd-import">从本地导入…</button>
-          </div>
-          <div class="hint">模型还没下载时，按钮显示「导入 / 下载…」：可以选在线下载（会二次确认，依次尝试国内镜像和官方源，支持断点续传），也可以导入自己下好的文件——点「打开模型下载页面」下载 <b>model.onnx</b> 和 <b>selected_tags.csv</b>（model.onnx 比较大，用下载工具会快很多），再点「从本地导入…」，按住 Ctrl 同时选中这两个文件。</div>
         </div>
 
-        <div class="card">
-          <div class="card-title">参数</div>
-          <div class="form-grid">
-            <label id="wd-general-label">常规标签阈值（0.35）</label>
-            <input type="range" id="wd-general" min="1" max="99" value="35">
-            <label id="wd-character-label">角色标签阈值（0.85）</label>
-            <input type="range" id="wd-character" min="1" max="99" value="85">
-          </div>
-          <label class="chk-row"><input type="checkbox" id="wd-include-rating"><i></i><span>包含评分标签（safe/questionable/explicit）</span></label>
-          <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>批量处理时把结果保存为同名 .txt（LoRA 训练打标常用格式）</span></label>
-        </div>
-
-        <div class="card">
-          <div class="card-title">图片<span class="card-title-hint">可以直接把图片或文件夹拖进列表</span></div>
-          <div class="row">
+        <div class="card wd-work">
+          <div class="card-title">图片与结果<span class="card-title-hint" id="wd-summary"></span></div>
+          <div class="row wd-toolbar">
             <button class="btn" id="wd-pick-files">选择图片…</button>
             <button class="btn" id="wd-pick-folder">选择文件夹（批量）…</button>
-            <button class="btn" id="wd-clear">清空列表</button>
+            <span class="wd-spacer"></span>
+            <button class="btn" id="wd-copy-all" disabled>复制全部结果</button>
+            <button class="btn" id="wd-clear" disabled>清空列表</button>
           </div>
-          <div class="drop-list" id="wd-images"><div class="drop-empty">把图片 / 文件夹拖到这里</div></div>
-        </div>
-
-        <div class="action-row">
-          <button class="btn btn-primary btn-lg" id="wd-run" disabled>
-            <svg class="btn-icon"><use href="#i-launch"/></svg>开始反推
-          </button>
-          <button class="btn btn-lg" id="wd-cancel" disabled>取消</button>
-        </div>
-        <div class="progress" id="wd-tag-progress"><div class="progress-bar"></div><span class="progress-text">等待开始…</span></div>
-
-        <div class="console-wrap">
-          <div class="console-head"><span>结果（可直接复制）</span><button class="btn btn-xs" id="wd-result-clear">清空</button></div>
-          <pre class="console" id="wd-result"></pre>
+          <div class="drop-list wd-list" id="wd-images"></div>
+          <div class="action-row wd-actions">
+            <button class="btn btn-primary btn-lg" id="wd-run" disabled>
+              <svg class="btn-icon"><use href="#i-launch"/></svg><span id="wd-run-label">开始反推</span>
+            </button>
+            <button class="btn btn-lg" id="wd-cancel" disabled>取消</button>
+            <div class="progress" id="wd-tag-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+          </div>
         </div>
       </section>
 
