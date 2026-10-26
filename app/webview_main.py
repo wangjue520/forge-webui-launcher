@@ -17,6 +17,21 @@ import os
 import sys
 import threading
 
+APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
+LOG_PATH = os.path.join(APP_DIR, "launcher_data", "launcher.log")
+
+# 由 bat 用 pythonw.exe 拉起时没有控制台（不再挂着一个黑框）：
+# print / 报错输出改写进 launcher_data/launcher.log，出问题时还能翻
+WINDOWLESS = sys.stdout is None or os.path.basename(sys.executable).lower() == "pythonw.exe"
+if WINDOWLESS:
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        _log_file = open(LOG_PATH, "w", encoding="utf-8", errors="replace", buffering=1)
+        sys.stdout = sys.stderr = _log_file
+    except OSError:
+        _devnull = open(os.devnull, "w", encoding="utf-8")
+        sys.stdout = sys.stderr = _devnull
+
 try:   # 上次 ZIP 更新时被界面占用、暂存起来的文件，趁界面还没打开先换上（必须在导入其它模块之前）
     import updater
     updater.apply_pending(print)
@@ -29,7 +44,6 @@ from webview.dom import DOMEventHandler
 import config_manager as cm
 from webview_api import LauncherApi
 
-APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 ICON_PATH = os.path.join(APP_DIR, "assets", "wwy_launcher_icon.ico")
 
 
@@ -109,6 +123,61 @@ def _bind_dom_events(window, api):
     window.dom.document.events.drop += DOMEventHandler(on_drop, prevent_default=True)
 
 
+def _no_console_for_children():
+    """
+    没有控制台时，子进程（git / pip / python …）只要没带 CREATE_NO_WINDOW，Windows 就会
+    给它新开一个黑框。大部分调用已经带了，这里给漏掉的统一补上；显式要求
+    新控制台 / 脱离控制台的调用保持原样。GUI 程序（explorer 等）会忽略这个标志。
+    """
+    if os.name != "nt" or not WINDOWLESS:
+        return
+    import subprocess
+    CREATE_NEW_CONSOLE, DETACHED_PROCESS, CREATE_NO_WINDOW = 0x10, 0x08, 0x08000000
+    orig_init = subprocess.Popen.__init__
+
+    def patched_init(self, *args, **kwargs):
+        flags = kwargs.get("creationflags", 0) or 0
+        if not flags & (CREATE_NEW_CONSOLE | DETACHED_PROCESS):
+            kwargs["creationflags"] = flags | CREATE_NO_WINDOW
+        orig_init(self, *args, **kwargs)
+
+    subprocess.Popen.__init__ = patched_init
+
+
+def _ignore_stale_js_callbacks():
+    """
+    页面刷新（换主题 / 切实例会 reload）时，刷新前发出的 js_api 调用（比如训练器卡片
+    每 5 秒一次的 trainer_status）在 Python 侧跑完回传结果，可 JS 侧的回调表已经随旧
+    页面没了，pywebview 的后台线程就抛 JavascriptException「… is not a function」，
+    打一大段红字。结果本来就没人要了，这种直接忽略；其他线程异常照常输出。
+    """
+    default_hook = threading.excepthook
+
+    def hook(args):
+        if (args.exc_type is not None and args.exc_type.__name__ == "JavascriptException"
+                and "_returnValuesCallbacks" in str(args.exc_value)):
+            return
+        default_hook(args)
+
+    threading.excepthook = hook
+
+
+def _show_fatal_error(text):
+    """没有控制台时启动失败，弹个系统对话框告诉用户，而不是窗口一闪就没了。"""
+    if os.name != "nt" or not WINDOWLESS:
+        return
+    try:
+        import ctypes
+        msg = (text.strip()[-1500:] + "\n\n"
+               "如果是窗口相关的错误（白屏、WebView2 之类），多半是缺少 Edge WebView2 运行时：\n"
+               "https://developer.microsoft.com/microsoft-edge/webview2/\n\n"
+               f"完整日志：{LOG_PATH}\n"
+               "也可以在命令行里运行「启动WWY启动器.bat debug」，带控制台启动查看报错。")
+        ctypes.windll.user32.MessageBoxW(None, msg, "WWY 启动器异常退出", 0x10)
+    except Exception:
+        pass
+
+
 def _quiet_windows_error_dialogs():
     """
     关掉 Windows 的系统报错弹窗（「无法定位程序输入点 …于动态链接库 …上」这类）。
@@ -130,6 +199,8 @@ def _quiet_windows_error_dialogs():
 
 def main():
     _quiet_windows_error_dialogs()
+    _no_console_for_children()
+    _ignore_stale_js_callbacks()
     try:   # 从旧版本（代码平铺在根目录）升级上来时，清掉根目录残留的旧代码
         import updater
         updater.cleanup_legacy_layout()
@@ -168,4 +239,13 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        import traceback
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        _show_fatal_error(tb)
+        sys.exit(1)

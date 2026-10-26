@@ -286,7 +286,7 @@
     selectTrainer() { $("#deploy-branch").value = TRAINER; syncNodesCard(); syncGpu(); syncTrainer(); },
 
     init(state) {
-      log = App.makeLogger($("#deploy-log"));
+      log = App.pageLog("deploy", "环境部署");
       prog = App.progress($("#deploy-progress"));
       prog.hide();
 
@@ -323,7 +323,6 @@
       $("#deploy-target").addEventListener("change", checkDir);
       $("#deploy-start").addEventListener("click", onStart);
       $("#deploy-cancel").addEventListener("click", () => App.api.deploy_cancel());
-      $("#deploy-log-clear").addEventListener("click", () => { $("#deploy-log").textContent = ""; });
       $("#deploy-venv-check").addEventListener("click", venvCheck);
       $("#deploy-patch-hashlib").addEventListener("click", patchHashlib);
 
@@ -392,7 +391,7 @@
       });
       App.on("deploy", "cancelled", () => { setRunning(false); prog.hide(); App.toast("已取消部署"); });
       App.on("deploy", "switch_done", async (e) => {
-        if (!e.ok) { App.toast("显卡环境切换没有完成，详情见下方日志", "error", 6000); return; }
+        if (!e.ok) { App.toast("显卡环境切换没有完成，详情见「一键启动」页的运行日志", "error", 6000); return; }
         App.toast("显卡环境已切换为 " + (e.backend === "rocm" ? "AMD（ROCm）" : "NVIDIA（CUDA）"), "ok", 5000);
         try {
           const st = await App.api.get_state();

@@ -103,7 +103,14 @@
           modelUrls[m.key] = m.urls || [];
           modelInfo[m.key] = { label: m.label, cached: !!m.cached };
         });
-        sel.addEventListener("change", updateLoadLabel);
+        // 记住上次选的模型（列表里还有这个模型才恢复）
+        const last = App.cfg && App.cfg.wd14_model;
+        if (last && modelInfo[last]) sel.value = last;
+        sel.addEventListener("change", () => {
+          updateLoadLabel();
+          if (App.cfg) App.cfg.wd14_model = sel.value;
+          App.api.update_config({ wd14_model: sel.value }).catch(() => {});
+        });
         updateLoadLabel();
         if (r.model_ready) {
           modelReady = true;
@@ -282,7 +289,7 @@
         refreshRunBtn();
       });
 
-      App.on("wd14", "tag_log", (e) => resultLog("[日志] " + e.text));
+      App.on("wd14", "tag_log", App.pageLog("wd14", "WD14 反推"));
       App.on("wd14", "tag_progress", (e) => {
         const pct = e.total > 0 ? (e.done / e.total * 100) : 0;
         tagProg.set(pct, `反推中 ${e.done}/${e.total}`);

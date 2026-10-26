@@ -892,8 +892,9 @@ class LauncherApi:
     def choose_directory(self, title="选择文件夹", start=""):
         try:
             import webview
-            res = self._window.create_file_dialog(
-                webview.FOLDER_DIALOG, directory=start or os.getcwd())
+            # 新版 pywebview 用 FileDialog.FOLDER（FOLDER_DIALOG 已弃用，每次调用都打一行警告）
+            folder = getattr(getattr(webview, "FileDialog", None), "FOLDER", None) or webview.FOLDER_DIALOG
+            res = self._window.create_file_dialog(folder, directory=start or os.getcwd())
             return {"ok": True, "path": res[0] if res else ""}
         except Exception as e:
             return {"ok": False, "error": str(e), "path": ""}

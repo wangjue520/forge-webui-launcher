@@ -8,6 +8,9 @@ cd /d "%~dp0"
 title WWY 启动器
 rem 不开 enabledelayedexpansion：路径里如果带 ! 会被吞掉，这个脚本也用不到它
 setlocal
+rem 「启动WWY启动器.bat debug」= 带控制台启动（排查问题时看报错用）；平时窗口打开后黑框自动关掉
+set "WWY_DEBUG="
+if /i "%~1"=="debug" set "WWY_DEBUG=1"
 
 rem ---------- 环境自愈：带病机器也要能部署 ----------
 rem 1) 有些机器 PATH 被改坏（缺 System32），where/tar/timeout/findstr/reg
@@ -411,6 +414,13 @@ if errorlevel 1 (
     echo       如果启动后白屏，请安装微软官方 WebView2 Runtime 后重试：
     echo       https://developer.microsoft.com/microsoft-edge/webview2/
     echo.
+)
+rem 平时用 pythonw.exe（没有控制台）在后台拉起界面，bat 随即退出，黑框跟着关掉；
+rem 输出写进 launcher_data\launcher.log，启动失败会弹系统对话框说明。
+rem debug 模式或 venv 里没有 pythonw.exe 时，照旧在本控制台里运行。
+if not defined WWY_DEBUG if exist "%~dp0.venv\Scripts\pythonw.exe" (
+    start "" /d "%~dp0" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0app\webview_main.py"
+    exit /b 0
 )
 %VPY% app\webview_main.py
 if errorlevel 1 (

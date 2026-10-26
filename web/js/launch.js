@@ -298,12 +298,12 @@
         const i = ((App.instances && App.instances.instances) || []).find((x) => x.id === iid);
         return i ? i.name : "";
       };
-      // 日志流换了来源（别的实例 / LoRA 训练器）时插一行分隔标题
+      // 日志流换了来源（别的实例 / LoRA 训练器 / 部署、下载等其它页面）时插一行分隔标题
       const logFrom = (src, title, text) => {
         if (src !== logSrc) {
           const first = logSrc === null;
           logSrc = src;
-          if (title && !(first && src !== "trainer" && !(App.instances && App.instances.multi))) log(`—— ${title}的日志 ——`);
+          if (title && !(first && src === "inst")) log(`—— ${title}的日志 ——`);
         }
         log(text);
       };
