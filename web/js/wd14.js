@@ -19,6 +19,7 @@
   let batchDone = 0;
   let modelProg = null;
   let tagProg = null;
+  let view = "tags";        // 结果显示成 标签块 / 一段文本
   let modelUrls = {};       // model_key -> 仓库页面地址（手动下载用）
   const modelInfo = {};     // key -> { label, cached }
 
@@ -95,6 +96,7 @@
     }
     const tags = (it.tags || "").split(",").map((t) => t.trim()).filter(Boolean);
     if (!tags.length) return '<div class="wd-tags wd-wait">没有超过阈值的标签（可以把阈值调低一点再试）</div>';
+    if (view === "text") return `<div class="wd-text" title="点击全选">${App.esc(tags.join(", "))}</div>`;
     return '<div class="wd-tags">' +
       tags.map((t) => `<span class="wd-tag" title="点击复制这个标签">${App.esc(t)}</span>`).join('<span class="wd-sep">, </span>') +
       "</div>";
@@ -233,7 +235,9 @@
     try {
       const r = await App.api.wd14_tag(
         targets.map((it) => it.path), $("#wd-general").value / 100, $("#wd-character").value / 100,
-        $("#wd-include-rating").checked, $("#wd-save-txt").checked);
+        $("#wd-include-rating").checked,
+        // 单张图只看结果，不在图片旁边落 .txt；列表里有 2 张及以上才算批量打标
+        $("#wd-save-txt").checked && items.length > 1);
       if (r && r.ok === false) throw new Error(r.error || "无法开始反推");
     } catch (e) {
       App.toast(e.message, "error");
@@ -314,6 +318,20 @@
           el.addEventListener("change", () => saveCfg(key, el.checked));
         });
 
+      // 结果显示方式：标签块（点一下复制单个） / 文本（整段可选中复制）
+      const setView = (v) => {
+        view = v === "text" ? "text" : "tags";
+        $("#wd-view").querySelectorAll("[data-view]").forEach((b) => b.classList.toggle("on", b.dataset.view === view));
+      };
+      setView(cfg.wd14_view);
+      $("#wd-view").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-view]");
+        if (!b || b.dataset.view === view) return;
+        setView(b.dataset.view);
+        saveCfg("wd14_view", view);
+        renderList();
+      });
+
       $("#wd-load").addEventListener("click", loadModel);
 
       // 下载失败时的退路：自己去网页下好，再把文件导进来
@@ -370,6 +388,12 @@
           items.splice(items.indexOf(it), 1);
           byPath.delete(norm(it.path));
           renderList();
+          return;
+        }
+        const text = e.target.closest(".wd-text");
+        if (text) {
+          if (String(window.getSelection() || "")) return;   // 已经在拖选一部分，别打断
+          window.getSelection().selectAllChildren(text);
           return;
         }
         const tag = e.target.closest(".wd-tag");

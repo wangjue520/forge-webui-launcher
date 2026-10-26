@@ -734,7 +734,7 @@
               <output id="wd-character-val">0.85</output>
             </div>
             <label class="chk-row"><input type="checkbox" id="wd-auto-run" checked><i></i><span>加入图片后自动开始反推</span></label>
-            <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>把结果保存为图片旁边的同名 .txt（LoRA 训练打标格式）</span></label>
+            <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>批量（2 张及以上）时保存同名 .txt 到图片旁边（LoRA 打标格式）</span></label>
             <label class="chk-row"><input type="checkbox" id="wd-include-rating"><i></i><span>包含评分标签（safe / questionable / explicit）</span></label>
           </div>
         </div>
@@ -745,6 +745,9 @@
             <button class="btn" id="wd-pick-files">选择图片…</button>
             <button class="btn" id="wd-pick-folder">选择文件夹（批量）…</button>
             <span class="wd-spacer"></span>
+            <span class="chips wd-view" id="wd-view" title="结果的显示方式">
+              <button class="chip" data-view="tags">标签</button><button class="chip" data-view="text">文本</button>
+            </span>
             <button class="btn" id="wd-copy-all" disabled>复制全部结果</button>
             <button class="btn" id="wd-clear" disabled>清空列表</button>
           </div>

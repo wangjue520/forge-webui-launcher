@@ -115,6 +115,7 @@ DEFAULT_CONFIG = {
     "wd14_include_rating": False,
     "wd14_save_txt": True,
     "wd14_auto_run": True,        # 加进图片后自动开始反推（模型已下载时）
+    "wd14_view": "tags",          # 结果显示成 tags（标签块）/ text（一段文本）
 }
 
 CONFIG_VERSION = 3
