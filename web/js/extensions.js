@@ -283,6 +283,14 @@
     switchRepos([rel], t, "切换到 " + (t.label || t.name || (t.commit || "").slice(0, 7)));
   }
 
+  // 打开插件目录：后端打不开（目录不存在、没设根目录）时以前什么都不提示，看起来像按钮坏了
+  async function openDir(rel) {
+    try {
+      const r = await App.api.ext_open_dir(rel || null, targetId || null);
+      if (r && r.ok === false) App.toast(r.error || "打不开插件目录", "error", 6000);
+    } catch (e) { App.toast("打不开插件目录：" + e.message, "error"); }
+  }
+
   App.pages.extensions = {
     init() {
       log = App.pageLog("ext", "插件管理");
@@ -290,7 +298,7 @@
       $("#ext-refresh").addEventListener("click", refresh);
       $("#ext-cancel").addEventListener("click", () => App.api.ext_cancel());
       $("#ext-target-sel").addEventListener("change", (e) => { targetId = e.target.value; refresh(); });
-      $("#ext-open-dir").addEventListener("click", () => App.api.ext_open_dir(null, targetId || null));
+      $("#ext-open-dir").addEventListener("click", () => openDir(null));
       $("#ext-pick-default").addEventListener("click", () => {
         const rec = new Set(items.filter((i) => i.default).map((i) => i.id));
         document.querySelectorAll('#ext-list input[type="checkbox"]:not(:disabled)').forEach((el) => {
@@ -316,7 +324,7 @@
         e.stopPropagation();
         if (installing) return;
         const act = b.dataset.act;
-        if (act === "open") App.api.ext_open_dir(b.dataset.rel, targetId || null);
+        if (act === "open") openDir(b.dataset.rel);
         else if (act === "enable" || act === "disable") {
           const on = act === "enable";
           b.disabled = true;
@@ -363,7 +371,13 @@
 
       App.on("ext", "log", (e) => log(e.text));
       App.on("ext", "state", (e) => setInstalling(!!e.running));
-      App.on("ext", "done", () => { setInstalling(false); refresh(); });
+      App.on("ext", "done", (e) => {
+        setInstalling(false);
+        refresh();
+        const failed = (e && e.failed) || [];
+        if (e && e.error) App.toast("安装中途出错：" + e.error + "（详情见下方日志）", "error", 8000);
+        else if (failed.length) App.toast(`${failed.length} 个没装上：${failed.join("、")}（原因见下方日志）`, "error", 8000);
+      });
       // 批量检查更新时逐个回填，不用等全部查完
       App.on("ext", "update_status", (e) => {
         const r = findRepo(e.rel);
