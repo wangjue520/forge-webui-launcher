@@ -513,6 +513,11 @@ class LauncherApi:
             pm.apply(self.cfg)      # 越早越好：后面的联网和子进程都从 os.environ 派生
         except Exception:
             pass
+        try:
+            import net_guard
+            net_guard.install()     # 代理（梯子）端口失效时自动换路，见 net_guard 开头的说明
+        except Exception:
+            pass
         self._installs_cache = None
         self._ask_seq = 0
         self._asks = {}            # ask_id -> {"event": Event, "value": ...}
