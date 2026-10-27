@@ -162,15 +162,53 @@ def _ignore_stale_js_callbacks():
     threading.excepthook = hook
 
 
+def _unblock_dotnet_dlls():
+    """
+    清掉 pythonnet / pywebview 自带 .NET 程序集上的「来自网络」标记（Zone.Identifier
+    备用数据流）。用资源管理器解压下载的 zip、或从别人那里拷来整个目录时文件会带
+    这个标记，.NET Framework 拒绝加载带标记的程序集，pywebview 起 WinForms 时就报
+    「Failed to resolve Python.Runtime.Loader.Initialize」，界面打不开。
+    只扫这几个包目录（几十个文件，毫秒级），必须在 webview.start（首次 import clr）之前做。
+    bat 的 :check_clr 也会整体解除锁定，这里是不经过 bat 启动时的兜底。
+    """
+    if os.name != "nt":
+        return
+    roots = {os.path.join(sys.prefix, "Lib", "site-packages")}
+    try:
+        import site
+        roots.update(site.getsitepackages())
+    except Exception:
+        pass
+    for root in roots:
+        for sub in ("pythonnet", "clr_loader", os.path.join("webview", "lib")):
+            base = os.path.join(root, sub)
+            if not os.path.isdir(base):
+                continue
+            for dirpath, _dirs, files in os.walk(base):
+                for name in files:
+                    if name.lower().endswith((".dll", ".exe")):
+                        try:   # 删备用数据流 = 解除锁定；没有标记时 FileNotFoundError，忽略
+                            os.remove(os.path.join(dirpath, name) + ":Zone.Identifier")
+                        except OSError:
+                            pass
+
+
 def _show_fatal_error(text):
     """没有控制台时启动失败，弹个系统对话框告诉用户，而不是窗口一闪就没了。"""
     if os.name != "nt" or not WINDOWLESS:
         return
     try:
         import ctypes
-        msg = (text.strip()[-1500:] + "\n\n"
-               "如果是窗口相关的错误（白屏、WebView2 之类），多半是缺少 Edge WebView2 运行时：\n"
-               "https://developer.microsoft.com/microsoft-edge/webview2/\n\n"
+        if "Python.Runtime" in text:   # pythonnet（.NET 界面组件）加载失败，见 _unblock_dotnet_dlls
+            hint = ("启动器界面依赖的 .NET 组件（pythonnet）加载失败。\n\n"
+                    "请关掉这个对话框，重新双击「启动WWY启动器.bat」——它会自动检测并修复"
+                    "（解除文件锁定、重装组件）。\n\n"
+                    "还是不行的话，请安装 / 修复 .NET Framework 4.8（装完重启电脑）：\n"
+                    "https://dotnet.microsoft.com/download/dotnet-framework/net48\n\n")
+        else:
+            hint = ("如果是窗口相关的错误（白屏、WebView2 之类），多半是缺少 Edge WebView2 运行时：\n"
+                    "https://developer.microsoft.com/microsoft-edge/webview2/\n\n")
+        msg = (text.strip()[-1500:] + "\n\n" + hint +
                f"完整日志：{LOG_PATH}\n"
                "也可以在命令行里运行「启动WWY启动器.bat debug」，带控制台启动查看报错。")
         ctypes.windll.user32.MessageBoxW(None, msg, "WWY 启动器异常退出", 0x10)
@@ -207,6 +245,7 @@ def main():
     except Exception:
         pass
     _patch_http_server_backlog()
+    _unblock_dotnet_dlls()
     api = LauncherApi()
     cm.write_theme_file(api.cfg)   # 开屏动画在后端应答前就要读风格文件
     window = webview.create_window(

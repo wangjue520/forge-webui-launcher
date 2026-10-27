@@ -93,7 +93,7 @@ if exist %VPY% (
         rmdir /s /q "%VENV%" >nul 2>nul
     ) else (
         %VPY% -c "import webview, requests" >nul 2>nul
-        if not errorlevel 1 goto :launch
+        if not errorlevel 1 goto :check_clr
         goto :install_deps
     )
 )
@@ -204,38 +204,47 @@ rem ---------- 6. 装依赖 ----------
 echo   [3/3] 正在安装依赖（一般十几秒，安装日志失败时才会显示）...
 echo.
 
-rem 按 IP 归属地决定镜像顺序：国内 -> 镜像优先；国外 -> 官方源优先。
-rem 检测不到时按国内处理（用户大多数在国内，且官方源始终排在最后兜底）。
-rem :try_install 返回值：0 成功；1 疑似网络/镜像问题，换下一个源；
-rem                      2 本地环境问题，换源也没用，直接停下
-set "REGION="
-call :detect_region
+call :pip_install_all
+if errorlevel 2 goto :local_fail
+if errorlevel 1 goto :all_failed
+goto :deps_ok
+
+rem ===================================================================
+rem  :pip_install_all —— 按 requirements.txt 安装依赖，自动轮换下载源
+rem  按 IP 归属地决定镜像顺序：国内 -> 镜像优先；国外 -> 官方源优先。
+rem  检测不到时按国内处理（用户大多数在国内，且官方源始终排在最后兜底）。
+rem  额外的 pip 参数放在 %PIP_EXTRA% 里（比如修复时的 --force-reinstall）。
+rem  返回值：0 成功；1 所有源都失败（多半是网络）；2 本地环境问题，换源也没用
+rem ===================================================================
+:pip_install_all
+if not defined REGION_DONE call :detect_region
 
 if /i "%REGION%"=="CN" goto :order_cn
 if not "%REGION%"=="" goto :order_global
 
 :order_cn
 call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "清华镜像"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
 call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
 call :try_install "-i https://pypi.org/simple" "官方源"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
-goto :all_failed
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
+exit /b 1
 
 :order_global
 call :try_install "-i https://pypi.org/simple" "官方源"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
 call :try_install "-i https://pypi.tuna.tsinghua.edu.cn/simple" "清华镜像"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
 call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
-if errorlevel 2 goto :local_fail
-if not errorlevel 1 goto :deps_ok
+if errorlevel 2 exit /b 2
+if not errorlevel 1 exit /b 0
+exit /b 1
 
 :all_failed
 echo.
@@ -260,6 +269,8 @@ rem ===================================================================
 rem  :detect_region —— 查询出口 IP 的国家代码写入 %REGION%（查不到留空）
 rem ===================================================================
 :detect_region
+set "REGION_DONE=1"
+set "REGION="
 for /f "delims=" %%r in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\detect_region.ps1"') do set "REGION=%%r"
 if /i "%REGION%"=="CN" (
     echo   检测到国内网络环境，安装依赖优先走国内镜像 ...
@@ -275,7 +286,7 @@ exit /b 0
 :deps_ok
 rem 装完再实际 import 一次，防止"装成功了但其实没装进这个环境"
 %VPY% -c "import webview, requests" >nul 2>nul
-if not errorlevel 1 goto :launch
+if not errorlevel 1 goto :check_clr
 rem 装完却导不进：环境很可能装坏了（杀软动了文件/磁盘写入被拦）。
 rem 以前到这一步只能让用户手动删 .venv 再双击——这就是"第一次失败、
 rem 第二次就好"的一个来源；现在自动删掉重建一次（只一次，防死循环）
@@ -326,7 +337,7 @@ echo   正在通过 %~2 安装 ...
 rem 先删旧日志：pip 如果连启动都没成功（比如 venv 损坏），日志文件就还是
 rem 上一次运行的内容，失败时 type 出来一份过时日志会严重误导排查
 if exist "%PIPLOG%" del /f /q "%PIPLOG%" >nul 2>nul
-%VPY% -m pip install -r "%REQ%" %~1 --disable-pip-version-check --retries 1 --timeout 20 > "%PIPLOG%" 2>&1
+%VPY% -m pip install -r "%REQ%" %PIP_EXTRA% %~1 --disable-pip-version-check --retries 1 --timeout 20 > "%PIPLOG%" 2>&1
 if errorlevel 1 goto :try_install_failed
 echo   [√] 依赖安装完成
 echo.
@@ -398,6 +409,87 @@ if not exist "%~dp0python\python.exe" (
 echo.
 echo   [√] 便携 Python 已就绪
 echo.
+exit /b 0
+
+rem ===================================================================
+rem  :check_clr —— 界面依赖的 .NET 组件（pythonnet）能否加载
+rem
+rem  pywebview 在 Windows 上通过 pythonnet 调用 WinForms + WebView2，
+rem  pythonnet 加载失败界面就必定起不来，日志里是
+rem      Failed to resolve Python.Runtime.Loader.Initialize
+rem  而 import webview 本身不碰 .NET，前面的检查发现不了，所以单独查一次。
+rem  常见原因：
+rem    1) 文件带"来自网络"标记（资源管理器解压下载的 zip、从别人那拷来整个
+rem       目录），.NET Framework 拒绝加载带标记的程序集
+rem    2) 新版 pythonnet 与部分系统环境不兼容
+rem    3) .NET Framework 缺失/损坏（精简版系统）
+rem  修复顺序：解除锁定 -> 按 requirements.txt 强制重装（版本已锁定）-> 给出指引
+rem ===================================================================
+:check_clr
+%VPY% -c "import clr" >nul 2>nul
+if not errorlevel 1 goto :launch
+
+echo.
+echo   [!] 检测到界面组件（pythonnet / .NET）加载失败，正在自动修复 ...
+echo   [1/2] 解除文件的"来自网络"锁定 ...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\unblock_files.ps1" -LauncherDir "%~dp0." >nul 2>nul
+%VPY% -c "import clr" >nul 2>nul
+if not errorlevel 1 goto :clr_fixed
+
+echo   [2/2] 重新安装界面组件（换用经过验证的 pythonnet 版本）...
+set "PIP_EXTRA=--force-reinstall"
+call :pip_install_all
+set "PIP_EXTRA="
+%VPY% -c "import clr" >nul 2>nul
+if not errorlevel 1 goto :clr_fixed
+
+echo.
+echo   ============================================================
+echo    界面组件（pythonnet / .NET）仍然无法加载
+echo   ============================================================
+echo.
+echo    诊断信息（反馈问题时请连同下面的报错一起截图）：
+%VPY% -c "import sys, platform; print('      Python', sys.version.split()[0], '/', platform.platform())"
+%VPY% -c "from importlib.metadata import version as v; print('      pythonnet', v('pythonnet'), '/ clr_loader', v('clr_loader'))" 2>nul
+call :check_netfx
+echo.
+echo    报错详情：
+echo   ------------------------------------------------------------
+%VPY% -c "import clr"
+echo   ------------------------------------------------------------
+echo.
+echo    可以这样处理：
+echo      1. 安装或修复 .NET Framework 4.8（微软官方，装完重启电脑）：
+echo         https://dotnet.microsoft.com/download/dotnet-framework/net48
+echo      2. 删除启动器目录下的 .venv 文件夹，再重新双击本文件
+echo      3. 仍然不行请把这个窗口截图反馈给作者
+goto :end_fail
+
+:clr_fixed
+echo   [√] 界面组件已修复
+echo.
+goto :launch
+
+rem ===================================================================
+rem  :check_netfx —— 显示 .NET Framework 4.x 的安装情况（只提示）
+rem  Release 值 >= 528040 即 4.8；pythonnet 需要至少 4.7.2（461808）
+rem ===================================================================
+:check_netfx
+set "NETREL="
+for /f "tokens=3" %%r in ('reg query "HKLM\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full" /v Release 2^>nul ^| findstr /i "Release"') do set /a NETREL=%%r
+if not defined NETREL (
+    echo       .NET Framework 4.x：未检测到（需要安装）
+    exit /b 0
+)
+if %NETREL% GEQ 528040 (
+    echo       .NET Framework：4.8 或更高（Release %NETREL%）
+) else (
+    if %NETREL% GEQ 461808 (
+        echo       .NET Framework：4.7.2（Release %NETREL%），建议升级到 4.8
+    ) else (
+        echo       .NET Framework：版本过低（Release %NETREL%），需要 4.7.2 以上
+    )
+)
 exit /b 0
 
 rem ---------- 7. 启动（永远用 .venv 里的 Python） ----------

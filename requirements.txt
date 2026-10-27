@@ -1,2 +1,6 @@
 pywebview>=5.0
 requests>=2.31
+# pywebview 在 Windows 上靠 pythonnet 加载 .NET 界面组件。pythonnet 3.2（2026-09）有
+# 机器上报 "Failed to resolve Python.Runtime.Loader.Initialize" 界面起不来，先锁在 3.2 以下
+# （3.0.5 起支持 Python 3.13，3.1.0 支持到 3.14）
+pythonnet>=3.0.5,<3.2; sys_platform == "win32"
