@@ -5822,6 +5822,9 @@ def _api_ext_install(self, names, iid=None):
                     log("\n[插件] 完成：" + comfy_nodes.summary_text(res) + "\n"
                         "重启 ComfyUI 后新节点生效。\n")
                 self._emit("ext", "done")
+            except Exception as e:
+                log(f"\n[插件] 安装中途出错：{e}\n{traceback.format_exc()[-1200:]}\n")
+                self._emit("ext", "done", failed=list(ids), error=str(e))
             finally:
                 self._ext_proc = None
                 self._emit("ext", "state", running=False)
@@ -5847,6 +5850,7 @@ def _api_ext_install(self, names, iid=None):
 
     def work():
         log = lambda t: self._emit("ext", "log", text=t)
+        failed = []
         try:
             log(f"[插件] 安装到：{info['name']}（{ext_dir}）\n")
             os.makedirs(ext_dir, exist_ok=True)
@@ -5881,12 +5885,20 @@ def _api_ext_install(self, names, iid=None):
                     break
                 if rc != 0:
                     shutil.rmtree(dest, ignore_errors=True)
+                    failed.append(name)
                     log(f"[插件] 「{name}」安装失败（退出码 {rc}），跳过继续下一个\n")
             if self._ext_cancel:
                 log("\n[插件] 已取消\n")
+            elif failed:
+                log(f"\n[插件] 装上 {len(selected) - len(failed)} 个，失败 {len(failed)} 个：{'、'.join(failed)}。"
+                    "失败原因看上面几行；多半是连不上 GitHub，可以在「启动器设置 → 网络代理」填代理端口后再装\n")
             else:
                 log("\n[插件] 全部安装完成！建议重启一下 WebUI 让新扩展生效。\n")
-            self._emit("ext", "done")
+            self._emit("ext", "done", failed=failed)
+        except Exception as e:
+            # 以前异常只进全局错误，这页的日志停在「安装到…」不动，看起来像点了没反应
+            log(f"\n[插件] 安装中途出错：{e}\n{traceback.format_exc()[-1200:]}\n")
+            self._emit("ext", "done", failed=[n for n, _, _ in selected], error=str(e))
         finally:
             self._ext_proc = None
             self._emit("ext", "state", running=False)
@@ -6178,8 +6190,14 @@ def _webui_set_ext_disabled(root, folder, disabled):
 def _api_ext_open_dir(self, rel=None, iid=None):
     cfg, info, _ = _ext_target(self, iid)
     p = _ext_resolve_repo(info, rel) if rel else info.get("target_dir")
+    if not rel and p and not os.path.isdir(p) and info.get("root") and os.path.isdir(info["root"]):
+        # 刚部署好的 WebUI 还没有 extensions 文件夹（第一次装插件才建），直接建出来再打开
+        try:
+            os.makedirs(p, exist_ok=True)
+        except OSError as e:
+            return {"ok": False, "error": f"插件目录建不出来：{e}"}
     if not p or not os.path.isdir(p):
-        return {"ok": False, "error": "目录不存在"}
+        return {"ok": False, "error": f"插件目录不存在：{p or '（实例还没设置根目录）'}"}
     try:
         os.startfile(p)  # noqa: S606  # 本机插件目录
     except OSError as e:
