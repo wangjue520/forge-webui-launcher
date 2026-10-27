@@ -39,6 +39,7 @@ TEST_TARGETS = [
 # 启动器启动时系统里原有的代理变量。关掉代理时恢复成这样，不能直接删——
 # 用户可能本来就在系统里设了 HTTP_PROXY
 _orig = None
+_active = ""    # 当前生效的启动器代理地址，net_guard 拿来判断坏代理是从哪来的
 
 
 def normalize(text):
@@ -111,10 +112,16 @@ def with_local_bypass(env):
     return env
 
 
+def active_url():
+    return _active
+
+
 def apply(cfg):
     """按配置设置/恢复本进程的代理环境变量。返回生效的代理地址（没开为空串）"""
+    global _active
     _snapshot()
     url = current(cfg)
+    _active = url
     # 先恢复原样（Windows 环境变量名不区分大小写，大小写两套其实是同一个变量）
     for k, v in _orig.items():
         if v is None:
@@ -127,6 +134,11 @@ def apply(cfg):
         no_proxy = _no_proxy_value()
         for k in _NO_PROXY_KEYS:
             os.environ[k] = no_proxy
+    try:
+        import net_guard
+        net_guard.reset()     # 代理改了，之前自动换路的结论作废
+    except Exception:
+        pass
     return url
 
 
