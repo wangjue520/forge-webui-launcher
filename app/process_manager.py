@@ -698,6 +698,17 @@ class InstanceRunner:
         except Exception:
             pass
 
+        if not comfy:
+            # ADetailer-Neo 启动时自己下载模型、没有超时，网络不好就卡在 Loading Models：
+            # 启动器清半截文件、后台补下载，这次启动让它别自己下。见 adetailer_models
+            try:
+                import adetailer_models as adm
+                flag = adm.prepare(root, cfg, log)
+                if flag:
+                    cfg["extra_args"] = ((cfg.get("extra_args") or "") + " " + flag).strip()
+            except Exception as e:
+                log(f"[启动器] 检查 ADetailer 模型失败（不影响启动）: {e}\n")
+
         if comfy:
             res = self._spawn_comfy(root, cfg, log)
         else:
