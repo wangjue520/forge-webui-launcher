@@ -423,9 +423,17 @@ rem    1) 文件带"来自网络"标记（资源管理器解压下载的 zip、从别人那拷来整个
 rem       目录），.NET Framework 拒绝加载带标记的程序集
 rem    2) 新版 pythonnet 与部分系统环境不兼容
 rem    3) .NET Framework 缺失/损坏（精简版系统）
-rem  修复顺序：解除锁定 -> 按 requirements.txt 强制重装（版本已锁定）-> 给出指引
+rem    4) 杀毒软件删除 / 拦截了 Python.Runtime.dll，或被 Windows 智能应用控制拦截
+rem  1) 的实际报错是 .NET 0x80131515（把 Python.Runtime.dll 当成「来自网络」拒绝加载）。
+rem  有用户的文件上查不到下载标记、照样被这么判，所以每次检查前先跑 app\dotnet_config.py：
+rem  在基础 Python 的 python.exe / pythonw.exe 旁边写 .config 打开 loadFromRemoteSources
+rem  修复顺序：放行配置 -> 解除锁定 -> 按 requirements.txt 强制重装（版本已锁定）-> 给出指引
+rem  这几种在 Python 那边全是同一句报错（clr_loader 的发行版把真实异常吞了），
+rem  所以最后用 scripts\clr_probe.ps1 在 PowerShell 里按同样的步骤再加载一次，
+rem  把真实的 .NET 异常和对应的处理办法显示出来
 rem ===================================================================
 :check_clr
+%VPY% "%~dp0app\dotnet_config.py" >nul 2>nul
 %VPY% -c "import clr" >nul 2>nul
 if not errorlevel 1 goto :launch
 
@@ -458,7 +466,10 @@ echo   ------------------------------------------------------------
 %VPY% -c "import clr"
 echo   ------------------------------------------------------------
 echo.
-echo    可以这样处理：
+echo    实际原因（自动检测）：
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\clr_probe.ps1" -LauncherDir "%~dp0."
+echo.
+echo    上面的办法不管用的话，还可以：
 echo      1. 安装或修复 .NET Framework 4.8（微软官方，装完重启电脑）：
 echo         https://dotnet.microsoft.com/download/dotnet-framework/net48
 echo      2. 删除启动器目录下的 .venv 文件夹，再重新双击本文件

@@ -38,6 +38,12 @@ try:   # 上次 ZIP 更新时被界面占用、暂存起来的文件，趁界面
 except Exception:
     pass
 
+try:   # 让 .NET 放行界面组件，必须在第一次 import clr（webview.start）之前，见 dotnet_config
+    import dotnet_config
+    dotnet_config.ensure()
+except Exception:
+    pass
+
 import webview
 from webview.dom import DOMEventHandler
 
