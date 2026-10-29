@@ -89,6 +89,9 @@
     busy = v;
     $("#ver-cancel").disabled = !v;
     $("#ver-target-sel").disabled = v;
+    // 切换 / 接管 / 换仓库期间把进度条亮出来，不然按钮一灰整个页面像死了一样
+    const prog = App.progress($("#ver-progress"));
+    if (v) prog.set(0, "进行中…"); else prog.hide();
     updateButtons();
   }
 
@@ -247,11 +250,14 @@
     $("#ver-check").disabled = true;
     $("#ver-update").disabled = true;
     $("#ver-check").textContent = "正在检查…";
+    const prog = App.progress($("#ver-progress"));
+    prog.set(0, "正在检查更新…");
     try {
       const r = await App.api.ver_check(targetId || null);
       if (r && r.ok === false) App.toast(r.error || "检查失败", "error", 6000);
     } catch (e) { App.toast("检查失败：" + e.message, "error"); }
     $("#ver-check").textContent = "检查更新 / 选择版本";
+    prog.hide();
     await refresh();
   }
 
@@ -330,7 +336,14 @@
         refresh();
       });
 
-      App.on("ver", "log", (e) => log(e.text));
+      App.on("ver", "log", (e) => {
+        log(e.text);
+        // 进度条还亮着就跟随最新一行日志：git 拉取、补装依赖都得等上一阵，让用户看到卡在哪一步
+        const el = $("#ver-progress");
+        if (el.hidden) return;
+        const line = String(e.text == null ? "" : e.text).split("\n").map((s) => s.trim()).filter(Boolean).pop();
+        if (line) App.progress(el).set(0, line.length > 60 ? line.slice(0, 60) + "…" : line);
+      });
       App.on("ver", "state", (e) => setBusy(!!e.running));
       App.on("ver", "done", async (e) => {
         setBusy(false);
