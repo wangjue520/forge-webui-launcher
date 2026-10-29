@@ -583,6 +583,7 @@ class LauncherApi:
 
         # WebUI / ComfyUI 本体版本管理
         self._ver_thread = None
+        self._ver_job = False       # 有切换 / 接管 / 换仓库任务在跑
         self._ver_cancel = False
         self._ver_proc = None
         self._ver_checks = {}       # 源码目录 -> 最近一次检查更新的结果
@@ -5589,7 +5590,7 @@ def _ext_busy(self):
 
 
 def _ver_busy(self):
-    return bool((self._ver_thread and self._ver_thread.is_alive()) or getattr(self, "_ver_sync_busy", False))
+    return bool(getattr(self, "_ver_job", False) or getattr(self, "_ver_sync_busy", False))
 
 
 def _ext_entries(branch):
@@ -6258,6 +6259,18 @@ def _api_ver_info(self, iid=None):
             "running": info["running"], "busy": _ver_busy(self)}
 
 
+def _ver_start(self, work, name):
+    """起一个版本任务线程；不管 work 在哪一步出异常，结束时都把忙碌状态清掉"""
+    def run():
+        try:
+            work()
+        finally:
+            self._ver_job = False
+    self._ver_job = True
+    self._emit("ver", "state", running=True)
+    self._ver_thread = self._spawn(run, name=name)
+
+
 def _ver_run(self, program, args, cwd, env=None, timeout=None):
     def set_proc(p):
         self._ver_proc = p
@@ -6347,11 +6360,11 @@ def _api_ver_switch(self, target=None, iid=None):
                 log(f"[版本] 切换失败：{res.get('error')}\n")
         finally:
             self._ver_proc = None
+            self._ver_job = False          # 先清忙碌再发 done，前端刷新时才读得到空闲
             self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
                        backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
 
-    self._emit("ver", "state", running=True)
-    self._ver_thread = self._spawn(work, name="ver-switch")
+    _ver_start(self, work, "ver-switch")
     return {"ok": True}
 
 
@@ -6390,11 +6403,11 @@ def _api_ver_adopt(self, iid=None):
                 log(f"[版本] 接管失败：{res.get('error')}\n")
         finally:
             self._ver_proc = None
+            self._ver_job = False          # 先清忙碌再发 done，前端刷新时才读得到空闲
             self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
                        backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
 
-    self._emit("ver", "state", running=True)
-    self._ver_thread = self._spawn(work, name="ver-adopt")
+    _ver_start(self, work, "ver-adopt")
     return {"ok": True}
 
 
@@ -6440,11 +6453,11 @@ def _api_ver_switch_repo(self, iid=None):
                 log(f"[版本] 切换失败：{res.get('error')}\n")
         finally:
             self._ver_proc = None
+            self._ver_job = False          # 先清忙碌再发 done，前端刷新时才读得到空闲
             self._emit("ver", "done", ok=bool(res.get("ok")), error=res.get("error", ""),
                        backup=res.get("backup", ""), conflicts=res.get("conflicts", []))
 
-    self._emit("ver", "state", running=True)
-    self._ver_thread = self._spawn(work, name="ver-switch-repo")
+    _ver_start(self, work, "ver-switch-repo")
     return {"ok": True}
 
 

@@ -233,7 +233,8 @@
       const none = !(info && info.has_root) && !list.some((i) => i.root);
       $("#ver-section").hidden = none;
       $("#ver-empty").hidden = !none;
-      if (info && info.busy && !busy) setBusy(true);
+      // 双向同步后端的忙碌状态：只置真不置假的话，检查更新期间刷新一次就会把按钮永久锁灰
+      if (info && !!info.busy !== busy) setBusy(!!info.busy);
       renderTarget();
       renderCurrent();
       renderPicker();
