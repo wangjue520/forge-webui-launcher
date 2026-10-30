@@ -8059,7 +8059,7 @@ def _diag_launcher_job(self, scope, err):
         job = _diag_new_job(self)
     self._emit("diag", "auto", source=scope, error=err[:400], report=report, job=job)
     if job:
-        _diag_run_ai(self, job, target, _diag_saved_note(self, target))
+        _diag_run_ai(self, job, target, _diag_compose_note(self, target))
 
 
 def _diag_target(self, target):
@@ -8273,6 +8273,68 @@ def _diag_download(self, p):
     return {"ok": True, "text": f"已开始下载 {p['name']}，进度看「一键启动」页的运行日志", "page": "launch"}
 
 
+def _diag_comfy_bases(self, iid):
+    """这个 ComfyUI 实例的网址候选：运行中的地址 → 端口 → 配置的端口 → 默认 8188"""
+    r = self._runner(iid)
+    port = str((self.instance_cfg(iid) or {}).get("port") or "").strip()
+    out = [r.url] if r.url else []
+    out += [f"http://127.0.0.1:{p}" for p in (r.port, port, 8188) if str(p or "").isdigit()]
+    return [u.rstrip("/") for u in dict.fromkeys(out)]
+
+
+def _diag_comfy_command(self, iid, cmd, wait=8.0):
+    """让 ComfyUI 网页（桥接插件）改当前工作流，等网页回执。返回 {"ok", "text"/"error", "prev"}"""
+    import uuid
+    import requests
+    cmd = dict(cmd, id=uuid.uuid4().hex[:12])
+    s = requests.Session()
+    s.trust_env = False          # 本机地址，别走代理
+    last = "连不上 ComfyUI：先在「一键启动」页启动它，并在浏览器里打开网页"
+    for base in _diag_comfy_bases(self, iid):
+        try:
+            resp = s.post(base + "/wwy_bridge/command", json=cmd, timeout=5)
+        except requests.RequestException:
+            continue
+        if resp.status_code == 404:
+            last = "ComfyUI 里的桥接插件是旧版，没有这个功能：重启一次 ComfyUI、刷新网页后再试"
+            continue
+        try:
+            data = resp.json()
+        except ValueError:
+            continue
+        if not data.get("clients"):
+            return {"ok": False, "error": "ComfyUI 的网页没打开：在浏览器里打开 ComfyUI、载入要改的工作流后再点一次"}
+        t0, bad, ack = time.time(), None, None
+        while time.time() - t0 < wait:
+            time.sleep(0.4)
+            try:
+                ack = s.get(f"{base}/wwy_bridge/ack/{cmd['id']}", timeout=5).json().get("ack") or ack
+            except (requests.RequestException, ValueError):
+                pass
+            if ack and ack.get("ok"):
+                return {"ok": True, "text": ack.get("text") or "已修改", "prev": ack.get("prev")}
+            if ack and bad is None:
+                bad = time.time()       # 别的标签页先回了失败：再等一会儿看有没有成功的
+            if bad is not None and time.time() - bad > 1.5:
+                return {"ok": False, "error": ack.get("text") or "网页改不了"}
+        return {"ok": False, "error": "网页没有回应：刷新一下 ComfyUI 网页（让新版桥接插件生效）再试"}
+    return {"ok": False, "error": last}
+
+
+def _diag_comfy_undo(self, rec):
+    if rec[0] == "comfy_mode":
+        by_mode = {}
+        for nid, mode in (rec[2] or {}).items():
+            by_mode.setdefault(mode if mode in ("bypass", "mute", "enable") else "enable", []).append(int(nid))
+        for mode, ids in by_mode.items():
+            r = _diag_comfy_command(self, rec[1], {"op": "set_mode", "node_ids": ids, "mode": mode})
+            if not r["ok"]:
+                return r
+        return {"ok": True}
+    r = _diag_comfy_command(self, rec[1], {"op": "set_widget", "node_id": rec[2], "widget": rec[3], "value": rec[4]})
+    return r if not r["ok"] else {"ok": True}
+
+
 def _diag_undo_token(self, rec):
     with self._diag_lock:
         self._diag_seq += 1
@@ -8387,6 +8449,19 @@ def _diag_exec(self, aid, p):
         return {"ok": True, "text": f"已停用「{p['rel']}」，可在「常用插件」页重新启用"}
     if aid == "download_model":
         return _diag_download(self, p)
+    if aid == "comfy_set_mode":
+        r = _diag_comfy_command(self, p["iid"], {"op": "set_mode", "node_ids": p["node_ids"], "mode": p["mode"]})
+        if not r["ok"]:
+            return r
+        return {"ok": True, "text": r["text"],
+                "undo": _diag_undo_token(self, ("comfy_mode", p["iid"], r.get("prev") or {}))}
+    if aid == "comfy_set_widget":
+        r = _diag_comfy_command(self, p["iid"], {"op": "set_widget", "node_id": p["node_id"], "widget": p["widget"],
+                                                 "value": p["value"]})
+        if not r["ok"]:
+            return r
+        return {"ok": True, "text": r["text"], "undo": _diag_undo_token(
+            self, ("comfy_widget", p["iid"], p["node_id"], p["widget"], r.get("prev")))}
     if aid == "trash_file":
         if not ml.send_to_trash(p["path"]):
             return {"ok": False, "error": "移到回收站失败（文件可能正被 WebUI / ComfyUI 占用，先停止实例）"}
@@ -8444,7 +8519,7 @@ def _diag_new_job(self):
     return job
 
 
-def _diag_run_ai(self, job, target, note=""):
+def _diag_run_ai(self, job, target, note="", followup=None, fix=False):
     cancel = self._diag_jobs.get(job)
 
     def work():
@@ -8453,8 +8528,8 @@ def _diag_run_ai(self, job, target, note=""):
             findings = dg.scan(text, ctx)
             res = dl.run(self, ctx, text, findings,
                          on_step=lambda t: self._emit("diag", "ai_step", job=job, text=t),
-                         cancelled=cancel.is_set, note=note)
-            self._emit("diag", "ai_done", job=job, result=res)
+                         cancelled=cancel.is_set, note=note, followup=followup, fix=fix)
+            self._emit("diag", "ai_done", job=job, result=res, fix=bool(fix))
         except dl.LlmError as e:
             self._emit("diag", "ai_error", job=job, error=str(e))
         except Exception as e:
@@ -8474,18 +8549,28 @@ def _api_diag_run(self, target=None):
         return {"ok": False, "error": f"诊断出错：{e}"}
 
 
-def _api_diag_ai(self, target=None, note=""):
-    """note：用户在诊断面板里自己写的问题描述"""
+def _api_diag_ai(self, target=None, note="", followup=None, fix=False):
+    """note：用户这次在输入框里说的话（记住的说明会自动加上）；followup：上一次的 AI 结论（追问时带上）；
+    fix：用户点了「执行修复」，AI 要给出能直接执行的动作"""
     if not dl.resolve(self.cfg):
         return {"ok": False, "need_setup": True, "error": "还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key"}
     job = _diag_new_job(self)
-    _diag_run_ai(self, job, target, str(note or "")[:2000])
+    prev = followup if isinstance(followup, dict) else None
+    _diag_run_ai(self, job, target, _diag_compose_note(self, target, note), prev, bool(fix))
     return {"ok": True, "job": job}
 
 
 def _diag_note_key(target):
     t = target or {}
     return "launcher" if t.get("type") == "launcher" else f"inst:{t.get('iid') or ''}"
+
+
+def _diag_compose_note(self, target, message=""):
+    """发给 AI 的说明 = 记住的长期说明 + 这次说的话"""
+    memo, msg = _diag_saved_note(self, target).strip(), str(message or "").strip()[:2000]
+    if memo and msg and msg != memo:
+        return f"（一直有效的说明）{memo}\n（这次说的）{msg}"
+    return msg or memo
 
 
 def _diag_saved_note(self, target):
@@ -8518,6 +8603,7 @@ _TK_READY_TIMEOUT = 900      # 等实例起来（首次启动可能在装依赖�
 _TK_SETTLE = 20              # 起来后再看一会儿，启动后才冒出来的报错（节点加载、桥接插件）也收进来
 _TK_WAIT_JOBS = 3 * 3600     # 等装依赖 / 下载模型
 _TK_SKIP = {"restart_instance"}      # 每轮自己会重启
+_TK_LIVE = {"comfy_set_mode", "comfy_set_widget"}    # 改网页里的工作流：实例开着做，不用重启
 
 
 def _tk_sleep(cancel, seconds):
@@ -8613,22 +8699,39 @@ def _diag_takeover_run(self, job, iid, note):
             if not acts:
                 return done(False, "需要你自己处理：" + (res.get("summary") or ""), steps=res.get("steps") or [],
                             history=history)
-            if r.running():
+            # 改工作流的动作要 ComfyUI 开着、网页开着，先做；其余的（装东西、改设置）要停实例、做完重启
+            live = [a for a in acts if a["aid"] in _TK_LIVE]
+            offline = [a for a in acts if a["aid"] not in _TK_LIVE]
+            did, ok_live = [], []
+
+            def apply(batch):
+                for a in batch:
+                    if cancel.is_set():
+                        return
+                    try:
+                        out = _diag_exec(self, a["aid"], a["params"])
+                    except Exception as e:
+                        out = {"ok": False, "error": str(e)}
+                    text_ = out.get("text") if out.get("ok") else "失败：" + str(out.get("error"))
+                    step(f"{a['label']} → {text_}", "act", undo=out.get("undo") or "")
+                    did.append(f"{a['label']}（{text_}）")
+                    if out.get("ok") and a["aid"] in _TK_LIVE:
+                        ok_live.append(a)
+                    if out.get("ok") and not _tk_wait_jobs(self, cancel):
+                        return
+
+            apply(live)
+            if live and not offline and not cancel.is_set() and not ok_live:
+                return done(False, "改不了网页里的工作流（原因见上面），需要你自己改：" + (res.get("summary") or ""),
+                            steps=res.get("steps") or [], history=history)
+            if live and not offline and not cancel.is_set():
+                # 工作流的问题要点「运行」才会再出现，接管没法替用户跑（可能是很长的视频任务），到这里交还给用户
+                return done(True, "已在 ComfyUI 网页里改好工作流，点「运行」试试；没问题记得按 Ctrl+S 保存",
+                            history=history + [f"第 {rnd} 轮：{'；'.join(did)}"])
+            if offline and r.running():
                 step("先停止实例（装东西时文件不能被占用）…")
                 r.stop()
-            did = []
-            for a in acts:
-                if cancel.is_set():
-                    break
-                try:
-                    out = _diag_exec(self, a["aid"], a["params"])
-                except Exception as e:
-                    out = {"ok": False, "error": str(e)}
-                text_ = out.get("text") if out.get("ok") else "失败：" + str(out.get("error"))
-                step(f"{a['label']} → {text_}", "act", undo=out.get("undo") or "")
-                did.append(f"{a['label']}（{text_}）")
-                if out.get("ok") and not _tk_wait_jobs(self, cancel):
-                    break
+            apply(offline)
             if cancel.is_set():
                 return done(False, "已停止接管", history=history)
             ok, state = _tk_restart(self, iid, cancel, step)
@@ -8665,7 +8768,7 @@ def _api_diag_takeover(self, target=None, note=None):
     job = _diag_new_job(self)
     with self._diag_lock:
         self._diag_tk[iid] = job
-    note = _diag_saved_note(self, t) if note is None else str(note)[:2000]
+    note = _diag_compose_note(self, t, note)
     self._spawn(lambda: _diag_takeover_run(self, job, iid, note), name="diag-takeover")
     return {"ok": True, "job": job, "rounds": _TK_ROUNDS}
 
@@ -8697,6 +8800,11 @@ def _api_diag_undo(self, token):
     if rec[0] == "inst":
         r = _api_instance_config_update(self, rec[1], rec[2])
         self._emit("diag", "cfg_changed", iid=rec[1])
+    elif rec[0] in ("comfy_mode", "comfy_widget"):
+        r = _diag_comfy_undo(self, rec)
+        if not r.get("ok"):
+            with self._diag_lock:
+                self._diag_undo[token] = rec     # 网页暂时没开着：留着下次再撤销
     else:
         r = _diag_set_launcher(self, rec[1])
     if not r.get("ok"):

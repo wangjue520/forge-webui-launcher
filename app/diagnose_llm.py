@@ -641,11 +641,29 @@ def takeover_text(tk):
         f"实例当前状态：{tk.get('state') or '未知'}\n之前几轮：\n{hist}")
 
 
+def followup_text(prev, fix=False):
+    """追问 / 执行修复：把上一次的结论带上，AI 接着往下说"""
+    out = ""
+    if prev:
+        steps = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(prev.get("steps") or []))
+        acts = "；".join(f"{a.get('aid')} {json.dumps(a.get('params') or {}, ensure_ascii=False)}"
+                        for a in prev.get("actions") or [])
+        out += (f"\n\n===== 你上一次的诊断 =====\n结论：{prev.get('summary') or ''}\n原因：{prev.get('cause') or ''}\n"
+                f"步骤：\n{steps or '  （无）'}\n推荐的动作：{acts or '（无）'}")
+    if fix:
+        out += ("\n\n===== 用户点了「执行修复」=====\n照你的诊断直接动手：能用白名单动作做的都放进 finish.actions，"
+                "用户确认一次就会全部执行。ComfyUI 工作流里的节点问题（两个节点不能一起用、参数不对、选了不存在的模型……）"
+                "用 comfy_set_mode / comfy_set_widget 直接改网页里的工作流：节点 id 和参数名先用 read_file 读"
+                " current_workflow.json 确认，别猜。白名单做不到的才写进 steps。")
+    return out
+
+
 def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambda: False, post=None, note="",
-        takeover=None):
+        takeover=None, followup=None, fix=False):
     """跑一次 agent。返回 {"summary","cause","steps","actions","confidence","verdict","rounds"}；出错抛 LlmError。
     note：用户自己写的问题描述 / 说明（可能日志里根本没报错，比如出图不对；也可能是「缺模型不用管」）
-    takeover：AI 接管模式的 {"round","max","history","state"}，见 takeover_text"""
+    takeover：AI 接管模式的 {"round","max","history","state"}，见 takeover_text
+    followup：上一次的诊断结果（用户追问时带上）；fix：用户点了「执行修复」，要 AI 给出能直接执行的动作"""
     conf = resolve(api.cfg)
     if not conf:
         raise LlmError("还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key")
@@ -662,7 +680,8 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
     chat.user(f"{ask}要诊断的对象：{what}\n\n环境信息：\n{environment(api, ctx)}\n\n"
               f"本地规则的识别结果：\n{rule_txt}\n" + (f"{dg.redact(rule_acts)}\n" if rule_acts else "") +
               f"\n日志片段（已脱敏）：\n```\n{dg.redact(dg.snippet(log_text, findings))}\n```" +
-              (dg.redact(takeover_text(takeover)) if takeover else ""))
+              (dg.redact(takeover_text(takeover)) if takeover else "") +
+              (dg.redact(followup_text(followup, fix)) if followup or fix else ""))
     on_step(f"正在请求 {model} ...")
     final_text = ""
     for rnd in range(1, MAX_STEPS + 2):

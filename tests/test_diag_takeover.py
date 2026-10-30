@@ -26,7 +26,7 @@ class FakeRunner:
 
     def __init__(self, api, iid, runs):
         self.api, self.iid, self.runs = api, iid, list(runs)
-        self.state, self._running, self.url, self.status_text = "idle", False, None, ""
+        self.state, self._running, self.url, self.status_text, self.port = "idle", False, None, "", None
         self.starts = self.stops = 0
 
     def running(self):

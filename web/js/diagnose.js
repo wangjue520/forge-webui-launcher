@@ -71,8 +71,7 @@
       return;
     }
     $("#dg-sub").textContent = `${report.name} · 看了 ${report.lines} 行日志`;
-    const note = $("#dg-note");
-    if (note && document.activeElement !== note) note.value = report.note || "";
+    renderMemo(report.note || "");
     if (report.takeover && !(tk && tk.job === report.takeover)) {
       tk = { job: report.takeover, iid: target.iid, steps: [{ text: "AI 接管进行中…", kind: "round" }], done: null };
     }
@@ -153,9 +152,9 @@
       if (inp) { inp.value = p.url; const go = $("#cv-fetch"); if (go) go.click(); }
     }
     if (a.aid === "ai_ask") {
-      const note = $("#dg-note");
-      if (note) note.value = p.note || "";
-      if (!job) startAi();
+      const inp = $("#dg-input");
+      if (inp) inp.value = p.note || "";
+      send();
     }
   }
 
@@ -216,8 +215,12 @@
       row.innerHTML = `<button class="btn btn-xs btn-accent" id="dg-ai-go">${aiResult ? "让 AI 重新分析" :
         (has ? "让 AI 再深入看看" : "让 AI 分析")}</button>
         ${canTk ? `<button class="btn btn-xs btn-accent" id="dg-tk-go" title="AI 自己修、重启、再看日志，直到没报错">AI 接管修复</button>` : ""}
-        <span class="hint">会把脱敏后的日志片段和环境信息发给所选模型。「分析」只读不改；「接管」会直接动手修</span>`;
-      $("#dg-ai-go", row).addEventListener("click", startAi);
+        <span class="hint">会把脱敏后的日志片段和环境信息发给所选模型。「分析」只读不改；「接管」会直接动手修；
+        想补充情况、追问，用最下面的输入框</span>`;
+      $("#dg-ai-go", row).addEventListener("click", async () => {
+        const t = await takeInput();
+        startAi({ note: t, said: t });
+      });
       const go = $("#dg-tk-go", row);
       if (go) go.addEventListener("click", startTakeover);
     }
@@ -273,11 +276,11 @@
       `AI 会自己决定并直接执行修复：装依赖、装节点、装 pip 包、下载缺的模型、改启动参数和显存 / 精度设置、停用出错的插件。` +
       `每轮修完会重启「${name}」，看新日志里还有没有报错，有就接着修，最多 5 轮。\n\n` +
       `不会删除任何文件；改过的设置可以在步骤里撤销；随时可以点「停止接管」。\n` +
-      `上面「给 AI 的说明」会一起发给 AI（比如「模型我自己有，缺模型不用管」）。`, "开始接管");
+      `最下面输入框里写的话、记住的说明会一起发给 AI（比如「模型我自己有，缺模型不用管」）。`, "开始接管");
     if (!ok) return;
-    await saveNote();
+    const msg = await takeInput();
     let r;
-    try { r = await App.api.diag_takeover(target, ($("#dg-note") || {}).value || ""); }
+    try { r = await App.api.diag_takeover(target, msg); }
     catch (e) { r = { ok: false, error: e.message }; }
     if (!r || !r.ok) {
       if (r && r.job) { tk = { job: r.job, iid: target.iid, steps: [{ text: "AI 接管进行中…", kind: "round" }], done: null }; renderAi(); }
@@ -288,14 +291,80 @@
     renderAi();
   }
 
-  /* ---------- 给 AI 的说明（按诊断对象记住） ---------- */
-  let noteTimer = null;
-  function saveNote() {
-    clearTimeout(noteTimer);
-    noteTimer = null;
-    const el = $("#dg-note");
-    if (!el || !target) return Promise.resolve();
-    return App.api.diag_note_set(target, el.value).catch(() => {});
+  /* ---------- 底部输入框：随时跟 AI 说话；勾「记住」的存成长期说明（按诊断对象） ---------- */
+  let memo = "";
+  function renderMemo(text) {
+    memo = text || "";
+    const box = $("#dg-memo");
+    if (!box) return;
+    box.hidden = !memo;
+    $("#dg-memo-text").textContent = memo;
+  }
+
+  async function saveMemo(text) {
+    let r;
+    try { r = await App.api.diag_note_set(target, text); } catch (e) { r = { ok: false, error: e.message }; }
+    if (r && r.ok) renderMemo(text);
+    else App.toast((r && r.error) || "保存失败", "error");
+  }
+
+  /** 取走输入框里的话（勾了「记住」就顺手存成长期说明） */
+  async function takeInput() {
+    const inp = $("#dg-input");
+    const text = ((inp && inp.value) || "").trim();
+    const rem = $("#dg-remember");
+    if (text && rem && rem.checked) {
+      await saveMemo(memo ? memo + "\n" + text : text);
+      rem.checked = false;
+    }
+    if (inp) inp.value = "";
+    return text;
+  }
+
+  function pickResult(res) {
+    return res ? { summary: res.summary, cause: res.cause, steps: res.steps || [],
+      actions: (res.actions || []).map((a) => ({ aid: a.aid, params: a.params })) } : null;
+  }
+
+  async function send() {
+    if (job) { App.toast("AI 还在分析，等它说完或点「停止」", "error", 4000); return; }
+    const text = await takeInput();
+    if (!text && aiResult) { App.toast("先在输入框里写点什么", "error", 3000); return; }
+    startAi({ note: text, said: text, followup: aiResult ? pickResult(aiResult) : null });
+  }
+
+  /* ---------- 执行修复：AI 给了动作就确认一次全做；没给就让 AI 把方案变成能执行的动作 ---------- */
+  const runnable = (res) => (res.actions || []).filter((a) => a.risk !== "ui" && a.risk !== "danger");
+
+  async function execFix(res, fromAi) {
+    const acts = runnable(res);
+    if (!acts.length) {
+      if (fromAi) {
+        App.toast("这个启动器没法替你做，照 AI 给的步骤手动处理", "error", 6000);
+        return;
+      }
+      const t = await takeInput();
+      startAi({ fix: true, followup: pickResult(res), note: t, said: "执行修复" + (t ? "：" + t : "") });
+      return;
+    }
+    const ok = await App.confirm("执行修复", "将依次执行：\n" + acts.map((a, i) => `${i + 1}. ${a.label}`).join("\n") +
+      "\n\n改过的设置、工作流都可以撤销；装依赖 / 节点要先停止实例。", "执行");
+    if (!ok) return;
+    res.execLog = [];
+    res.executing = true;
+    renderAi();
+    for (const a of acts) {
+      let r;
+      try { r = await App.api.diag_fix(a.aid, a.params || {}); } catch (e) { r = { ok: false, error: e.message }; }
+      if (r && r.ui) { uiAction({ ...a, params: r.params }); r = { ok: true, text: "已打开" }; }
+      res.execLog.push({ label: a.label, ok: !!(r && r.ok), text: (r && (r.ok ? r.text : r.error)) || "",
+        undo: (r && r.undo) || "" });
+      renderAi();
+    }
+    res.executing = false;
+    renderAi();
+    const bad = res.execLog.filter((x) => !x.ok).length;
+    App.toast(bad ? `执行完了，有 ${bad} 项没成功（原因见诊断面板）` : "修复已执行", bad ? "error" : "ok", 6000);
   }
 
   function aiCard(res) {
@@ -308,16 +377,41 @@
       <div class="dg-actions"></div>
       ${(res.dropped || []).length ? `<div class="hint">AI 还推荐了几个启动器做不了 / 不安全的操作，已忽略：${esc(res.dropped.join("；"))}</div>` : ""}`;
     const acts = $(".dg-actions", el);
+    if (res.execLog) {
+      const ol = document.createElement("ol");
+      ol.className = "dg-tk-steps";
+      res.execLog.forEach((x) => {
+        const li = document.createElement("li");
+        li.className = x.ok ? "dg-tk-act" : "dg-tk-warn";
+        li.innerHTML = `<span class="dg-tk-ico">${x.ok ? "✓" : "!"}</span><span>${esc(x.label)} → ${esc(x.text)}</span>`;
+        if (x.undo) {
+          const w = document.createElement("span");
+          w.className = "dg-act";
+          w.appendChild(undoBtn(x.undo, w));
+          li.appendChild(w);
+        }
+        ol.appendChild(li);
+      });
+      if (res.executing) ol.insertAdjacentHTML("beforeend", `<li class="dg-running">执行中…</li>`);
+      acts.replaceWith(ol);
+      return el;
+    }
     (res.actions || []).forEach((a) => acts.appendChild(actionEl(a)));
-    if (!(res.actions || []).length) acts.remove();
+    const fix = document.createElement("button");
+    fix.className = "btn btn-xs btn-accent dg-fix-btn";
+    fix.textContent = "执行修复";
+    fix.title = runnable(res).length ? "把上面的修复一次全做了（会先确认）" : "让 AI 把方案变成能直接执行的操作，确认后执行";
+    fix.addEventListener("click", () => execFix(res, false));
+    acts.prepend(fix);
     return el;
   }
 
-  async function startAi() {
-    aiSteps = []; aiResult = null; aiError = "";
+  async function startAi(opts) {
+    opts = opts || {};
+    aiSteps = opts.said ? ["你：" + opts.said] : []; aiResult = null; aiError = "";
     let r;
-    const note = (($("#dg-note") || {}).value || "").trim();
-    try { r = await App.api.diag_ai(target, note); } catch (e) { r = { ok: false, error: e.message }; }
+    try { r = await App.api.diag_ai(target, opts.note || "", opts.followup || null, !!opts.fix); }
+    catch (e) { r = { ok: false, error: e.message }; }
     if (!r || !r.ok) { aiError = (r && r.error) || "启动 AI 诊断失败"; renderAi(); return; }
     job = r.job;
     renderAi();
@@ -412,12 +506,12 @@
       $("#dg-close").addEventListener("click", close);
       $("#dg-rerun").addEventListener("click", run);
       $("#dg-copy").addEventListener("click", () => App.copy(reportText(), "诊断报告已复制"));
-      $("#dg-note").addEventListener("input", () => {
-        clearTimeout(noteTimer);
-        noteTimer = setTimeout(saveNote, 700);
+      $("#dg-send").addEventListener("click", send);
+      $("#dg-input").addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
       });
+      $("#dg-memo-clear").addEventListener("click", () => saveMemo(""));
       $("#dg-target").addEventListener("change", (e) => {
-        if (noteTimer) saveNote();
         const t = (e.target._targets || [])[+e.target.value];
         if (t) { target = t; if (!job) { aiSteps = []; aiResult = null; aiError = ""; } run(); }
       });
@@ -457,6 +551,7 @@
         if (e.job !== job) return;
         job = ""; aiResult = e.result;
         renderAi();
+        if (e.fix && !drawer().hidden) execFix(aiResult, true);
       });
       App.on("diag", "ai_error", (e) => {
         if (e.job !== job) return;

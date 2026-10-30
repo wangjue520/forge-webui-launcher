@@ -458,10 +458,18 @@
             actions: [{ aid: "comfy_install_deps", label: "重装「ComfyUI-Foo」的依赖", risk: "confirm", params: {} },
               { aid: "pip_install", label: "安装缺的包 opencv-python", risk: "confirm", params: {} },
               { aid: "ext_disable", label: "先停用「ComfyUI-Foo」", risk: "confirm", params: {} }] }] }),
-      diag_ai: (t, note) => {
+      diag_ai: (t, note, followup, fix) => {
         const job = "ai1";
         const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, ...data }), ms);
         send("ai_step", { text: "正在请求 deepseek-v4-flash ..." }, 300);
+        if (fix) {
+          send("ai_step", { text: "读取文件 D:\\ComfyUI\\user\\wwy_bridge\\current_workflow.json" }, 800);
+          send("ai_done", { fix: true, result: { summary: "绕过「MiniMax H3 Block Cache (T8)」，只留 Spectrum 加速", confidence: "high",
+            cause: "两个加速节点不能同时用；工作流里 Block Cache 是 #23。", steps: ["点「运行」试试，没问题按 Ctrl+S 保存"],
+            actions: [{ aid: "comfy_set_mode", label: "绕过节点 #23「MiniMax H3 Block Cache (T8)」", risk: "low", params: {} }],
+            dropped: [], verdict: "continue" } }, 1500);
+          return ok({ ok: true, job });
+        }
         if (note && /模型/.test(note)) {
           send("ai_step", { text: "搜索模型 kieed-step00006000.safetensors" }, 900);
           send("ai_done", { result: { summary: "kieed 这个 LoRA 在 Civitai 上找到了同名文件", confidence: "medium",
@@ -496,7 +504,9 @@
       },
       diag_note_set: () => ok({ ok: true }),
       diag_ai_cancel: () => ok({ ok: true }),
-      diag_fix: (aid, p) => ok(aid === "open_page" || aid === "open_url" || aid === "ai_ask" ? { ok: true, ui: true, params: p || {} }
+      diag_fix: (aid, p) => ok(aid === "comfy_set_mode" ? { ok: true, undo: "u7",
+          text: "已绕过节点 #23「MiniMax H3 Block Cache (T8)」（网页里还没保存，确认没问题按 Ctrl+S）" }
+        : aid === "open_page" || aid === "open_url" || aid === "ai_ask" ? { ok: true, ui: true, params: p || {} }
         : { ok: true, text: "（预览模式）已执行：" + aid }),
       diag_undo: () => ok({ ok: true, text: "已撤销" }),
       diag_llm_test: () => ok({ ok: true, text: "（预览模式）deepseek-v4-flash 已连通（0.8 秒），回复：正常" }),

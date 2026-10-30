@@ -1019,10 +1019,14 @@
     <div class="dg-section">本地规则</div>
     <div id="dg-findings"></div>
     <div class="dg-section">AI 分析 <span class="dg-model" id="dg-ai-model"></span></div>
-    <textarea id="dg-note" class="dg-note" rows="3" maxlength="2000"
-      placeholder="给 AI 的说明（可选，按诊断对象记住，诊断和接管都会带上）：例如「出图全黑」「模型我自己有，缺模型不用管」「别动我装的插件」"></textarea>
     <div id="dg-ai"></div>
     <div id="dg-tk"></div>
+  </div>
+  <div class="dg-compose">
+    <div class="dg-memo" id="dg-memo" hidden><span class="dg-memo-label">记住的说明</span><span id="dg-memo-text"></span><button class="btn btn-xs" id="dg-memo-clear">清除</button></div>
+    <textarea id="dg-input" rows="2" maxlength="2000"
+      placeholder="跟 AI 说：描述问题、追问刚才的结论、让它换个办法，或者「模型我自己有，缺模型不用管」（Ctrl+Enter 发送）"></textarea>
+    <div class="dg-compose-row"><label class="dg-remember"><input type="checkbox" id="dg-remember"> 记住这句，以后诊断和接管都带上</label><button class="btn btn-xs btn-accent" id="dg-send">发给 AI</button></div>
   </div>
   <div class="dg-foot"><button class="btn btn-xs" id="dg-copy">复制诊断报告</button><span class="hint">Ctrl+Shift+D 诊断启动器 · Esc 关闭</span></div>
 </aside>

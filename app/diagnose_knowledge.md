@@ -65,6 +65,10 @@ Windows 桌面程序（pywebview），代码在启动器目录的 `app/`（Pytho
   看仓库里的文件），然后在 finish.actions 里推荐 download_model，dir 用发现里给的目录，name 和工作流里的文件名一致。
   只搜到近似结果时说清楚「可能不是同一个」，别硬推荐。官方模型（Comfy-Org 的 split_files 仓库等）优先 HuggingFace
 - 下载好模型后要在 ComfyUI 网页里按 R（刷新节点定义）下拉框才会出现新文件
+- 工作流本身的问题（两个节点不能同时用、某个参数填错、选了不存在的模型想换成本机有的）可以直接改网页里打开的工作流：
+  comfy_set_mode（bypass 绕过 / mute 静音 / enable 恢复）、comfy_set_widget（改参数）。要 ComfyUI 开着、网页开着；
+  节点 id 和参数名以 current_workflow.json 为准（widgets_values 的顺序对应节点的参数，名字不确定就别乱填）；
+  改完网页里标成未保存，提醒用户确认后 Ctrl+S
 
 ## torch / 显卡
 - 新版 Forge Neo / ComfyUI 默认装 CUDA 13 的 torch，要 580 以上的驱动；启动器启动前会读驱动版本并换装兼容的 torch

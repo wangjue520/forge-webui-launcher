@@ -307,6 +307,15 @@ ACTIONS = {
                                  "modelscope.cn/…、github.com/…/releases/download/…）, dir: 模型要放的文件夹（缺模型发现里给出的目录）, "
                                  "name: 文件名（和工作流里写的一致）",
                        "desc": "在后台下载缺的模型到 ComfyUI 的模型目录（可续传，HuggingFace 按网络情况走 hf-mirror）"},
+    "comfy_set_mode": {"risk": "low",
+                       "params": "iid, node_ids: [节点 id，见 current_workflow.json 里 nodes[].id], mode: bypass（绕过，输入直通到输出）"
+                                 " / mute（静音，不执行）/ enable（恢复）",
+                       "desc": "改 ComfyUI 网页里当前打开的工作流：绕过 / 静音 / 恢复节点（ComfyUI 要开着、网页要打开着；"
+                               "改完网页里标成未保存，用户自己 Ctrl+S），可撤销"},
+    "comfy_set_widget": {"risk": "low",
+                         "params": "iid, node_id, widget: 参数名（current_workflow.json 里节点的 widgets_values 对应的名字，"
+                                   "不确定就先读文件确认）, value: 新值（数字 / 文字 / true false；下拉框必须是可选项之一）",
+                         "desc": "改 ComfyUI 网页里当前工作流某个节点的参数（同上，要网页开着，可撤销）"},
     "ai_ask": {"risk": "ui", "params": "note: 交给 AI 的问题说明", "desc": "让 AI 接着查（规则查不到下载地址时用）"},
     "trash_file": {"risk": "danger", "params": "path: 模型文件", "desc": "把损坏的模型文件移到回收站"},
 }
@@ -332,7 +341,7 @@ def validate_action(api, aid, params, allowed_roots=()):
     p = dict(params or {})
     if "iid" in p or aid in ("set_instance_cfg", "add_launch_arg", "remove_launch_arg", "restart_instance",
                              "comfy_install_deps", "comfy_install_node", "pip_install", "ext_disable",
-                             "download_model"):
+                             "download_model", "comfy_set_mode", "comfy_set_widget"):
         iid = p.get("iid") or api.cfg.get("active_instance")
         if not cm.find_instance(api.cfg, iid):
             return None, "实例不存在"
@@ -413,6 +422,29 @@ def validate_action(api, aid, params, allowed_roots=()):
         p.update(url=url, name=name, dir=d)
     elif aid == "ai_ask":
         p["note"] = str(p.get("note") or "")[:2000]
+    elif aid in ("comfy_set_mode", "comfy_set_widget"):
+        if not cm.is_comfy(cm.instance_cfg(api.cfg, p["iid"]) or {}):
+            return None, "只有 ComfyUI 实例能改工作流"
+        if aid == "comfy_set_mode":
+            ids = p.get("node_ids")
+            ids = ids if isinstance(ids, list) else [ids]
+            try:
+                ids = [int(x) for x in ids][:20]
+            except (TypeError, ValueError):
+                return None, "节点 id 要是数字"
+            if not ids or p.get("mode") not in ("bypass", "mute", "enable"):
+                return None, "缺少节点 id，或 mode 不是 bypass / mute / enable"
+            p["node_ids"] = ids
+        else:
+            try:
+                p["node_id"] = int(p.get("node_id"))
+            except (TypeError, ValueError):
+                return None, "节点 id 要是数字"
+            w, v = p.get("widget"), p.get("value")
+            if not isinstance(w, str) or not w.strip() or len(w) > 80:
+                return None, "缺少参数名"
+            if not isinstance(v, (str, int, float, bool)) or (isinstance(v, str) and len(v) > 1000):
+                return None, "参数值只能是数字、文字或 true / false"
     return p, None
 
 

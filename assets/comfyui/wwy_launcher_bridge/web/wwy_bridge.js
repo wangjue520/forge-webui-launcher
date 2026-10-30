@@ -81,6 +81,64 @@ function report(missingTypes) {
     }, 800);
 }
 
+// ---- 启动器诊断「执行修复」发来的指令：改当前工作流（改完标成未保存，用户自己 Ctrl+S）----
+const MODES = { enable: 0, mute: 2, bypass: 4 };
+const MODE_TEXT = { enable: "恢复", mute: "静音", bypass: "绕过" };
+const modeName = (m) => (m === 4 ? "bypass" : m === 2 ? "mute" : "enable");
+
+function findNode(graph, id) {
+    const n = graph?.getNodeById?.(Number(id)) ?? graph?.getNodeById?.(id);
+    return n || graphNodes(graph).find((x) => String(x?.id) === String(id)) || null;
+}
+
+function markChanged(graph) {
+    try { graph?.setDirtyCanvas?.(true, true); } catch (e) { /* 只是重画 */ }
+    try { app.canvas?.setDirty?.(true, true); } catch (e) { /* 同上 */ }
+    try { app.extensionManager?.workflow?.activeWorkflow?.changeTracker?.checkState?.(); } catch (e) { /* 老版本没有 */ }
+}
+
+function applyCommand(cmd) {
+    const graph = app.rootGraph || app.graph;
+    const label = (n) => `#${n.id}「${n.title || n.type}」`;
+    if (cmd.op === "set_mode") {
+        if (!(cmd.mode in MODES)) throw new Error(`不认识的模式 ${cmd.mode}`);
+        const nodes = (cmd.node_ids || []).map((id) => {
+            const n = findNode(graph, id);
+            if (!n) throw new Error(`当前工作流里没有节点 #${id}（网页里打开的可能不是同一个工作流）`);
+            return n;
+        });
+        const prev = {};
+        for (const n of nodes) { prev[n.id] = modeName(n.mode); n.mode = MODES[cmd.mode]; }
+        markChanged(graph);
+        return { ok: true, prev, text: `已${MODE_TEXT[cmd.mode]}节点 ${nodes.map(label).join("、")}（网页里还没保存，确认没问题按 Ctrl+S）` };
+    }
+    if (cmd.op === "set_widget") {
+        const n = findNode(graph, cmd.node_id);
+        if (!n) throw new Error(`当前工作流里没有节点 #${cmd.node_id}（网页里打开的可能不是同一个工作流）`);
+        const w = (n.widgets || []).find((x) => x?.name === cmd.widget);
+        if (!w) throw new Error(`节点 ${label(n)} 没有参数「${cmd.widget}」（有：${(n.widgets || []).map((x) => x.name).join("、")}）`);
+        let values = w.options?.values;
+        if (typeof values === "function") { try { values = values(w, n); } catch (e) { values = null; } }
+        if (w.type === "combo" && Array.isArray(values) && !values.includes(cmd.value)) {
+            throw new Error(`「${cmd.value}」不在节点 ${label(n)} 的「${cmd.widget}」可选项里`);
+        }
+        const prev = w.value;
+        w.value = cmd.value;
+        try { w.callback?.(w.value, app.canvas, n); } catch (e) { /* 有的控件回调要更多参数，值已经改上了 */ }
+        markChanged(graph);
+        return { ok: true, prev, text: `节点 ${label(n)} 的「${cmd.widget}」：${prev} → ${cmd.value}（网页里还没保存，确认没问题按 Ctrl+S）` };
+    }
+    throw new Error(`不认识的指令 ${cmd.op}`);
+}
+
+api.addEventListener("wwy_bridge_command", (e) => {
+    const cmd = e.detail || {};
+    let res;
+    try { res = applyCommand(cmd); } catch (err) { res = { ok: false, text: String(err?.message || err) }; }
+    api.fetchApi("/wwy_bridge/ack", { method: "POST", body: JSON.stringify({ id: cmd.id, ...res }) }).catch(() => {});
+    if (res.ok) report([]);
+});
+
 app.registerExtension({
     name: "wwy.launcher.bridge",
     async afterConfigureGraph(missingNodeTypes) {

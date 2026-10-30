@@ -94,6 +94,9 @@ class _Base(unittest.TestCase):
         self.api = fake_api(self.cfg)
 
     def tearDown(self):
+        # 日志里写了报错会排一个 2 秒后的流式扫描，用例结束前取消，免得它在配置路径还原后去存配置
+        for t in list(getattr(self.api, "_diag_timers", {}).values()):
+            t.cancel()
         self.p1.stop(); self.p2.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 

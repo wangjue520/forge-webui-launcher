@@ -5,7 +5,8 @@ WWY 启动器桥接插件（由启动器自动放进 custom_nodes，启动器更
 启动器的报错诊断就看不到。这个插件的网页部分（web/wwy_bridge.js）在每次加载工作流时
 自己检查一遍，结果发到这里，打成一行 [WWY诊断] 日志，启动器读日志接住。
 
-· 不加任何节点；只有一个 POST /wwy_bridge/report 接口
+· 不加任何节点；接口：/wwy_bridge/report（网页报检查结果）、/wwy_bridge/command + ack（启动器的诊断
+  让网页改当前工作流：绕过 / 静音 / 恢复节点、改节点参数，用户点了「执行修复」才会发）
 · 当前工作流另存一份到 user/wwy_bridge/current_workflow.json，给启动器的 AI 诊断读
 · 不想要：在 ComfyUI-Manager 里停用，或把文件夹改名成 wwy_launcher_bridge.disabled（启动器不会再放回来）
 """
@@ -17,7 +18,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 WEB_DIRECTORY = "./web"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
-VERSION = 1
+VERSION = 2
 
 # 下拉框里的模型找不到对应目录时，按输入名猜
 _INPUT_FOLDERS = {
@@ -130,6 +131,23 @@ def handle_report(data):
     return line
 
 
+# 启动器下给网页的修改指令（绕过 / 静音 / 恢复节点、改节点参数）的回执：指令号 -> 网页回的结果
+_acks = {}
+
+
+def store_ack(data):
+    """多个网页标签页都会回执：先到的成功结果为准"""
+    cid = str(data.get("id") or "")
+    if not cid:
+        return
+    old = _acks.get(cid)
+    if old and old.get("ok"):
+        return
+    _acks[cid] = {k: data.get(k) for k in ("ok", "text", "prev")}
+    while len(_acks) > 200:
+        _acks.pop(next(iter(_acks)))
+
+
 try:
     from aiohttp import web
     from server import PromptServer
@@ -142,6 +160,28 @@ try:
         except Exception as e:
             print(f"[WWY诊断] 桥接插件处理检查结果出错：{e}", flush=True)
         return web.json_response({"ok": True, "version": VERSION})
+
+    @PromptServer.instance.routes.post("/wwy_bridge/command")
+    async def _command(request):
+        """启动器 → 网页：改当前工作流。网页改完从 /wwy_bridge/ack 回执"""
+        data = await request.json()
+        if not isinstance(data, dict) or not data.get("id"):
+            return web.json_response({"ok": False, "error": "指令格式不对"}, status=400)
+        clients = len(getattr(PromptServer.instance, "sockets", {}) or {})
+        if clients:
+            await PromptServer.instance.send("wwy_bridge_command", data)
+        return web.json_response({"ok": True, "clients": clients, "version": VERSION})
+
+    @PromptServer.instance.routes.post("/wwy_bridge/ack")
+    async def _ack(request):
+        data = await request.json()
+        if isinstance(data, dict):
+            store_ack(data)
+        return web.json_response({"ok": True})
+
+    @PromptServer.instance.routes.get("/wwy_bridge/ack/{cid}")
+    async def _get_ack(request):
+        return web.json_response({"ok": True, "ack": _acks.get(request.match_info["cid"])})
 except ImportError:         # 不在 ComfyUI 里（单测）
     pass
 except Exception as e:      # 接口变了：网页那边发不出来而已，不影响 ComfyUI
