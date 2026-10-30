@@ -561,6 +561,20 @@
         : { ok: true, text: "（预览模式）已执行：" + aid }),
       diag_undo: () => ok({ ok: true, text: "已撤销" }),
       diag_llm_test: () => ok({ ok: true, text: "（预览模式）deepseek-v4-flash 已连通（0.8 秒），回复：正常" }),
+      // 联动：?remote=1 预览「正在控制远程主机」的界面
+      link_mode: () => ok(/[?&]remote=1\b/.test(location.search)
+        ? { remote: true, online: true, peer: { id: "p1", name: "DESKTOP-4090", addr: "192.168.1.20", port: 7899 } }
+        : { remote: false }),
+      link_info: () => ok({ ok: true, mode: { remote: false },
+        host: { enabled: true, running: true, key: "K7QW-M2XP-9RTD-HV4N-ZB8C-WF3J", port: 7899, ips: ["192.168.1.35"],
+          name: "DESKTOP-DEMO", error: "", discovery: true, clients: [{ ip: "192.168.1.50", name: "LAPTOP-01", ago: 3 }] },
+        peers: [{ id: "p1", name: "DESKTOP-4090", addr: "192.168.1.20", port: 7899 }] }),
+      link_peers_status: () => ok({ ok: true, status: { p1: { online: true, name: "DESKTOP-4090", instances: [
+        { id: "a", name: "Forge Neo", kind: "forge", kind_label: "Forge Neo", active: true,
+          status: { state: "ready", running: true, url: "http://127.0.0.1:51234/" } },
+        { id: "b", name: "ComfyUI", kind: "comfyui", kind_label: "ComfyUI", active: false, status: { state: "idle", running: false } }] } } }),
+      link_connect: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      remote_call: (name, args) => window.pywebview.api[name](...(args || [])),
       _noop: () => ok({}),
     },
   };

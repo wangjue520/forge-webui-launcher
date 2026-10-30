@@ -375,6 +375,7 @@ class InstanceRunner:
         self.watch_ports = []
         self.pre_pids = set()
         self.port = None             # 本轮实际使用/分配的端口（能确定时）
+        self.remote_started = False  # 这一轮是联动的远程启动器点的启动：浏览器开在远程那台电脑上
 
     # ---------------------------------------------------------- 基础 ----
     @property
@@ -433,7 +434,9 @@ class InstanceRunner:
             if pm:
                 self.port = int(pm.group(1))
         self.set_status("ready", text, url=url)
-        if auto_open:
+        if auto_open and self.remote_started:
+            self.emit("open_remote", url=url)
+        elif auto_open:
             try:
                 webbrowser.open(url)
             except Exception:

@@ -60,7 +60,7 @@
         <td class="dim">${App.esc(f.size_text)}</td>
         <td class="dim">${App.esc(f.mtime_text)}</td>
         <td class="row-actions">` +
-        `<button class="btn btn-xs" data-act="reveal" title="在资源管理器中定位">定位</button>` +
+        `<button class="btn btn-xs" data-act="reveal" title="在资源管理器中定位" data-local-only>定位</button>` +
         `<button class="btn btn-xs" data-act="copy" title="复制文件名（不含后缀）">复制名</button>` +
         (curIsLora ? `<button class="btn btn-xs" data-act="lora" title="复制 &lt;lora:名字:1&gt; 调用格式">复制lora</button>` : "") +
         `</td>
@@ -90,7 +90,7 @@
     tbody().querySelectorAll("tr").forEach((r) => r.classList.remove("selected"));
     if (tr) tr.classList.add("selected");
     selected = files.find((f) => f.path === path) || null;
-    ["#md-open", "#md-copy-name", "#md-hash-lookup", "#md-delete", "#md-preview-set"].forEach((s) => ($(s).disabled = !selected));
+    ["#md-open", "#md-dl", "#md-copy-name", "#md-hash-lookup", "#md-delete", "#md-preview-set"].forEach((s) => ($(s).disabled = !selected));
     $("#md-preview-del").disabled = true;
     $("#md-copy-lora").disabled = !selected || !curIsLora;
 
@@ -237,7 +237,7 @@
     $("#md-detail").innerHTML = "";
     $("#md-preview").innerHTML = "<span>选中文件后这里显示预览图</span>";
     selected = null;
-    ["#md-open", "#md-copy-name", "#md-copy-lora", "#md-hash-lookup", "#md-delete",
+    ["#md-open", "#md-dl", "#md-copy-name", "#md-copy-lora", "#md-hash-lookup", "#md-delete",
       "#md-preview-set", "#md-preview-del"].forEach((s) => ($(s).disabled = true));
     try {
       const r = await App.api.models_list(idx);
@@ -631,6 +631,12 @@
       }));
 
       $("#md-open").addEventListener("click", () => selected && App.api.reveal_in_explorer(selected.path));
+      // 联动：控制远程主机时把主机上的模型（连同预览图、Civitai 信息）下载到这台电脑
+      $("#md-dl").addEventListener("click", async () => {
+        if (!selected) return;
+        const r = await App.api.link_download_model(selected.path);
+        if (r && r.ok === false && !r.cancelled) App.toast(r.error || "下载失败", "error", 6000);
+      });
       $("#md-copy-name").addEventListener("click", () => {
         if (!selected) return;
         App.copy(selected.rel.replace(/\.[^.]+$/, ""), "已复制文件名");

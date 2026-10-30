@@ -1376,3 +1376,33 @@ textarea.ta-prompt {
 #dg-test-result[data-ok="1"] { color: var(--ok); }
 #dg-test-result[data-ok="0"] { color: var(--bad); }
 @media (max-width: 520px) { #diag-drawer { width: 100vw; } }
+
+/* ============ 局域网 / 广域网联动（js/link.js） ============ */
+body.remote-mode [data-local-only] { display: none !important; }
+body:not(.remote-mode) [data-remote-only] { display: none !important; }
+.link-banner { border-color: var(--yel); }
+.link-banner b { color: #f1f2ee; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.link-banner .btn { margin-top: 7px; width: 100%; }
+.link-banner .is-dot[data-state="offline"] { background: var(--bad); box-shadow: none; }
+.link-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 1100px) { .link-cols { grid-template-columns: 1fr; } }
+.link-sub { font: 700 11px var(--mono); letter-spacing: .12em; color: var(--text-faint); margin-bottom: 8px; }
+.link-key-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin: 6px 0 10px; }
+.link-key { font: 700 15px var(--mono); letter-spacing: .06em; padding: 6px 10px; background: var(--ink); color: var(--yel); user-select: all; }
+.link-form { margin-bottom: 8px; }
+.link-peers { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.link-peer { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--input-bg); border: 1px solid var(--line-2); }
+.link-peer .lp-addr { font: 11px var(--mono); color: var(--text-faint); }
+.link-peer .ic-btns { margin-left: auto; }
+.inst-card.remote::before { background: var(--yel); }
+.inst-card.remote .ic-insts { display: flex; flex-direction: column; gap: 5px; }
+.inst-card.remote .ic-inst { display: flex; align-items: center; gap: 6px; font-size: 12px; min-width: 0; }
+.inst-card.remote .ic-inst span:not(.ic-kind):not(.status-pill) { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.inst-card.remote .ic-inst .status-pill { margin-left: auto; padding: 2px 7px; font-size: 10.5px; }
+.inst-card.remote-add { align-items: center; justify-content: center; border-style: dashed; cursor: pointer; color: var(--text-faint); min-height: 92px; }
+.inst-card.remote-add:hover { border-color: var(--ink); color: var(--ink); }
+.link-xfer { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); z-index: 199; width: min(460px, calc(100vw - 32px));
+  background: var(--panel); border: 1px solid var(--ink); box-shadow: var(--shadow); padding: 10px 12px; }
+.link-xfer[hidden] { display: none; }
+.link-xfer .lx-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
+.link-xfer .progress { margin: 0; }
