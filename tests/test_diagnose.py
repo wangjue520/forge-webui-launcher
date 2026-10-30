@@ -58,6 +58,8 @@ def fake_api(cfg):
     api._diag_undo, api._diag_last_auto, api._diag_jobs = {}, {}, {}
     api._diag_seq = 0
     api._diag_by_key = {}
+    api._diag_dl, api._diag_tk = set(), {}
+    api._ext_thread = None
     return api
 
 

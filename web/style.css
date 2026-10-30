@@ -1343,6 +1343,16 @@ textarea.ta-prompt {
 .dg-steps .dg-running { color: var(--text-faint); animation: dgBlink 1.2s ease-in-out infinite; }
 @keyframes dgBlink { 50% { opacity: .35; } }
 .dg-todo { margin: 8px 0 0; padding-left: 20px; font-size: 12.5px; line-height: 1.75; }
+.dg-tk-steps { margin: 0 0 8px; padding: 0; list-style: none; font-size: 12px; line-height: 1.7; }
+.dg-tk-steps li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; padding: 2px 0; color: var(--text-dim); word-break: break-word; }
+.dg-tk-steps .dg-tk-ico { flex: none; width: 14px; text-align: center; color: var(--text-faint); }
+.dg-tk-steps .dg-tk-round { margin-top: 6px; font-weight: 700; color: var(--text); }
+.dg-tk-steps .dg-tk-ai { font-size: 11.5px; color: var(--text-faint); padding-left: 14px; }
+.dg-tk-steps .dg-tk-act .dg-tk-ico { color: var(--ok, var(--blue)); }
+.dg-tk-steps .dg-tk-result { color: var(--text); }
+.dg-tk-steps .dg-tk-warn, .dg-tk-steps .dg-tk-warn .dg-tk-ico { color: var(--warn); }
+.dg-tk-steps .dg-running { color: var(--text-faint); animation: dgBlink 1.2s ease-in-out infinite; }
+.dg-card[data-level="ok"] { border-left-color: var(--ok, var(--blue)); }
 .dg-foot { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-top: 1px solid var(--line); }
 .dg-foot .hint { margin: 0; font-size: 11px; }
 #diag-drawer .btn-danger { background: var(--bad); border-color: var(--bad); color: #fff; }

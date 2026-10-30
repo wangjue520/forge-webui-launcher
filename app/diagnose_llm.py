@@ -208,7 +208,10 @@ TOOL_SPECS = [
            "steps": {"type": "array", "items": _S, "description": "用户要做的操作步骤，具体到启动器哪个页面哪个按钮"},
            "actions": {"type": "array", "description": "推荐的一键修复（只能用动作白名单里的）",
                        "items": _obj({"action": _S, "params": {"type": "object"}, "label": _S}, ["action"])},
-           "confidence": {"type": "string", "enum": ["high", "medium", "low"]}},
+           "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+           "verdict": {"type": "string", "enum": ["fixed", "continue", "need_user"],
+                       "description": "只在「AI 接管」模式填：fixed=已经没问题了，continue=执行这轮 actions 后重启再看，"
+                                      "need_user=要用户自己动手（写在 steps 里）"}},
           ["summary", "cause", "steps"])),
 ]
 
@@ -622,9 +625,27 @@ def system_prompt(api, ctx):
         "===== 启动器 / WebUI / ComfyUI 知识 =====\n" + knowledge())
 
 
-def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambda: False, post=None, note=""):
-    """跑一次 agent。返回 {"summary","cause","steps","actions","confidence","rounds"}；出错抛 LlmError。
-    note：用户自己写的问题描述（可能日志里根本没报错，比如出图不对、界面卡住）"""
+def takeover_text(tk):
+    """「AI 接管」模式的说明：这一轮第几轮、之前做过什么、实例现在什么状态"""
+    hist = "\n".join(tk.get("history") or []) or "（这是第一轮，还没动过）"
+    return (
+        f"\n\n===== 现在是「AI 接管」模式（第 {tk['round']} 轮，最多 {tk['max']} 轮）=====\n"
+        "用户把修复交给你了：你在 finish.actions 里给的动作会被直接执行，不再问用户（danger 级的删文件除外，"
+        "restart_instance 也不用给，启动器每轮执行完都会自己重启实例）。然后启动器重启实例、等它起来，"
+        "把新一轮的日志交给你看。\n"
+        "- 日志里已经没有需要处理的报错（或剩下的是用户说不用管的）：verdict=fixed，actions 留空\n"
+        "- 要用户自己动手（换驱动、手动下载要登录的模型、改系统设置……）：verdict=need_user，写清 steps\n"
+        "- 否则 verdict=continue，给出这一轮要执行的动作；一次只做有把握的几步，别把不相干的东西都改一遍\n"
+        "- 前几轮做过但没解决的办法不要原样再来一次，换思路；改过的设置如果证明没用，可以用同一个动作改回去\n"
+        f"- 用户的说明（如果有）优先级最高，说不用管的问题就当没看见\n"
+        f"实例当前状态：{tk.get('state') or '未知'}\n之前几轮：\n{hist}")
+
+
+def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambda: False, post=None, note="",
+        takeover=None):
+    """跑一次 agent。返回 {"summary","cause","steps","actions","confidence","verdict","rounds"}；出错抛 LlmError。
+    note：用户自己写的问题描述 / 说明（可能日志里根本没报错，比如出图不对；也可能是「缺模型不用管」）
+    takeover：AI 接管模式的 {"round","max","history","state"}，见 takeover_text"""
     conf = resolve(api.cfg)
     if not conf:
         raise LlmError("还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key")
@@ -634,10 +655,14 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
     what = "启动器本身" if ctx.get("kind") == "launcher" else f"实例「{ctx.get('name')}」（id={ctx.get('iid')}）"
     rule_txt = "\n".join(f"- {f['title']}：{f['evidence'][:200]}" for f in findings) or "（本地规则没认出来）"
     note = dg.redact(str(note or "").strip()[:2000])
-    ask = f"用户的描述（优先解决这个问题）：\n{note}\n\n" if note else ""
+    ask = f"用户的描述 / 说明（优先照这个来）：\n{note}\n\n" if note else ""
+    rule_acts = "\n".join(f"  · {f['title']} → 规则建议：" + "；".join(
+        f"{a['aid']} {json.dumps(a['params'], ensure_ascii=False)}" for a in f.get("actions") or [])
+        for f in findings if takeover and f.get("actions"))
     chat.user(f"{ask}要诊断的对象：{what}\n\n环境信息：\n{environment(api, ctx)}\n\n"
-              f"本地规则的识别结果：\n{rule_txt}\n\n"
-              f"日志片段（已脱敏）：\n```\n{dg.redact(dg.snippet(log_text, findings))}\n```")
+              f"本地规则的识别结果：\n{rule_txt}\n" + (f"{dg.redact(rule_acts)}\n" if rule_acts else "") +
+              f"\n日志片段（已脱敏）：\n```\n{dg.redact(dg.snippet(log_text, findings))}\n```" +
+              (dg.redact(takeover_text(takeover)) if takeover else ""))
     on_step(f"正在请求 {model} ...")
     final_text = ""
     for rnd in range(1, MAX_STEPS + 2):
@@ -657,7 +682,7 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
         chat.tool_results(results)
     if final_text.strip():
         return {"summary": final_text.strip()[:300], "cause": final_text.strip(), "steps": [], "actions": [],
-                "confidence": "low", "rounds": MAX_STEPS}
+                "confidence": "low", "verdict": "need_user", "rounds": MAX_STEPS}
     raise LlmError("AI 没有给出结论")
 
 
@@ -685,7 +710,9 @@ def _final(api, args, rounds, tools):
         acts.append({"aid": aid, "label": label, "params": params, "risk": dg.ACTIONS[aid]["risk"], "auto": False})
     steps = [str(s) for s in (args.get("steps") or []) if str(s).strip()]
     return {"summary": str(args.get("summary") or ""), "cause": str(args.get("cause") or ""), "steps": steps,
-            "actions": acts, "dropped": dropped, "confidence": args.get("confidence") or "medium", "rounds": rounds}
+            "actions": acts, "dropped": dropped, "confidence": args.get("confidence") or "medium",
+            "verdict": args.get("verdict") if args.get("verdict") in ("fixed", "continue", "need_user") else
+            ("continue" if acts else "need_user"), "rounds": rounds}
 
 
 def ping(cfg, post=None):

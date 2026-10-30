@@ -631,6 +631,7 @@ class LauncherApi:
         self._diag_jobs = {}         # AI 诊断任务 -> 取消标记
         self._diag_seq = 0
         self._diag_dl = set()        # 诊断正在下载的模型（目标路径）
+        self._diag_tk = {}           # AI 接管中的实例 -> 任务号
 
     # ---------------------------------------------------------- 基础设施 ----
 
@@ -8058,7 +8059,7 @@ def _diag_launcher_job(self, scope, err):
         job = _diag_new_job(self)
     self._emit("diag", "auto", source=scope, error=err[:400], report=report, job=job)
     if job:
-        _diag_run_ai(self, job, target)
+        _diag_run_ai(self, job, target, _diag_saved_note(self, target))
 
 
 def _diag_target(self, target):
@@ -8090,7 +8091,8 @@ def _diag_collect(self, target):
     return {"ok": True, "target": tgt, "name": ctx["name"], "kind": ctx["kind"],
             "lines": len(text.splitlines()), "findings": [{k: v for k, v in f.items() if k != "facts"}
                                                           for f in findings],
-            "ai_ready": bool(conf), "ai_model": conf[2] if conf else ""}
+            "ai_ready": bool(conf), "ai_model": conf[2] if conf else "", "note": _diag_saved_note(self, tgt),
+            "takeover": self._diag_tk.get(ctx["iid"], "") if ctx.get("iid") else ""}
 
 
 def _diag_fetch_json(self, url):
@@ -8481,6 +8483,193 @@ def _api_diag_ai(self, target=None, note=""):
     return {"ok": True, "job": job}
 
 
+def _diag_note_key(target):
+    t = target or {}
+    return "launcher" if t.get("type") == "launcher" else f"inst:{t.get('iid') or ''}"
+
+
+def _diag_saved_note(self, target):
+    notes = self.cfg.get("diag_notes")
+    return str((notes or {}).get(_diag_note_key(target)) or "") if isinstance(notes, dict) else ""
+
+
+def _api_diag_note_set(self, target=None, text=""):
+    """诊断面板里「给 AI 的说明」：按诊断对象记住，之后的诊断、自动诊断、接管都带上"""
+    key = _diag_note_key(target or {"type": "inst", "iid": self.cfg.get("active_instance")})
+    with self._cfg_lock:
+        notes = dict(self.cfg.get("diag_notes") or {})
+        text = str(text or "").strip()[:2000]
+        if text:
+            notes[key] = text
+        else:
+            notes.pop(key, None)
+        self.cfg["diag_notes"] = notes
+        try:
+            cm.save_config(self.cfg)
+        except OSError as e:
+            return {"ok": False, "error": f"保存失败：{e}"}
+    return {"ok": True}
+
+
+# ---- AI 接管：AI 定修复 → 直接执行 → 重启实例 → 看新日志 → 还有报错就再来，最多几轮 ----
+
+_TK_ROUNDS = 5
+_TK_READY_TIMEOUT = 900      # 等实例起来（首次启动可能在装依赖）
+_TK_SETTLE = 20              # 起来后再看一会儿，启动后才冒出来的报错（节点加载、桥接插件）也收进来
+_TK_WAIT_JOBS = 3 * 3600     # 等装依赖 / 下载模型
+_TK_SKIP = {"restart_instance"}      # 每轮自己会重启
+
+
+def _tk_sleep(cancel, seconds):
+    return cancel.wait(seconds)
+
+
+def _tk_wait_jobs(self, cancel):
+    """等这轮动作开的后台任务（装节点 / 装依赖 / 下载模型）做完"""
+    t0 = time.time()
+    while time.time() - t0 < _TK_WAIT_JOBS:
+        with self._diag_lock:
+            downloading = bool(self._diag_dl)
+        if not _ext_busy(self) and not downloading:
+            return True
+        if _tk_sleep(cancel, 2):
+            return False
+    return False
+
+
+def _tk_restart(self, iid, cancel, step):
+    """重启实例并等它就绪。返回 (是否起来了, 说明)"""
+    r = self._runner(iid)
+    root = (self.instance_cfg(iid) or {}).get("webui_root", "")
+    if r.running():
+        step("停止实例…")
+        r.stop()
+    res = r.start(root)
+    if not res.get("ok"):
+        return False, "启动失败：" + str(res.get("error") or res.get("text") or res)
+    step("已重新启动，等它起来…")
+    t0 = time.time()
+    while time.time() - t0 < _TK_READY_TIMEOUT:
+        if _tk_sleep(cancel, 2):
+            return False, "已停止接管"
+        if r.state == "ready":
+            break
+        if r.state == "stopped" or not r.running():
+            return False, r.status_text or "进程退出了"
+    else:
+        return False, f"等了 {_TK_READY_TIMEOUT // 60} 分钟还没起来"
+    step(f"已经起来了（{r.url or ''}），再观察 {_TK_SETTLE} 秒有没有报错…")
+    if _tk_sleep(cancel, _TK_SETTLE):
+        return False, "已停止接管"
+    if not r.running():
+        return False, r.status_text or "起来以后又退出了"
+    return True, f"运行中 {r.url or ''}".strip()
+
+
+def _diag_takeover_run(self, job, iid, note):
+    cancel = self._diag_jobs.get(job)
+    target = {"type": "inst", "iid": iid}
+    r = self._runner(iid)
+    label = (self.instance_cfg(iid) or {}).get("name") or iid
+
+    def step(text, kind="info", **extra):
+        self._emit("diag", "takeover_step", job=job, iid=iid, text=text, kind=kind, **extra)
+        if kind in ("round", "act", "result", "warn"):
+            r.log(f"[诊断] AI 接管：{text}\n")
+
+    def done(ok, text, **extra):
+        r.log(f"[诊断] AI 接管结束：{text}\n")
+        self._emit("diag", "takeover_done", job=job, iid=iid, ok=ok, text=text, **extra)
+
+    history = []
+    try:
+        ctx, text = _diag_target(self, target)
+        if not r.running() and not text.strip():
+            step(f"「{label}」还没运行过：先启动一次看看有没有报错", "round")
+            ok, why = _tk_restart(self, iid, cancel, step)
+            state = why
+        else:
+            state = r.status_text or ("运行中" if r.running() else "已停止")
+        for rnd in range(1, _TK_ROUNDS + 1):
+            if cancel.is_set():
+                return done(False, "已停止接管", history=history)
+            ctx, text = _diag_target(self, target)
+            findings = dg.scan(text, ctx)
+            _diag_enrich(self, findings, ctx)
+            if rnd > 1 and r.state == "ready" and not findings:
+                return done(True, f"第 {rnd - 1} 轮修复后重启正常，日志里没再看到报错", history=history)
+            step(f"第 {rnd} 轮：AI 看日志" + (f"（规则认出 {len(findings)} 个问题）" if findings else ""), "round")
+            res = dl.run(self, ctx, text, findings, on_step=lambda t: step(t, "ai"), cancelled=cancel.is_set,
+                         note=note, takeover={"round": rnd, "max": _TK_ROUNDS, "history": history, "state": state})
+            step(res.get("summary") or "AI 没给结论", "result", cause=res.get("cause") or "",
+                 steps=res.get("steps") or [])
+            acts = [a for a in res.get("actions") or [] if a["aid"] not in _TK_SKIP]
+            skipped = [a for a in acts if a["risk"] in ("danger", "ui")]
+            acts = [a for a in acts if a["risk"] in ("low", "confirm")]
+            for a in skipped:
+                step(f"「{a['label']}」要你自己点（删文件 / 打开页面不自动做）", "warn", action=a)
+            if res.get("verdict") == "fixed" and not acts:
+                return done(True, res.get("summary") or "AI 判断已经没问题了", history=history)
+            if not acts:
+                return done(False, "需要你自己处理：" + (res.get("summary") or ""), steps=res.get("steps") or [],
+                            history=history)
+            if r.running():
+                step("先停止实例（装东西时文件不能被占用）…")
+                r.stop()
+            did = []
+            for a in acts:
+                if cancel.is_set():
+                    break
+                try:
+                    out = _diag_exec(self, a["aid"], a["params"])
+                except Exception as e:
+                    out = {"ok": False, "error": str(e)}
+                text_ = out.get("text") if out.get("ok") else "失败：" + str(out.get("error"))
+                step(f"{a['label']} → {text_}", "act", undo=out.get("undo") or "")
+                did.append(f"{a['label']}（{text_}）")
+                if out.get("ok") and not _tk_wait_jobs(self, cancel):
+                    break
+            if cancel.is_set():
+                return done(False, "已停止接管", history=history)
+            ok, state = _tk_restart(self, iid, cancel, step)
+            step(("重启正常：" if ok else "重启后还是不行：") + state, "result" if ok else "warn")
+            history.append(f"第 {rnd} 轮：{res.get('summary') or ''}；做了：{'；'.join(did) or '无'}；重启结果：{state}")
+        ctx, text = _diag_target(self, target)
+        if r.state == "ready" and not dg.scan(text, ctx):
+            return done(True, f"第 {_TK_ROUNDS} 轮修复后重启正常，日志里没再看到报错", history=history)
+        done(False, f"修了 {_TK_ROUNDS} 轮还没好，停下来了。可以把诊断报告发给作者，或者补充说明后再接管一次",
+             history=history)
+    except dl.LlmError as e:
+        done(False, f"AI 出错，接管中止：{e}", history=history)
+    except Exception as e:
+        print(traceback.format_exc())
+        done(False, f"接管内部出错：{e}", history=history)
+    finally:
+        with self._diag_lock:
+            if self._diag_tk.get(iid) == job:
+                self._diag_tk.pop(iid, None)
+        self._diag_jobs.pop(job, None)
+
+
+def _api_diag_takeover(self, target=None, note=None):
+    """AI 接管：自动修 → 重启 → 看日志 → 再修，直到没报错、要用户动手或轮数用完。只支持实例"""
+    t = target or {"type": "inst", "iid": self.cfg.get("active_instance")}
+    iid = t.get("iid")
+    if t.get("type") == "launcher" or not cm.find_instance(self.cfg, iid):
+        return {"ok": False, "error": "AI 接管只能用在 WebUI / ComfyUI 实例上"}
+    if not dl.resolve(self.cfg):
+        return {"ok": False, "need_setup": True, "error": "还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key"}
+    with self._diag_lock:
+        if iid in self._diag_tk:
+            return {"ok": False, "error": "这个实例已经在 AI 接管中了", "job": self._diag_tk[iid]}
+    job = _diag_new_job(self)
+    with self._diag_lock:
+        self._diag_tk[iid] = job
+    note = _diag_saved_note(self, t) if note is None else str(note)[:2000]
+    self._spawn(lambda: _diag_takeover_run(self, job, iid, note), name="diag-takeover")
+    return {"ok": True, "job": job, "rounds": _TK_ROUNDS}
+
+
 def _api_diag_ai_cancel(self, job):
     ev = self._diag_jobs.get(job)
     if ev:
@@ -8674,6 +8863,8 @@ for _name, _fn in {
     "diag_run": _api_diag_run,
     "diag_ai": _api_diag_ai,
     "diag_ai_cancel": _api_diag_ai_cancel,
+    "diag_takeover": _api_diag_takeover,
+    "diag_note_set": _api_diag_note_set,
     "diag_fix": _api_diag_fix,
     "diag_undo": _api_diag_undo,
     "diag_info": _api_diag_info,

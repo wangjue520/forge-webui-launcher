@@ -77,6 +77,7 @@ DEFAULT_CONFIG = {
     "diag_auto_launcher": True,   # 启动器报错后自动诊断
     "diag_auto_ai": True,         # 启动器自动诊断时规则认不出就自动问 AI
     "diag_comfy_bridge": True,    # 启动 / 部署 ComfyUI 时放桥接插件（网页里的缺节点、缺模型报给诊断）
+    "diag_notes": {},             # 给 AI 的长期说明，按诊断对象记（"inst:<id>" / "launcher"），每次诊断和接管都带上
     # 国内网络加速：auto=自动检测 / always=总是用镜像 / never=总是用原站
     "mirror_mode": "auto",
     "mirror_detected": "",   # 自动检测结果缓存（cn / global），清空可重新检测

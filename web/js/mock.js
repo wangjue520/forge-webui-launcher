@@ -479,6 +479,22 @@
           actions: [{ aid: "comfy_install_deps", label: "重装依赖", risk: "confirm", params: {} }], dropped: [] } }, 2300);
         return ok({ ok: true, job });
       },
+      diag_takeover: (t) => {
+        const job = "tk1", iid = (t && t.iid) || "demo";
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, iid, ...data }), ms);
+        const s = (text, kind, ms, extra) => send("takeover_step", { text, kind, ...(extra || {}) }, ms);
+        s("第 1 轮：AI 看日志（规则认出 2 个问题）", "round", 300);
+        s("读取文件 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo\\requirements.txt", "ai", 800);
+        s("ComfyUI-Foo 缺 opencv；VAE 半精度溢出", "result", 1400);
+        s("先停止实例（装东西时文件不能被占用）…", "info", 1700);
+        s("重装「ComfyUI-Foo」的依赖 → 已开始重装节点「ComfyUI-Foo」的依赖", "act", 2200);
+        s("VAE 改用 FP32 → 实例设置：vae_precision 改成 fp32（下次启动生效）", "act", 2500, { undo: "u9" });
+        s("已重新启动，等它起来…", "info", 2900);
+        s("重启正常：运行中 http://127.0.0.1:8188", "result", 3800);
+        send("takeover_done", { ok: true, text: "第 1 轮修复后重启正常，日志里没再看到报错" }, 4300);
+        return ok({ ok: true, job, rounds: 5 });
+      },
+      diag_note_set: () => ok({ ok: true }),
       diag_ai_cancel: () => ok({ ok: true }),
       diag_fix: (aid, p) => ok(aid === "open_page" || aid === "open_url" || aid === "ai_ask" ? { ok: true, ui: true, params: p || {} }
         : { ok: true, text: "（预览模式）已执行：" + aid }),

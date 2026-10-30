@@ -13,6 +13,7 @@
   let aiSteps = [];
   let aiResult = null;
   let aiError = "";
+  let tk = null;           // AI 接管 {job, iid, steps: [{text, kind, undo}], done: {ok, text, steps}}
   const badges = {};       // iid -> 发现的问题数
 
   const RISK_TIP = { low: "可撤销", confirm: "需要确认", danger: "需要确认", ui: "" };
@@ -70,6 +71,11 @@
       return;
     }
     $("#dg-sub").textContent = `${report.name} · 看了 ${report.lines} 行日志`;
+    const note = $("#dg-note");
+    if (note && document.activeElement !== note) note.value = report.note || "";
+    if (report.takeover && !(tk && tk.job === report.takeover)) {
+      tk = { job: report.takeover, iid: target.iid, steps: [{ text: "AI 接管进行中…", kind: "round" }], done: null };
+    }
     const fs = report.findings || [];
     if (!fs.length) {
       box.innerHTML = `<div class="dg-empty">${report.lines ? "本地规则没认出已知的报错。" :
@@ -206,12 +212,90 @@
       $("#dg-ai-stop", row).addEventListener("click", () => App.api.diag_ai_cancel(job));
     } else {
       const has = report && (report.findings || []).length;
+      const canTk = target && target.type === "inst" && !(tk && tk.job && !tk.done);
       row.innerHTML = `<button class="btn btn-xs btn-accent" id="dg-ai-go">${aiResult ? "让 AI 重新分析" :
         (has ? "让 AI 再深入看看" : "让 AI 分析")}</button>
-        <span class="hint">会把脱敏后的日志片段和环境信息发给所选模型，AI 只能读文件、不能改</span>`;
+        ${canTk ? `<button class="btn btn-xs btn-accent" id="dg-tk-go" title="AI 自己修、重启、再看日志，直到没报错">AI 接管修复</button>` : ""}
+        <span class="hint">会把脱敏后的日志片段和环境信息发给所选模型。「分析」只读不改；「接管」会直接动手修</span>`;
       $("#dg-ai-go", row).addEventListener("click", startAi);
+      const go = $("#dg-tk-go", row);
+      if (go) go.addEventListener("click", startTakeover);
     }
     box.appendChild(row);
+    renderTk();
+  }
+
+  /* ---------- AI 接管 ---------- */
+  const TK_ICON = { round: "▶", act: "✓", result: "◆", warn: "!", ai: "·", info: "·" };
+
+  function renderTk() {
+    const box = $("#dg-tk");
+    if (!box) return;
+    if (!tk || (target && target.type === "inst" && tk.iid !== target.iid)) { box.innerHTML = ""; return; }
+    const running = !tk.done;
+    box.innerHTML = `<div class="dg-section">AI 接管${running ? " · 进行中" : ""}</div>
+      <ol class="dg-tk-steps"></ol><div class="dg-actions"></div>`;
+    const ol = $(".dg-tk-steps", box);
+    tk.steps.forEach((s) => {
+      const li = document.createElement("li");
+      li.className = "dg-tk-" + (s.kind || "info");
+      li.innerHTML = `<span class="dg-tk-ico">${TK_ICON[s.kind] || "·"}</span><span>${esc(s.text)}</span>`;
+      if (s.undo) {
+        const w = document.createElement("span");
+        w.className = "dg-act";
+        w.appendChild(undoBtn(s.undo, w));
+        li.appendChild(w);
+      }
+      ol.appendChild(li);
+    });
+    if (running) ol.insertAdjacentHTML("beforeend", `<li class="dg-running">处理中…</li>`);
+    const row = $(".dg-actions", box);
+    if (running) {
+      row.innerHTML = `<button class="btn btn-xs" id="dg-tk-stop">停止接管</button>
+        <span class="hint">停下来时正在装的东西会装完；已改的设置可以点「撤销」</span>`;
+      $("#dg-tk-stop", row).addEventListener("click", () => {
+        $("#dg-tk-stop").disabled = true;
+        App.api.diag_ai_cancel(tk.job);
+      });
+    } else {
+      const card = document.createElement("div");
+      card.className = "dg-card dg-ai-card";
+      card.dataset.level = tk.done.ok ? "ok" : "error";
+      card.innerHTML = `<div class="dg-card-title">${tk.done.ok ? "✓ " : ""}${esc(tk.done.text)}</div>
+        ${(tk.done.steps || []).length ? `<ol class="dg-todo">${tk.done.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol>` : ""}`;
+      row.replaceWith(card);
+    }
+  }
+
+  async function startTakeover() {
+    const name = (($("#dg-target")._targets || []).find((t) => sameTarget(t, target)) || {}).name || "这个实例";
+    const ok = await App.confirm("让 AI 接管修复",
+      `AI 会自己决定并直接执行修复：装依赖、装节点、装 pip 包、下载缺的模型、改启动参数和显存 / 精度设置、停用出错的插件。` +
+      `每轮修完会重启「${name}」，看新日志里还有没有报错，有就接着修，最多 5 轮。\n\n` +
+      `不会删除任何文件；改过的设置可以在步骤里撤销；随时可以点「停止接管」。\n` +
+      `上面「给 AI 的说明」会一起发给 AI（比如「模型我自己有，缺模型不用管」）。`, "开始接管");
+    if (!ok) return;
+    await saveNote();
+    let r;
+    try { r = await App.api.diag_takeover(target, ($("#dg-note") || {}).value || ""); }
+    catch (e) { r = { ok: false, error: e.message }; }
+    if (!r || !r.ok) {
+      if (r && r.job) { tk = { job: r.job, iid: target.iid, steps: [{ text: "AI 接管进行中…", kind: "round" }], done: null }; renderAi(); }
+      App.toast((r && r.error) || "启动接管失败", "error", 6000);
+      return;
+    }
+    tk = { job: r.job, iid: target.iid, steps: [], done: null };
+    renderAi();
+  }
+
+  /* ---------- 给 AI 的说明（按诊断对象记住） ---------- */
+  let noteTimer = null;
+  function saveNote() {
+    clearTimeout(noteTimer);
+    noteTimer = null;
+    const el = $("#dg-note");
+    if (!el || !target) return Promise.resolve();
+    return App.api.diag_note_set(target, el.value).catch(() => {});
   }
 
   function aiCard(res) {
@@ -328,7 +412,12 @@
       $("#dg-close").addEventListener("click", close);
       $("#dg-rerun").addEventListener("click", run);
       $("#dg-copy").addEventListener("click", () => App.copy(reportText(), "诊断报告已复制"));
+      $("#dg-note").addEventListener("input", () => {
+        clearTimeout(noteTimer);
+        noteTimer = setTimeout(saveNote, 700);
+      });
       $("#dg-target").addEventListener("change", (e) => {
+        if (noteTimer) saveNote();
         const t = (e.target._targets || [])[+e.target.value];
         if (t) { target = t; if (!job) { aiSteps = []; aiResult = null; aiError = ""; } run(); }
       });
@@ -373,6 +462,17 @@
         if (e.job !== job) return;
         job = ""; aiError = e.error;
         renderAi();
+      });
+      App.on("diag", "takeover_step", (e) => {
+        if (!tk || tk.job !== e.job) tk = { job: e.job, iid: e.iid, steps: [], done: null };
+        tk.steps.push({ text: e.text, kind: e.kind, undo: e.undo });
+        if (!drawer().hidden) renderTk();
+      });
+      App.on("diag", "takeover_done", (e) => {
+        if (!tk || tk.job !== e.job) tk = { job: e.job, iid: e.iid, steps: [], done: null };
+        tk.done = { ok: e.ok, text: e.text, steps: e.steps || [] };
+        App.toast("AI 接管结束：" + e.text, e.ok ? "ok" : "error", 8000);
+        if (!drawer().hidden) { renderAi(); if (sameTarget(target, { type: "inst", iid: e.iid })) run(); }
       });
       App.on("diag", "download_done", (e) => {
         App.toast(e.ok ? `${e.name} 已下好：在 ComfyUI 网页里按 R 刷新模型列表再运行` :
