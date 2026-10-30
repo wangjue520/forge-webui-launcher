@@ -67,6 +67,17 @@ DEFAULT_CONFIG = {
     # liblib 的下载接口强制登录（匿名一律返回"用户未登录"），
     # 这里存用户从自己浏览器 Cookie 里复制的 usertoken，仅保存在本地配置
     "liblib_token": "",
+    # 报错诊断：AI 层用用户自己的 Key（diagnose_llm.PROVIDERS）
+    "diag_llm_provider": "deepseek",
+    "diag_llm_api_key": "",
+    "diag_llm_base_url": "",      # 留空用提供商默认地址
+    "diag_llm_model": "",         # 留空用提供商默认模型
+    "diag_llm_format": "openai",  # 只对「自定义」有效：openai / anthropic
+    "diag_auto_fix": True,        # 规则认定的低风险修复自动执行
+    "diag_auto_launcher": True,   # 启动器报错后自动诊断
+    "diag_auto_ai": True,         # 启动器自动诊断时规则认不出就自动问 AI
+    "diag_comfy_bridge": True,    # 启动 / 部署 ComfyUI 时放桥接插件（网页里的缺节点、缺模型报给诊断）
+    "diag_notes": {},             # 给 AI 的长期说明，按诊断对象记（"inst:<id>" / "launcher"），每次诊断和接管都带上
     # 国内网络加速：auto=自动检测 / always=总是用镜像 / never=总是用原站
     "mirror_mode": "auto",
     "mirror_detected": "",   # 自动检测结果缓存（cn / global），清空可重新检测
@@ -461,8 +472,8 @@ def load_config():
 # 配置就把这些「本机专属」的东西清掉，界面偏好（主题、镜像模式等）保留。
 
 # 顶层里属于「这台电脑」或「这个人」的键（实例里的路径另外处理）
-_MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "mirror_detected",
-                 "github_mirror_detected")
+_MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "diag_llm_api_key",
+                 "mirror_detected", "github_mirror_detected")
 _PATH_SUFFIXES = ("_dir", "_path", "_root", "_dirs")
 
 

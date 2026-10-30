@@ -19,6 +19,7 @@ _emit() -> window.App.onEvent({scope, type, ...}) 推送给前端。
 """
 import base64
 import collections
+import concurrent.futures
 import json
 import os
 import queue
@@ -47,6 +48,9 @@ import updater
 import model_library as ml
 import output_index as oi
 import comfy_nodes
+import comfy_bridge
+import diagnose as dg
+import diagnose_llm as dl
 import version_manager as vm
 import h3_models as h3m
 import amd_rocm
@@ -616,6 +620,19 @@ class LauncherApi:
         self._perf_lock = threading.Lock()
         self._perf_hist = collections.deque(maxlen=PERF_HISTORY)
 
+        # 报错诊断（diagnose.py / diagnose_llm.py）
+        self._diag_lock = threading.Lock()
+        self._diag_timers = {}       # iid -> 待执行的日志扫描
+        self._diag_seen = {}         # iid -> 本轮启动已经提示过的问题
+        self._diag_applied = {}      # 自动执行过的修复（同一个只自动做一次）
+        self._diag_by_key = {}       # 问题 key -> 自动执行过的修复动作
+        self._diag_undo = {}         # 撤销记录
+        self._diag_last_auto = {}    # 启动器自动诊断的去重
+        self._diag_jobs = {}         # AI 诊断任务 -> 取消标记
+        self._diag_seq = 0
+        self._diag_dl = set()        # 诊断正在下载的模型（目标路径）
+        self._diag_tk = {}           # AI 接管中的实例 -> 任务号
+
     # ---------------------------------------------------------- 基础设施 ----
 
     def _set_window(self, window):
@@ -624,6 +641,11 @@ class LauncherApi:
     def _emit(self, scope, type_, **data):
         """推送事件给前端：只放进发送队列，由 sender 线程统一 evaluate_js。
         worker 线程从此不会因渲染进程阻塞而产生背压。"""
+        if scope != "diag":
+            try:
+                _diag_hook(self, scope, type_, data)   # 日志抄一份给报错诊断
+            except Exception:
+                pass
         if not self._window:
             return
         self._ensure_emit_sender()
@@ -1059,6 +1081,8 @@ class LauncherApi:
             comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
             if comfy_dir:
                 comfy_nodes.fix_rgthree_compat(comfy_dir, log)
+                if self.cfg.get("diag_comfy_bridge", True):
+                    comfy_bridge.ensure(comfy_dir, log)
 
     # 以下几个是 V2 的接口，iid 省略 = 当前实例；前端启动页照旧调用
     def launch_status(self, iid=None):
@@ -2863,6 +2887,8 @@ def _deploy_flow_comfy(self, target, use_portable):
                 else:
                     log("[部署] 注意：ComfyUI-Manager 没能装上（上面日志有原因），"
                         "网络好转后可到「常用插件」页勾选重装\n")
+        if dcfg.get("diag_comfy_bridge", True):
+            comfy_bridge.ensure(target, lambda m: log(m.replace("[启动器]", "[部署]")))
 
         # ---- 7. 冒烟测试（失败只提醒，不算部署失败）----
         log("\n[部署] 冒烟测试：以 CPU 模式初始化一次 ComfyUI ...\n")
@@ -5781,7 +5807,8 @@ def _ext_resolve_repo(info, rel):
     return p if os.path.isdir(p) else None
 
 
-def _api_ext_install(self, names, iid=None):
+def _api_ext_install(self, names, iid=None, nodes=None):
+    """nodes：ComfyUI 不在目录表里的节点（报错诊断查到的缺失节点），格式同 comfy_nodes.CATALOG 的条目"""
     if _ext_busy(self):
         return {"ok": False, "error": "已有插件任务在进行中"}
     cfg, info, comfy_dir = _ext_target(self, iid)
@@ -5802,6 +5829,7 @@ def _api_ext_install(self, names, iid=None):
         py = cm.comfy_python(cfg, root)
         ids = [n for n in names if comfy_nodes.find(n)
                and not comfy_nodes.is_installed(comfy_nodes.find(n), comfy_dir, py)]
+        ids += [n for n in (nodes or []) if not comfy_nodes.is_installed(n, comfy_dir, py)]
         if not ids:
             return {"ok": False, "error": "请先勾选要安装的节点（已安装的会自动跳过）"}
         self._ext_cancel = False
@@ -7922,6 +7950,893 @@ def _api_perf_start(self):
 
 
 # ============================================================
+# 报错诊断：diagnose.py（本地规则 + 修复动作白名单）+ diagnose_llm.py（AI agent）
+# ============================================================
+
+_DIAG_DONE_TYPES = ("done", "update_done", "switch_done")
+
+
+def _diag_hook(self, scope, type_, data):
+    """_emit 的每条事件都过一下：日志抄进 dg.LOGS；实例日志里出现可疑字样就排一次规则扫描；
+    启动器各页面报错（error 事件 / done 带 error）就触发启动器自动诊断"""
+    if type_ == "log":
+        text = data.get("text") or ""
+        iid = data.get("iid") if scope == "launch" else None
+        dg.LOGS.add(dg.inst_key(iid) if iid else scope, text)
+        if iid:
+            if any(m in text for m in dg._RUN_MARKERS):
+                self._diag_seen.pop(iid, None)      # 新一轮启动：上一轮发现过的问题重新算
+            if not text.lstrip().startswith("[诊断]") and dg.QUICK_TRIGGER.search(text):
+                _diag_schedule(self, iid)
+        return
+    err = ""
+    if type_ == "error":
+        err = " ".join(str(data.get(k) or "") for k in ("title", "text")).strip()
+    elif type_ in _DIAG_DONE_TYPES and data.get("error") and not data.get("cancelled"):
+        err = str(data["error"])
+    if err and "取消" not in err[:20]:
+        dg.LOGS.add("app", (err if scope == "app" else f"[{scope}] {err}") + "\n")
+        _diag_launcher_auto(self, scope, err)
+
+
+def _diag_schedule(self, iid):
+    """同一实例 2 秒内的日志攒一起扫一次（报错往往是一大段堆栈分好几块到达）"""
+    with self._diag_lock:
+        if iid in self._diag_timers:
+            return
+        t = threading.Timer(2.0, lambda: _diag_stream_scan(self, iid))
+        t.daemon = True
+        self._diag_timers[iid] = t
+    t.start()
+
+
+def _diag_stream_scan(self, iid):
+    with self._diag_lock:
+        self._diag_timers.pop(iid, None)
+    try:
+        ctx = dg.instance_ctx(self, iid)
+        findings = dg.scan(dg.current_run(dg.LOGS.tail(dg.inst_key(iid))), ctx)
+        seen = self._diag_seen.setdefault(iid, set())
+        new = [f for f in findings if f["key"] not in seen]
+        if not new:
+            return
+        seen.update(f["key"] for f in new)
+        r = self._runner(iid)
+        for f in new:
+            r.log(f"\n[诊断] 发现问题：{f['title']}（点运行日志上方的「诊断」查看说明和一键修复）\n")
+        _diag_auto_apply(self, new, lambda m: r.log(f"[诊断] {m}\n"))
+        self._emit("diag", "found", target={"type": "inst", "iid": iid}, count=len(findings),
+                   titles=[f["title"] for f in findings])
+    except Exception as e:
+        print(f"[诊断] 扫描实例日志出错: {e}")
+
+
+def _diag_auto_apply(self, findings, log=lambda m: None):
+    """执行规则标了 auto 的低风险修复。同一个修复一次会话只自动做一次（撤销过的也不再自动做）"""
+    for f in findings:
+        # 之前已经自动修过的（设置改了以后规则可能给出别的建议）：把那条「已自动处理」放回最前面
+        done = [a for a in self._diag_by_key.get(f["key"], []) if a["aid"] not in
+                {x["aid"] for x in f["actions"] if x["params"] == a["params"]}]
+        f["actions"][:0] = done
+    if not self.cfg.get("diag_auto_fix", True):
+        return
+    for f in findings:
+        for a in f["actions"]:
+            if not a.get("auto") or a["risk"] != "low":
+                continue
+            sig = a["aid"] + json.dumps(a["params"], sort_keys=True, ensure_ascii=False)
+            if sig in self._diag_applied:
+                a["applied"] = self._diag_applied[sig]
+                continue
+            p, err = dg.validate_action(self, a["aid"], a["params"])
+            res = {"ok": False, "error": err} if err else _diag_exec(self, a["aid"], p)
+            if res.get("ok"):
+                note = {"text": res.get("text") or a["label"], "undo": res.get("undo"), "undone": False}
+                self._diag_applied[sig] = note
+                a["applied"] = note
+                self._diag_by_key.setdefault(f["key"], []).append(a)
+                log(f"已自动处理：{note['text']}（可在诊断面板里撤销）")
+            else:
+                a["error"] = res.get("error") or "执行失败"
+
+
+def _diag_launcher_auto(self, scope, err):
+    if not self.cfg.get("diag_auto_launcher", True):
+        return
+    sig, now = err[:120], time.time()
+    with self._diag_lock:
+        if now - self._diag_last_auto.get(sig, 0) < 120:
+            return
+        self._diag_last_auto[sig] = now
+    self._spawn(lambda: _diag_launcher_job(self, scope, err), name="diag-auto")
+
+
+def _diag_launcher_job(self, scope, err):
+    target = {"type": "launcher"}
+    report = _diag_collect(self, target)
+    job = ""
+    if not report["findings"] and self.cfg.get("diag_auto_ai", True) and dl.resolve(self.cfg):
+        job = _diag_new_job(self)
+    self._emit("diag", "auto", source=scope, error=err[:400], report=report, job=job)
+    if job:
+        _diag_run_ai(self, job, target, _diag_compose_note(self, target))
+
+
+def _diag_target(self, target):
+    """诊断对象 → (上下文, 日志文本)"""
+    t = target or {}
+    if t.get("type") == "launcher":
+        return dg.launcher_ctx(self), dl.launcher_text(self)
+    iid = t.get("iid") or self.cfg.get("active_instance")
+    ctx = dg.instance_ctx(self, iid)
+    text = dg.current_run(dg.LOGS.tail(dg.inst_key(iid)))
+    if not text.strip() and ctx.get("comfy_dir"):
+        # 启动器重开过、内存里没有日志：ComfyUI 自己会写一份 user/comfyui.log
+        try:
+            with open(os.path.join(ctx["comfy_dir"], "user", "comfyui.log"), "r", encoding="utf-8",
+                      errors="replace") as f:
+                text = f.read()[-200_000:]
+        except OSError:
+            pass
+    return ctx, text
+
+
+def _diag_collect(self, target):
+    ctx, text = _diag_target(self, target)
+    findings = dg.scan(text, ctx)
+    _diag_enrich(self, findings, ctx)
+    _diag_auto_apply(self, findings)
+    conf = dl.resolve(self.cfg)
+    tgt = {"type": "launcher"} if ctx["kind"] == "launcher" else {"type": "inst", "iid": ctx["iid"]}
+    return {"ok": True, "target": tgt, "name": ctx["name"], "kind": ctx["kind"],
+            "lines": len(text.splitlines()), "findings": [{k: v for k, v in f.items() if k != "facts"}
+                                                          for f in findings],
+            "ai_ready": bool(conf), "ai_model": conf[2] if conf else "", "note": _diag_saved_note(self, tgt),
+            "takeover": self._diag_tk.get(ctx["iid"], "") if ctx.get("iid") else ""}
+
+
+def _diag_fetch_json(self, url):
+    """GitHub 上的 JSON：按网络情况走加速代理或直连，挨个试"""
+    import requests
+    import mirror_manager as mm
+    mirrors = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
+    try:
+        cn = mm.resolve_github_mode(self.cfg)
+    except Exception:
+        cn = True
+    for u in (mirrors + [url]) if cn else ([url] + mirrors):
+        try:
+            r = requests.get(u, timeout=15)
+            if r.status_code == 200:
+                return r.json()
+        except Exception:
+            continue
+    return None
+
+
+def _diag_enrich(self, findings, ctx):
+    """缺失节点：查 ComfyUI-Manager 的节点表，换成具体的「安装 xxx」按钮；缺失模型：找下载地址"""
+    for f in findings:
+        if f["rule"] == "comfy_missing_model" and ctx.get("comfy_dir"):
+            _diag_enrich_models(self, f, ctx)
+        if f["rule"] != "comfy_missing_node" or not ctx.get("comfy_dir"):
+            continue
+        types = f["facts"].get("node_types") or []
+        nm = dg.load_node_map(ctx["comfy_dir"], fetch=lambda u: _diag_fetch_json(self, u)) if types else {}
+        if not nm:
+            f["text"] += "\n没拿到节点表。可以在 ComfyUI 网页里打开 Manager，用「安装缺失节点」。"
+            continue
+        repos, missing = dg.resolve_node_types(types, nm)
+        for url, title, _hit in repos[:6]:
+            f["actions"].append(dg.action("comfy_install_node", f"安装 {title}", iid=ctx["iid"], url=url,
+                                          name=title))
+        if repos:
+            f["text"] += "\n需要装的节点包：\n" + "\n".join(f"· {t}（{'、'.join(h[:5])}）" for _u, t, h in repos)
+        if missing:
+            f["text"] += "\n节点表里没查到：" + "、".join(missing) + "（可能是很新的或私人节点，去工作流的发布页找）"
+
+
+def _diag_model_dir(self, ctx, m):
+    """缺的模型该下到哪：桥接插件报的目录里优先选共享模型库里的（WebUI 也能用），没有就用第一个"""
+    sub, _name = dg.split_model_name(m.get("name"))
+    dirs = [d for d in m.get("dirs") or [] if d]
+    lib = (self.cfg.get("model_library_path") or "").strip()
+    d = next((x for x in dirs if lib and dg._under(x, lib)), dirs[0] if dirs else "")
+    if not d and m.get("folder") and re.match(r"^[\w.-]+$", str(m["folder"])):
+        d = os.path.join(ctx["comfy_dir"], "models", m["folder"])
+    return os.path.join(d, sub) if d and sub else d
+
+
+def _diag_civitai_exact(self, name, folder):
+    """Civitai 上文件名完全一致的文件 → (下载地址, 说明)。模糊结果不算（可能认错，交给 AI 或用户挑）"""
+    try:
+        cands, _f = cd.search_models_smart(name, dg.FOLDER_ROLES.get(folder or "", ""), "",
+                                           (self.cfg.get("civitai_api_key") or "").strip() or None, limit=3)
+    except Exception:
+        return None
+    for c in cands:
+        mf = c.get("match_file") or {}
+        if c.get("exact") and mf.get("downloadUrl") and str(mf.get("name") or "").lower() == name.lower():
+            return mf["downloadUrl"], f"Civitai：{c.get('model_name')} / {c.get('version_name') or ''}（文件名完全一致）"
+    return None
+
+
+def _diag_enrich_models(self, f, ctx):
+    """缺失模型的下载地址，依次找：工作流里写的地址 → ComfyUI-Manager 模型表 → Civitai 文件名完全一致。
+    都没有就给一个「让 AI 找」"""
+    models = f["facts"].get("models") or []
+    mlist = dg.load_model_list(ctx["comfy_dir"], fetch=lambda u: _diag_fetch_json(self, u))
+    found, need_search = {}, []
+    for m in models[:8]:
+        _sub, name = dg.split_model_name(m["name"])
+        hit = dg.model_list_lookup(mlist, name)
+        if m.get("url"):
+            found[m["name"]] = (m["url"], "工作流里写的下载地址")
+        elif hit:
+            found[m["name"]] = (hit["url"], f"ComfyUI-Manager 模型表：{hit.get('name') or name}")
+        else:
+            need_search.append(m)
+    if need_search:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for m, hit in zip(need_search, pool.map(
+                    lambda x: _diag_civitai_exact(self, dg.split_model_name(x["name"])[1], x.get("folder")),
+                    need_search)):
+                if hit:
+                    found[m["name"]] = hit
+    rows, missing = [], []
+    for m in models[:8]:
+        _sub, name = dg.split_model_name(m["name"])
+        dest = _diag_model_dir(self, ctx, m)
+        if m["name"] in found and dest:
+            url, why = found[m["name"]]
+            f["actions"].append(dg.action("download_model", f"下载 {name}", iid=ctx["iid"], url=url, dir=dest,
+                                          name=name))
+            rows.append(f"· {name} → {why}")
+        else:
+            missing.append(m)
+    if rows:
+        f["text"] += "\n找到的下载地址：\n" + "\n".join(rows)
+    if missing:
+        names = "、".join(dg.split_model_name(m["name"])[1] for m in missing)
+        f["text"] += f"\n没直接找到下载地址：{names}。可以让 AI 去 Civitai / HuggingFace 上搜。"
+        note = "工作流缺这些模型，帮我找到下载地址并给出下载按钮：\n" + "\n".join(
+            f"- {m['name']}（{m.get('node_type')} 的 {m.get('input')}，目录 models/{m.get('folder') or '?'}，"
+            f"下载到 {_diag_model_dir(self, ctx, m) or '?'}）" for m in missing)
+        f["actions"].append(dg.action("ai_ask", "让 AI 找下载地址", note=note))
+
+
+def _diag_dl_sources(self, url):
+    """下载源顺序：HuggingFace 按网络情况先镜像或先源站；GitHub Releases 加速代理；其余原样"""
+    import mirror_manager as mm
+    if url.startswith("https://huggingface.co/"):
+        try:
+            cn = bool(mm.resolve_mode(self.cfg))
+        except Exception:
+            cn = False
+        pair = [mm.huggingface_url(url, True), url]
+        return pair if cn else pair[::-1]
+    if url.startswith("https://github.com/"):
+        try:
+            cn = bool(mm.resolve_github_mode(self.cfg))
+        except Exception:
+            cn = True
+        mirrors = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
+        return mirrors + [url] if cn else [url] + mirrors
+    return [url]
+
+
+def _diag_download(self, p):
+    dest = os.path.join(p["dir"], p["name"])
+    if os.path.isfile(dest):
+        return {"ok": True, "text": f"{p['name']} 已经在 {p['dir']} 里了，在 ComfyUI 网页里按 R 刷新即可"}
+    key = os.path.normcase(dest)
+    with self._diag_lock:
+        if key in self._diag_dl:
+            return {"ok": False, "error": f"{p['name']} 已经在下载了，进度看运行日志"}
+        self._diag_dl.add(key)
+    r = self._runner(p["iid"])
+    log = lambda m: r.log(f"[诊断] {m}\n")
+    api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
+
+    def work():
+        try:
+            os.makedirs(p["dir"], exist_ok=True)
+            for url in _diag_dl_sources(self, p["url"]):
+                host = url.split("/")[2]
+                last = [0.0]
+
+                def progress(done, total, _last=last, _host=host):
+                    now = time.monotonic()
+                    if now - _last[0] >= 10:
+                        _last[0] = now
+                        size = f" / {total / 1048576:.0f} MB" if total else " MB"
+                        log(f"下载 {p['name']}：{done / 1048576:.0f}{size}（{_host}）")
+
+                log(f"开始下载 {p['name']}（{host}）→ {p['dir']}")
+                try:
+                    path, _ok = cd.download_file({"downloadUrl": url, "name": p["name"], "hashes": {}}, p["dir"],
+                                                 api_key=api_key if cd._is_civitai_host(url) else None,
+                                                 progress_cb=progress)
+                except Exception as e:
+                    log(f"从 {host} 下载 {p['name']} 失败：{str(e)[:200]}")
+                    continue
+                log(f"{p['name']} 已下好：{path}\n[诊断] 在 ComfyUI 网页里按 R 刷新模型列表（或重新打开工作流），就能运行了")
+                self._emit("diag", "download_done", iid=p["iid"], name=p["name"], ok=True)
+                return
+            log(f"{p['name']} 没下成（上面是每个来源的原因）。下到一半的 .part 文件留着，再点一次会接着下")
+            self._emit("diag", "download_done", iid=p["iid"], name=p["name"], ok=False)
+        finally:
+            with self._diag_lock:
+                self._diag_dl.discard(key)
+
+    self._spawn(work, name="diag-download")
+    return {"ok": True, "text": f"已开始下载 {p['name']}，进度看「一键启动」页的运行日志", "page": "launch"}
+
+
+def _diag_comfy_bases(self, iid):
+    """这个 ComfyUI 实例的网址候选：运行中的地址 → 端口 → 配置的端口 → 默认 8188"""
+    r = self._runner(iid)
+    port = str((self.instance_cfg(iid) or {}).get("port") or "").strip()
+    out = [r.url] if r.url else []
+    out += [f"http://127.0.0.1:{p}" for p in (r.port, port, 8188) if str(p or "").isdigit()]
+    return [u.rstrip("/") for u in dict.fromkeys(out)]
+
+
+def _diag_comfy_command(self, iid, cmd, wait=8.0):
+    """让 ComfyUI 网页（桥接插件）改当前工作流，等网页回执。返回 {"ok", "text"/"error", "prev"}"""
+    import uuid
+    import requests
+    cmd = dict(cmd, id=uuid.uuid4().hex[:12])
+    s = requests.Session()
+    s.trust_env = False          # 本机地址，别走代理
+    last = "连不上 ComfyUI：先在「一键启动」页启动它，并在浏览器里打开网页"
+    for base in _diag_comfy_bases(self, iid):
+        try:
+            resp = s.post(base + "/wwy_bridge/command", json=cmd, timeout=5)
+        except requests.RequestException:
+            continue
+        if resp.status_code == 404:
+            last = "ComfyUI 里的桥接插件是旧版，没有这个功能：重启一次 ComfyUI、刷新网页后再试"
+            continue
+        try:
+            data = resp.json()
+        except ValueError:
+            continue
+        if not data.get("clients"):
+            return {"ok": False, "error": "ComfyUI 的网页没打开：在浏览器里打开 ComfyUI、载入要改的工作流后再点一次"}
+        t0, bad, ack = time.time(), None, None
+        while time.time() - t0 < wait:
+            time.sleep(0.4)
+            try:
+                ack = s.get(f"{base}/wwy_bridge/ack/{cmd['id']}", timeout=5).json().get("ack") or ack
+            except (requests.RequestException, ValueError):
+                pass
+            if ack and ack.get("ok"):
+                return {"ok": True, "text": ack.get("text") or "已修改", "prev": ack.get("prev")}
+            if ack and bad is None:
+                bad = time.time()       # 别的标签页先回了失败：再等一会儿看有没有成功的
+            if bad is not None and time.time() - bad > 1.5:
+                return {"ok": False, "error": ack.get("text") or "网页改不了"}
+        return {"ok": False, "error": "网页没有回应：刷新一下 ComfyUI 网页（让新版桥接插件生效）再试"}
+    return {"ok": False, "error": last}
+
+
+def _diag_comfy_undo(self, rec):
+    if rec[0] == "comfy_mode":
+        by_mode = {}
+        for nid, mode in (rec[2] or {}).items():
+            by_mode.setdefault(mode if mode in ("bypass", "mute", "enable") else "enable", []).append(int(nid))
+        for mode, ids in by_mode.items():
+            r = _diag_comfy_command(self, rec[1], {"op": "set_mode", "node_ids": ids, "mode": mode})
+            if not r["ok"]:
+                return r
+        return {"ok": True}
+    r = _diag_comfy_command(self, rec[1], {"op": "set_widget", "node_id": rec[2], "widget": rec[3], "value": rec[4]})
+    return r if not r["ok"] else {"ok": True}
+
+
+def _diag_undo_token(self, rec):
+    with self._diag_lock:
+        self._diag_seq += 1
+        tok = f"u{self._diag_seq}"
+        self._diag_undo[tok] = rec
+    return tok
+
+
+def _diag_set_launcher(self, changes):
+    for k, v in changes.items():
+        if k == "proxy_enabled":
+            r = _api_proxy_set(self, v, self.cfg.get("proxy_url", ""))
+            if not r.get("ok"):
+                return r
+        elif k == "mirror_mode":
+            with self._cfg_lock:
+                self.cfg["mirror_mode"] = v
+                if v == "auto":
+                    self.cfg["mirror_detected"] = ""
+                    self.cfg["github_mirror_detected"] = ""
+                try:
+                    cm.save_config(self.cfg)
+                except OSError:
+                    pass
+            self._emit("settings", "mirror_status", ok=True, text=self._mirror_status_text())
+    self._emit("diag", "cfg_changed")
+    return {"ok": True}
+
+
+_DIAG_CFG_TEXT = {"mirror_mode": {"always": "总是使用国内镜像", "auto": "自动检测", "never": "总是使用官方源"},
+                  "proxy_enabled": {True: "打开启动器代理", False: "关闭启动器代理"}}
+
+
+def _diag_exec(self, aid, p):
+    """执行一个已校验过的修复动作。返回 {"ok", "text", "undo"?, "page"?} 或 {"ok": False, "error"}"""
+    if aid == "reveal_path":
+        r = self.reveal_in_explorer(p["path"])
+        return {**r, "text": "已在资源管理器里定位"}
+    if aid == "set_instance_cfg":
+        cur = cm.instance_cfg(self.cfg, p["iid"]) or {}
+        before = {k: cur.get(k) for k in p["changes"]}
+        r = _api_instance_config_update(self, p["iid"], p["changes"])
+        if not r.get("ok"):
+            return r
+        self._emit("diag", "cfg_changed", iid=p["iid"])
+        desc = "、".join(f"{k} 改成 {v}" for k, v in p["changes"].items())
+        return {"ok": True, "text": f"实例设置：{desc}（下次启动生效）",
+                "undo": _diag_undo_token(self, ("inst", p["iid"], before))}
+    if aid in ("add_launch_arg", "remove_launch_arg"):
+        before = (cm.instance_cfg(self.cfg, p["iid"]) or {}).get("extra_args") or ""
+        arg = p["arg"]
+        if aid == "add_launch_arg":
+            if arg.split()[0] in before.split():
+                return {"ok": True, "text": f"附加参数里已经有 {arg}"}
+            new = (before + " " + arg).strip()
+        else:
+            new = " ".join(before.replace(arg, " ").split())
+            if new == " ".join(before.split()):
+                return {"ok": False, "error": f"附加参数里没有 {arg}"}
+        r = _api_instance_config_update(self, p["iid"], {"extra_args": new})
+        if not r.get("ok"):
+            return r
+        self._emit("diag", "cfg_changed", iid=p["iid"])
+        verb = "加上" if aid == "add_launch_arg" else "去掉"
+        return {"ok": True, "text": f"附加参数{verb} {arg}（下次启动生效）",
+                "undo": _diag_undo_token(self, ("inst", p["iid"], {"extra_args": before}))}
+    if aid == "set_launcher_cfg":
+        before = {k: self.cfg.get(k) for k in p["changes"]}
+        r = _diag_set_launcher(self, p["changes"])
+        if not r.get("ok"):
+            return r
+        desc = "、".join(_DIAG_CFG_TEXT.get(k, {}).get(v, f"{k}={v}") for k, v in p["changes"].items())
+        return {"ok": True, "text": f"启动器设置：{desc}", "undo": _diag_undo_token(self, ("launcher", before))}
+    if aid == "redetect_network":
+        _api_redetect_network(self)
+        return {"ok": True, "text": "正在重新检测网络环境（约 6 秒），结果见「启动器设置」"}
+    if aid == "restart_instance":
+        r = self._runner(p["iid"])
+        root = (self.instance_cfg(p["iid"]) or {}).get("webui_root", "")
+        if r.running():
+            r.stop()
+        res = r.start(root)
+        if not res.get("ok"):
+            return res
+        return {"ok": True, "text": "已重新启动", "page": "launch"}
+    if aid == "comfy_install_deps":
+        name = os.path.basename(p["node_dir"])
+        return _diag_comfy_job(self, p["iid"], f"重装节点「{name}」的依赖",
+                               lambda dep, log: dep.node_deps(p["node_dir"], name) is None)
+    if aid == "pip_install":
+        pk = p["packages"]
+        return _diag_comfy_job(self, p["iid"], "安装 " + " ".join(pk),
+                               lambda dep, log: dep.pip(pk, os.path.dirname(dep.py), "诊断") == 0)
+    if aid == "comfy_install_node":
+        slug = vm.repo_slug(p["url"])
+        for n in comfy_nodes.CATALOG:
+            if n["url"] and vm.repo_slug(n["url"]) == slug:
+                r = _api_ext_install(self, [n["id"]], p["iid"])
+                break
+        else:
+            folder = p["url"].rstrip("/").rsplit("/", 1)[-1]
+            node = {"id": "diag:" + slug, "name": p.get("name") or folder, "url": p["url"] + ".git",
+                    "folder": folder}
+            r = _api_ext_install(self, [], p["iid"], nodes=[node])
+        if not r.get("ok"):
+            return r
+        return {"ok": True, "text": "已开始安装，进度看「一键启动」页的运行日志；装完重启 ComfyUI", "page": "launch"}
+    if aid == "ext_disable":
+        r = _api_ext_toggle(self, p["rel"], False, p["iid"])
+        if not r.get("ok"):
+            return r
+        return {"ok": True, "text": f"已停用「{p['rel']}」，可在「常用插件」页重新启用"}
+    if aid == "download_model":
+        return _diag_download(self, p)
+    if aid == "comfy_set_mode":
+        r = _diag_comfy_command(self, p["iid"], {"op": "set_mode", "node_ids": p["node_ids"], "mode": p["mode"]})
+        if not r["ok"]:
+            return r
+        return {"ok": True, "text": r["text"],
+                "undo": _diag_undo_token(self, ("comfy_mode", p["iid"], r.get("prev") or {}))}
+    if aid == "comfy_set_widget":
+        r = _diag_comfy_command(self, p["iid"], {"op": "set_widget", "node_id": p["node_id"], "widget": p["widget"],
+                                                 "value": p["value"]})
+        if not r["ok"]:
+            return r
+        return {"ok": True, "text": r["text"], "undo": _diag_undo_token(
+            self, ("comfy_widget", p["iid"], p["node_id"], p["widget"], r.get("prev")))}
+    if aid == "trash_file":
+        if not ml.send_to_trash(p["path"]):
+            return {"ok": False, "error": "移到回收站失败（文件可能正被 WebUI / ComfyUI 占用，先停止实例）"}
+        return {"ok": True, "text": f"已把 {os.path.basename(p['path'])} 移到回收站"}
+    return {"ok": False, "error": f"动作 {aid} 由界面执行"}
+
+
+def _diag_comfy_job(self, iid, label, work):
+    """往 ComfyUI 实例的 Python 里装东西（借用「常用插件」页的任务通道：日志、取消、忙碌标记都共用）"""
+    if _ext_busy(self):
+        return {"ok": False, "error": "已有插件任务在进行中，等它结束再试"}
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    if info["kind"] != "comfyui" or not comfy_dir:
+        return {"ok": False, "error": "这个动作只适用于 ComfyUI 实例"}
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，文件被占用会装失败——请先停止它再装"}
+    py = (cm.comfy_python(cfg, info["root"]) or "").strip('"')
+    if not py:
+        return {"ok": False, "error": "找不到这个 ComfyUI 用的 Python"}
+    self._ext_cancel = False
+
+    def job():
+        log = lambda t: self._emit("ext", "log", text=t)
+        dep = comfy_nodes.DepInstaller(
+            py, lambda prog, args, cwd, e, t: _ext_run_cmd(self, prog, args, cwd, e, t), log,
+            comfy_nodes.node_env(comfy_dir, cm.build_comfy_env(cfg, info["root"])),
+            lambda: self._ext_cancel, _gh_sources(cfg, lambda m: log(m + "\n")),
+            _pip_mirror_argsets(cfg, lambda m: log(m + "\n")))
+        try:
+            log(f"[诊断] {label}（{info['name']}）\n")
+            ok = work(dep, log)
+            if self._ext_cancel:
+                log("\n[诊断] 已取消\n")
+            else:
+                log("\n[诊断] 完成，重启 ComfyUI 后生效。\n" if ok else "\n[诊断] 没有全部成功，原因看上面的日志。\n")
+            self._emit("ext", "done")
+        except Exception as e:
+            log(f"\n[诊断] 出错：{e}\n{traceback.format_exc()[-1200:]}\n")
+            self._emit("ext", "done", error=str(e))
+        finally:
+            dep.close()
+            self._ext_proc = None
+            self._emit("ext", "state", running=False)
+
+    self._emit("ext", "state", running=True)
+    self._ext_thread = self._spawn(job, name="diag-comfy")
+    return {"ok": True, "text": f"已开始{label}，进度看「一键启动」页的运行日志", "page": "launch"}
+
+
+def _diag_new_job(self):
+    with self._diag_lock:
+        self._diag_seq += 1
+        job = f"ai{self._diag_seq}"
+        self._diag_jobs[job] = threading.Event()
+    return job
+
+
+def _diag_run_ai(self, job, target, note="", followup=None, fix=False):
+    cancel = self._diag_jobs.get(job)
+
+    def work():
+        try:
+            ctx, text = _diag_target(self, target)
+            findings = dg.scan(text, ctx)
+            res = dl.run(self, ctx, text, findings,
+                         on_step=lambda t: self._emit("diag", "ai_step", job=job, text=t),
+                         cancelled=cancel.is_set, note=note, followup=followup, fix=fix)
+            self._emit("diag", "ai_done", job=job, result=res, fix=bool(fix))
+        except dl.LlmError as e:
+            self._emit("diag", "ai_error", job=job, error=str(e))
+        except Exception as e:
+            self._emit("diag", "ai_error", job=job, error=f"诊断内部出错：{e}")
+            print(traceback.format_exc())
+        finally:
+            self._diag_jobs.pop(job, None)
+
+    self._spawn(work, name="diag-ai")
+
+
+def _api_diag_run(self, target=None):
+    """诊断按钮：跑本地规则（缺失节点会查一次节点表，可能要几秒）"""
+    try:
+        return _diag_collect(self, target)
+    except Exception as e:
+        return {"ok": False, "error": f"诊断出错：{e}"}
+
+
+def _api_diag_ai(self, target=None, note="", followup=None, fix=False):
+    """note：用户这次在输入框里说的话（记住的说明会自动加上）；followup：上一次的 AI 结论（追问时带上）；
+    fix：用户点了「执行修复」，AI 要给出能直接执行的动作"""
+    if not dl.resolve(self.cfg):
+        return {"ok": False, "need_setup": True, "error": "还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key"}
+    job = _diag_new_job(self)
+    prev = followup if isinstance(followup, dict) else None
+    _diag_run_ai(self, job, target, _diag_compose_note(self, target, note), prev, bool(fix))
+    return {"ok": True, "job": job}
+
+
+def _diag_note_key(target):
+    t = target or {}
+    return "launcher" if t.get("type") == "launcher" else f"inst:{t.get('iid') or ''}"
+
+
+def _diag_compose_note(self, target, message=""):
+    """发给 AI 的说明 = 记住的长期说明 + 这次说的话"""
+    memo, msg = _diag_saved_note(self, target).strip(), str(message or "").strip()[:2000]
+    if memo and msg and msg != memo:
+        return f"（一直有效的说明）{memo}\n（这次说的）{msg}"
+    return msg or memo
+
+
+def _diag_saved_note(self, target):
+    notes = self.cfg.get("diag_notes")
+    return str((notes or {}).get(_diag_note_key(target)) or "") if isinstance(notes, dict) else ""
+
+
+def _api_diag_note_set(self, target=None, text=""):
+    """诊断面板里「给 AI 的说明」：按诊断对象记住，之后的诊断、自动诊断、接管都带上"""
+    key = _diag_note_key(target or {"type": "inst", "iid": self.cfg.get("active_instance")})
+    with self._cfg_lock:
+        notes = dict(self.cfg.get("diag_notes") or {})
+        text = str(text or "").strip()[:2000]
+        if text:
+            notes[key] = text
+        else:
+            notes.pop(key, None)
+        self.cfg["diag_notes"] = notes
+        try:
+            cm.save_config(self.cfg)
+        except OSError as e:
+            return {"ok": False, "error": f"保存失败：{e}"}
+    return {"ok": True}
+
+
+# ---- AI 接管：AI 定修复 → 直接执行 → 重启实例 → 看新日志 → 还有报错就再来，最多几轮 ----
+
+_TK_ROUNDS = 5
+_TK_READY_TIMEOUT = 900      # 等实例起来（首次启动可能在装依赖）
+_TK_SETTLE = 20              # 起来后再看一会儿，启动后才冒出来的报错（节点加载、桥接插件）也收进来
+_TK_WAIT_JOBS = 3 * 3600     # 等装依赖 / 下载模型
+_TK_SKIP = {"restart_instance"}      # 每轮自己会重启
+_TK_LIVE = {"comfy_set_mode", "comfy_set_widget"}    # 改网页里的工作流：实例开着做，不用重启
+
+
+def _tk_sleep(cancel, seconds):
+    return cancel.wait(seconds)
+
+
+def _tk_wait_jobs(self, cancel):
+    """等这轮动作开的后台任务（装节点 / 装依赖 / 下载模型）做完"""
+    t0 = time.time()
+    while time.time() - t0 < _TK_WAIT_JOBS:
+        with self._diag_lock:
+            downloading = bool(self._diag_dl)
+        if not _ext_busy(self) and not downloading:
+            return True
+        if _tk_sleep(cancel, 2):
+            return False
+    return False
+
+
+def _tk_restart(self, iid, cancel, step):
+    """重启实例并等它就绪。返回 (是否起来了, 说明)"""
+    r = self._runner(iid)
+    root = (self.instance_cfg(iid) or {}).get("webui_root", "")
+    if r.running():
+        step("停止实例…")
+        r.stop()
+    res = r.start(root)
+    if not res.get("ok"):
+        return False, "启动失败：" + str(res.get("error") or res.get("text") or res)
+    step("已重新启动，等它起来…")
+    t0 = time.time()
+    while time.time() - t0 < _TK_READY_TIMEOUT:
+        if _tk_sleep(cancel, 2):
+            return False, "已停止接管"
+        if r.state == "ready":
+            break
+        if r.state == "stopped" or not r.running():
+            return False, r.status_text or "进程退出了"
+    else:
+        return False, f"等了 {_TK_READY_TIMEOUT // 60} 分钟还没起来"
+    step(f"已经起来了（{r.url or ''}），再观察 {_TK_SETTLE} 秒有没有报错…")
+    if _tk_sleep(cancel, _TK_SETTLE):
+        return False, "已停止接管"
+    if not r.running():
+        return False, r.status_text or "起来以后又退出了"
+    return True, f"运行中 {r.url or ''}".strip()
+
+
+def _diag_takeover_run(self, job, iid, note):
+    cancel = self._diag_jobs.get(job)
+    target = {"type": "inst", "iid": iid}
+    r = self._runner(iid)
+    label = (self.instance_cfg(iid) or {}).get("name") or iid
+
+    def step(text, kind="info", **extra):
+        self._emit("diag", "takeover_step", job=job, iid=iid, text=text, kind=kind, **extra)
+        if kind in ("round", "act", "result", "warn"):
+            r.log(f"[诊断] AI 接管：{text}\n")
+
+    def done(ok, text, **extra):
+        r.log(f"[诊断] AI 接管结束：{text}\n")
+        self._emit("diag", "takeover_done", job=job, iid=iid, ok=ok, text=text, **extra)
+
+    history = []
+    try:
+        ctx, text = _diag_target(self, target)
+        if not r.running() and not text.strip():
+            step(f"「{label}」还没运行过：先启动一次看看有没有报错", "round")
+            ok, why = _tk_restart(self, iid, cancel, step)
+            state = why
+        else:
+            state = r.status_text or ("运行中" if r.running() else "已停止")
+        for rnd in range(1, _TK_ROUNDS + 1):
+            if cancel.is_set():
+                return done(False, "已停止接管", history=history)
+            ctx, text = _diag_target(self, target)
+            findings = dg.scan(text, ctx)
+            _diag_enrich(self, findings, ctx)
+            if rnd > 1 and r.state == "ready" and not findings:
+                return done(True, f"第 {rnd - 1} 轮修复后重启正常，日志里没再看到报错", history=history)
+            step(f"第 {rnd} 轮：AI 看日志" + (f"（规则认出 {len(findings)} 个问题）" if findings else ""), "round")
+            res = dl.run(self, ctx, text, findings, on_step=lambda t: step(t, "ai"), cancelled=cancel.is_set,
+                         note=note, takeover={"round": rnd, "max": _TK_ROUNDS, "history": history, "state": state})
+            step(res.get("summary") or "AI 没给结论", "result", cause=res.get("cause") or "",
+                 steps=res.get("steps") or [])
+            acts = [a for a in res.get("actions") or [] if a["aid"] not in _TK_SKIP]
+            skipped = [a for a in acts if a["risk"] in ("danger", "ui")]
+            acts = [a for a in acts if a["risk"] in ("low", "confirm")]
+            for a in skipped:
+                step(f"「{a['label']}」要你自己点（删文件 / 打开页面不自动做）", "warn", action=a)
+            if res.get("verdict") == "fixed" and not acts:
+                return done(True, res.get("summary") or "AI 判断已经没问题了", history=history)
+            if not acts:
+                return done(False, "需要你自己处理：" + (res.get("summary") or ""), steps=res.get("steps") or [],
+                            history=history)
+            # 改工作流的动作要 ComfyUI 开着、网页开着，先做；其余的（装东西、改设置）要停实例、做完重启
+            live = [a for a in acts if a["aid"] in _TK_LIVE]
+            offline = [a for a in acts if a["aid"] not in _TK_LIVE]
+            did, ok_live = [], []
+
+            def apply(batch):
+                for a in batch:
+                    if cancel.is_set():
+                        return
+                    try:
+                        out = _diag_exec(self, a["aid"], a["params"])
+                    except Exception as e:
+                        out = {"ok": False, "error": str(e)}
+                    text_ = out.get("text") if out.get("ok") else "失败：" + str(out.get("error"))
+                    step(f"{a['label']} → {text_}", "act", undo=out.get("undo") or "")
+                    did.append(f"{a['label']}（{text_}）")
+                    if out.get("ok") and a["aid"] in _TK_LIVE:
+                        ok_live.append(a)
+                    if out.get("ok") and not _tk_wait_jobs(self, cancel):
+                        return
+
+            apply(live)
+            if live and not offline and not cancel.is_set() and not ok_live:
+                return done(False, "改不了网页里的工作流（原因见上面），需要你自己改：" + (res.get("summary") or ""),
+                            steps=res.get("steps") or [], history=history)
+            if live and not offline and not cancel.is_set():
+                # 工作流的问题要点「运行」才会再出现，接管没法替用户跑（可能是很长的视频任务），到这里交还给用户
+                return done(True, "已在 ComfyUI 网页里改好工作流，点「运行」试试；没问题记得按 Ctrl+S 保存",
+                            history=history + [f"第 {rnd} 轮：{'；'.join(did)}"])
+            if offline and r.running():
+                step("先停止实例（装东西时文件不能被占用）…")
+                r.stop()
+            apply(offline)
+            if cancel.is_set():
+                return done(False, "已停止接管", history=history)
+            ok, state = _tk_restart(self, iid, cancel, step)
+            step(("重启正常：" if ok else "重启后还是不行：") + state, "result" if ok else "warn")
+            history.append(f"第 {rnd} 轮：{res.get('summary') or ''}；做了：{'；'.join(did) or '无'}；重启结果：{state}")
+        ctx, text = _diag_target(self, target)
+        if r.state == "ready" and not dg.scan(text, ctx):
+            return done(True, f"第 {_TK_ROUNDS} 轮修复后重启正常，日志里没再看到报错", history=history)
+        done(False, f"修了 {_TK_ROUNDS} 轮还没好，停下来了。可以把诊断报告发给作者，或者补充说明后再接管一次",
+             history=history)
+    except dl.LlmError as e:
+        done(False, f"AI 出错，接管中止：{e}", history=history)
+    except Exception as e:
+        print(traceback.format_exc())
+        done(False, f"接管内部出错：{e}", history=history)
+    finally:
+        with self._diag_lock:
+            if self._diag_tk.get(iid) == job:
+                self._diag_tk.pop(iid, None)
+        self._diag_jobs.pop(job, None)
+
+
+def _api_diag_takeover(self, target=None, note=None):
+    """AI 接管：自动修 → 重启 → 看日志 → 再修，直到没报错、要用户动手或轮数用完。只支持实例"""
+    t = target or {"type": "inst", "iid": self.cfg.get("active_instance")}
+    iid = t.get("iid")
+    if t.get("type") == "launcher" or not cm.find_instance(self.cfg, iid):
+        return {"ok": False, "error": "AI 接管只能用在 WebUI / ComfyUI 实例上"}
+    if not dl.resolve(self.cfg):
+        return {"ok": False, "need_setup": True, "error": "还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key"}
+    with self._diag_lock:
+        if iid in self._diag_tk:
+            return {"ok": False, "error": "这个实例已经在 AI 接管中了", "job": self._diag_tk[iid]}
+    job = _diag_new_job(self)
+    with self._diag_lock:
+        self._diag_tk[iid] = job
+    note = _diag_compose_note(self, t, note)
+    self._spawn(lambda: _diag_takeover_run(self, job, iid, note), name="diag-takeover")
+    return {"ok": True, "job": job, "rounds": _TK_ROUNDS}
+
+
+def _api_diag_ai_cancel(self, job):
+    ev = self._diag_jobs.get(job)
+    if ev:
+        ev.set()
+    return {"ok": True}
+
+
+def _api_diag_fix(self, aid, params=None):
+    p, err = dg.validate_action(self, aid, params, dl.allowed_roots(self))
+    if err:
+        return {"ok": False, "error": err}
+    if dg.ACTIONS[aid]["risk"] == "ui":
+        return {"ok": True, "ui": True, "params": p}
+    try:
+        return _diag_exec(self, aid, p)
+    except Exception as e:
+        return {"ok": False, "error": f"执行出错：{e}"}
+
+
+def _api_diag_undo(self, token):
+    with self._diag_lock:
+        rec = self._diag_undo.pop(token, None)
+    if not rec:
+        return {"ok": False, "error": "已经撤销过了"}
+    if rec[0] == "inst":
+        r = _api_instance_config_update(self, rec[1], rec[2])
+        self._emit("diag", "cfg_changed", iid=rec[1])
+    elif rec[0] in ("comfy_mode", "comfy_widget"):
+        r = _diag_comfy_undo(self, rec)
+        if not r.get("ok"):
+            with self._diag_lock:
+                self._diag_undo[token] = rec     # 网页暂时没开着：留着下次再撤销
+    else:
+        r = _diag_set_launcher(self, rec[1])
+    if not r.get("ok"):
+        return r
+    for note in self._diag_applied.values():
+        if note.get("undo") == token:
+            note["undone"] = True
+    return {"ok": True, "text": "已撤销"}
+
+
+def _api_diag_info(self):
+    return {"ok": True, "providers": dl.provider_list(), "ai_ready": bool(dl.resolve(self.cfg)),
+            "targets": [{"type": "inst", "iid": i.get("id"), "name": i.get("name") or i.get("id")}
+                        for i in self.cfg.get("instances") or []] + [{"type": "launcher", "name": "启动器本身"}]}
+
+
+def _api_diag_llm_test(self, settings=None):
+    cfg = {**self.cfg, **{k: v for k, v in (settings or {}).items() if k.startswith("diag_llm_")}}
+    ok, text = dl.ping(cfg)
+    return {"ok": ok, "text": text}
+
+
+def _api_diag_report_error(self, text):
+    """界面上没接住的 JS 异常：也算启动器报错"""
+    text = str(text or "")[:2000]
+    if text:
+        dg.LOGS.add("app", f"[界面] {text}\n")
+        _diag_launcher_auto(self, "ui", text)
+    return {"ok": True}
+
+
+# ============================================================
 # 把分节写的函数挂到 LauncherApi 上
 # ============================================================
 
@@ -8053,6 +8968,16 @@ for _name, _fn in {
     "set_multi_ui": _api_set_multi_ui,
     "set_hidden_pages": _api_set_hidden_pages,
     "perf_start": _api_perf_start,
+    "diag_run": _api_diag_run,
+    "diag_ai": _api_diag_ai,
+    "diag_ai_cancel": _api_diag_ai_cancel,
+    "diag_takeover": _api_diag_takeover,
+    "diag_note_set": _api_diag_note_set,
+    "diag_fix": _api_diag_fix,
+    "diag_undo": _api_diag_undo,
+    "diag_info": _api_diag_info,
+    "diag_llm_test": _api_diag_llm_test,
+    "diag_report_error": _api_diag_report_error,
     "_perf_loop": _perf_loop,
 }.items():
     setattr(LauncherApi, _name, _fn)

@@ -61,6 +61,7 @@
     info_shared_vram_fallback: false,
     info_model_hash_calc: true,
     civitai_api_key: "",
+    diag_llm_provider: "deepseek", diag_auto_fix: true, diag_auto_launcher: true, diag_auto_ai: true,
     civitai_last_dir: "",
     liblib_token: "",
     mirror_mode: "auto",
@@ -423,6 +424,92 @@
         status: on ? "（预览模式）已开启" : "（预览模式）未开启" }),
       proxy_test: () => ok({ ok: true, url: "http://127.0.0.1:7890", results: [
         { name: "HuggingFace（演示）", ok: true, ms: 0 }, { name: "GitHub（演示）", ok: false, ms: 0, error: "预览模式不联网" }] }),
+      // 报错诊断（演示数据）
+      diag_info: () => ok({ ok: true, ai_ready: true, providers: [
+        { id: "deepseek", label: "DeepSeek（国内直连，默认）", model: "deepseek-v4-flash", base: "https://api.deepseek.com", key_url: "https://platform.deepseek.com/api_keys" },
+        { id: "qwen", label: "通义千问（阿里云百炼，国内直连）", model: "qwen-plus", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", key_url: "https://bailian.console.aliyun.com/" },
+        { id: "claude", label: "Claude（Anthropic，国内需要代理）", model: "claude-sonnet-5-5", base: "https://api.anthropic.com", key_url: "https://console.anthropic.com/settings/keys" },
+        { id: "custom", label: "自定义（OpenAI 兼容接口 / 中转）", model: "", base: "", key_url: "" }],
+        targets: [{ type: "inst", iid: "demo", name: "ComfyUI" }, { type: "launcher", name: "启动器本身" }] }),
+      diag_run: (t) => ok(t && t.type === "launcher"
+        ? { ok: true, target: t, name: "启动器", kind: "launcher", lines: 42, ai_ready: true, ai_model: "deepseek-v4-flash", findings: [
+          { rule: "net_unreachable", key: "n", level: "error", title: "连不上 GitHub",
+            text: "下载时连 GitHub 超时或被断开，国内直连这些站很常见。\n· GitHub 有国内镜像：已改成总是走镜像（下次下载 / 启动生效），能直连了可以撤销。",
+            evidence: "fatal: unable to access 'https://github.com/x/y/': Failed to connect to github.com port 443",
+            actions: [{ aid: "set_launcher_cfg", label: "改成总是用国内镜像", risk: "low", auto: true, params: {},
+              applied: { text: "启动器设置：总是使用国内镜像", undo: "u1" } },
+              { aid: "redetect_network", label: "重新检测网络", risk: "low", params: {} },
+              { aid: "open_page", label: "去设置网络代理", risk: "ui", params: { page: "launcher" } }] }] }
+        : { ok: true, target: t, name: "ComfyUI", kind: "comfy", lines: 1834, ai_ready: true, ai_model: "deepseek-v4-flash", findings: [
+          { rule: "comfy_missing_model", key: "m", level: "error", title: "工作流里的模型本机没有",
+            text: "工作流「诊断测试_缺节点（Anima）.json」选的这些模型在本机的模型目录里找不到：\n· anima_baseV10.safetensors（UNet加载器 的 unet_name，放 models\\diffusion_models）\n· kieed-step00006000.safetensors（加载LoRA 的 lora_name，放 models\\loras）\nComfyUI 网页会拦着不让运行。下好放进对应目录后，在网页里按 R 刷新再运行。\n找到的下载地址：\n· anima_baseV10.safetensors → Civitai：Anima / v1.0（文件名完全一致）\n没直接找到下载地址：kieed-step00006000.safetensors。可以让 AI 去 Civitai / HuggingFace 上搜。",
+            evidence: "工作流「诊断测试_缺节点（Anima）.json」缺 2 个模型，ComfyUI 网页会拦着不让运行（启动器的「诊断」里能一键处理）",
+            actions: [{ aid: "download_model", label: "下载 anima_baseV10.safetensors", risk: "confirm", params: {} },
+              { aid: "ai_ask", label: "让 AI 找下载地址", risk: "ui", params: { note: "工作流缺这些模型，帮我找到下载地址并给出下载按钮：\n- kieed-step00006000.safetensors（LoraLoader 的 lora_name，目录 models/loras）" } }] },
+          { rule: "vae_nan", key: "vae_nan", level: "error", title: "VAE 溢出（出图全黑 / NaN）",
+            text: "解码图片时 VAE 用半精度算溢出了，结果是 NaN，出来就是黑图或报错。SDXL 原版 VAE 和不少二次元模型自带的 VAE 都有这个毛病。\n解决：让 VAE 用 FP32 算（略慢一点、多占一点显存），或者换一个修过的 VAE（如 sdxl-vae-fp16-fix）。",
+            evidence: "nodes.py:1595: RuntimeWarning: invalid value encountered in cast",
+            actions: [{ aid: "set_instance_cfg", label: "VAE 改用 FP32（--fp32-vae）", risk: "low", auto: true, params: {},
+              applied: { text: "实例设置：vae_precision 改成 fp32（下次启动生效）", undo: "u2" } },
+              { aid: "restart_instance", label: "重启生效", risk: "confirm", params: {} }] },
+          { rule: "comfy_import_failed", key: "c", level: "error", title: "节点「ComfyUI-Foo」加载失败",
+            text: "ComfyUI 启动时没能导入节点「ComfyUI-Foo」：缺少 Python 包 cv2。\n这个节点提供的功能都用不了，用到它的工作流会报「缺少节点」。",
+            evidence: "Cannot import D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo module for custom nodes: No module named 'cv2'",
+            actions: [{ aid: "comfy_install_deps", label: "重装「ComfyUI-Foo」的依赖", risk: "confirm", params: {} },
+              { aid: "pip_install", label: "安装缺的包 opencv-python", risk: "confirm", params: {} },
+              { aid: "ext_disable", label: "先停用「ComfyUI-Foo」", risk: "confirm", params: {} }] }] }),
+      diag_ai: (t, note, followup, fix) => {
+        const job = "ai1";
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, ...data }), ms);
+        send("ai_step", { text: "正在请求 deepseek-v4-flash ..." }, 300);
+        if (fix) {
+          send("ai_step", { text: "读取文件 D:\\ComfyUI\\user\\wwy_bridge\\current_workflow.json" }, 800);
+          send("ai_done", { fix: true, result: { summary: "绕过「MiniMax H3 Block Cache (T8)」，只留 Spectrum 加速", confidence: "high",
+            cause: "两个加速节点不能同时用；工作流里 Block Cache 是 #23。", steps: ["点「运行」试试，没问题按 Ctrl+S 保存"],
+            actions: [{ aid: "comfy_set_mode", label: "绕过节点 #23「MiniMax H3 Block Cache (T8)」", risk: "low", params: {} }],
+            dropped: [], verdict: "continue" } }, 1500);
+          return ok({ ok: true, job });
+        }
+        if (note && /模型/.test(note)) {
+          send("ai_step", { text: "搜索模型 kieed-step00006000.safetensors" }, 900);
+          send("ai_done", { result: { summary: "kieed 这个 LoRA 在 Civitai 上找到了同名文件", confidence: "medium",
+            cause: "search_model 在 Civitai 搜到「Kieed 画风」v6000，文件名 kieed-step00006000.safetensors 完全一致，大小 151 MB。",
+            steps: ["点下面的「下载」，下好后在 ComfyUI 网页里按 R 刷新再运行"],
+            actions: [{ aid: "download_model", label: "下载 kieed-step00006000.safetensors", risk: "confirm", params: {} }],
+            dropped: [] } }, 1700);
+          return ok({ ok: true, job });
+        }
+        send("ai_step", { text: "查看目录 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo" }, 900);
+        send("ai_step", { text: "读取文件 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo\\requirements.txt" }, 1500);
+        send("ai_done", { result: { summary: "ComfyUI-Foo 的依赖没装，缺 opencv", confidence: "high",
+          cause: "日志里 Cannot import ... No module named 'cv2'；这个节点的 requirements.txt 写了 opencv-python，但 python_embeded 里没有这个包——节点是手动解压进来的，没跑过依赖安装。",
+          steps: ["在「一键启动」页停止 ComfyUI", "点下面的「重装依赖」", "装完重新启动 ComfyUI"],
+          actions: [{ aid: "comfy_install_deps", label: "重装依赖", risk: "confirm", params: {} }], dropped: [] } }, 2300);
+        return ok({ ok: true, job });
+      },
+      diag_takeover: (t) => {
+        const job = "tk1", iid = (t && t.iid) || "demo";
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, iid, ...data }), ms);
+        const s = (text, kind, ms, extra) => send("takeover_step", { text, kind, ...(extra || {}) }, ms);
+        s("第 1 轮：AI 看日志（规则认出 2 个问题）", "round", 300);
+        s("读取文件 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo\\requirements.txt", "ai", 800);
+        s("ComfyUI-Foo 缺 opencv；VAE 半精度溢出", "result", 1400);
+        s("先停止实例（装东西时文件不能被占用）…", "info", 1700);
+        s("重装「ComfyUI-Foo」的依赖 → 已开始重装节点「ComfyUI-Foo」的依赖", "act", 2200);
+        s("VAE 改用 FP32 → 实例设置：vae_precision 改成 fp32（下次启动生效）", "act", 2500, { undo: "u9" });
+        s("已重新启动，等它起来…", "info", 2900);
+        s("重启正常：运行中 http://127.0.0.1:8188", "result", 3800);
+        send("takeover_done", { ok: true, text: "第 1 轮修复后重启正常，日志里没再看到报错" }, 4300);
+        return ok({ ok: true, job, rounds: 5 });
+      },
+      diag_note_set: () => ok({ ok: true }),
+      diag_ai_cancel: () => ok({ ok: true }),
+      diag_fix: (aid, p) => ok(aid === "comfy_set_mode" ? { ok: true, undo: "u7",
+          text: "已绕过节点 #23「MiniMax H3 Block Cache (T8)」（网页里还没保存，确认没问题按 Ctrl+S）" }
+        : aid === "open_page" || aid === "open_url" || aid === "ai_ask" ? { ok: true, ui: true, params: p || {} }
+        : { ok: true, text: "（预览模式）已执行：" + aid }),
+      diag_undo: () => ok({ ok: true, text: "已撤销" }),
+      diag_llm_test: () => ok({ ok: true, text: "（预览模式）deepseek-v4-flash 已连通（0.8 秒），回复：正常" }),
       _noop: () => ok({}),
     },
   };

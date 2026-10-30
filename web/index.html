@@ -206,7 +206,7 @@
         </div>
 
         <div class="console-wrap">
-          <div class="console-head"><span>运行日志</span><button class="btn btn-xs" id="launch-log-clear">清空</button></div>
+          <div class="console-head"><span>运行日志</span><span class="console-btns"><button class="btn btn-xs" id="launch-diag" title="分析运行日志里的报错，给出解决办法和一键修复">诊断<em class="dg-badge" id="launch-diag-badge" hidden></em></button><button class="btn btn-xs" id="launch-log-clear">清空</button></span></div>
           <pre class="console" id="launch-log"></pre>
         </div>
       </section>
@@ -396,6 +396,36 @@
           </div>
           <div class="hint" id="s-proxy-result" hidden></div>
           <div class="hint">开着代理软件、浏览器能上 HuggingFace，但 WD14 还是下不了模型？多半是代理软件没开 TUN/增强模式，命令行程序不走它。在这里填上代理软件的 HTTP 端口即可，效果等同于在 ComfyUI 启动脚本里写 <code>set HTTPS_PROXY=http://127.0.0.1:7890</code>。启动器马上生效；已经在运行的 WebUI / ComfyUI 要重启一次才会用上。</div>
+        </div>
+
+        <div class="card" id="diag-settings-card">
+          <div class="card-title">报错诊断<span class="card-title-hint">一键启动页日志框上的「诊断」、Ctrl+Shift+D 都能打开；本地规则不联网，认不出的交给 AI</span></div>
+          <div class="form-grid">
+            <label>AI 模型</label>
+            <select id="dg-provider" data-cfg="diag_llm_provider">
+              <option value="deepseek">DeepSeek（国内直连，默认）</option>
+              <option value="qwen">通义千问（阿里云百炼，国内直连）</option>
+              <option value="claude">Claude（Anthropic，国内需要代理）</option>
+              <option value="custom">自定义（OpenAI 兼容接口 / 中转）</option>
+            </select>
+            <label>API Key</label>
+            <div class="row" style="margin:0"><input type="password" id="dg-key" data-cfg="diag_llm_api_key" placeholder="填你自己的 Key（只保存在本机配置里）"><button class="btn" id="dg-key-link">去申请 Key</button></div>
+            <label>模型名</label>
+            <input type="text" id="dg-model" data-cfg="diag_llm_model">
+            <label>接口地址</label>
+            <input type="text" id="dg-base" data-cfg="diag_llm_base_url">
+            <label id="dg-format-row-label">接口格式</label>
+            <div id="dg-format-row"><select data-cfg="diag_llm_format"><option value="openai">OpenAI 兼容（/chat/completions）</option><option value="anthropic">Anthropic（/v1/messages）</option></select></div>
+          </div>
+          <label class="chk-row"><input type="checkbox" data-cfg="diag_auto_fix"><i></i><span>低风险的修复自动执行（改启动参数、切国内镜像这类，可撤销；装依赖、删文件、改版本始终要你点确认）</span></label>
+          <label class="chk-row"><input type="checkbox" data-cfg="diag_auto_launcher"><i></i><span>启动器报错后自动诊断并打开诊断面板</span></label>
+          <label class="chk-row"><input type="checkbox" data-cfg="diag_auto_ai"><i></i><span>自动诊断时本地规则认不出，自动交给 AI 分析（需要填了 Key；会产生少量费用）</span></label>
+          <div class="row" style="align-items:center">
+            <button class="btn" id="dg-test">测试连接</button>
+            <button class="btn btn-accent" id="dg-launcher-btn">诊断启动器</button>
+          </div>
+          <div class="hint" id="dg-test-result" hidden></div>
+          <div class="hint">AI 只能读启动器、实例和模型库目录里的文件，不能改任何东西；它推荐的修复会变成按钮，由你决定点不点。发出去之前会把用户名路径和各种 Key 打码。</div>
         </div>
       </section>
 
@@ -978,6 +1008,28 @@
     <div id="modal-buttons"></div>
   </div>
 </div>
+<!-- 报错诊断面板（js/diagnose.js） -->
+<aside id="diag-drawer" hidden>
+  <div class="dg-head">
+    <div class="dg-head-row"><span class="dg-title">报错诊断</span><button class="btn btn-xs" id="dg-close">关闭</button></div>
+    <div class="dg-head-row"><select id="dg-target"></select><button class="btn btn-xs" id="dg-rerun">重新诊断</button></div>
+    <div class="dg-sub" id="dg-sub"></div>
+  </div>
+  <div class="dg-body">
+    <div class="dg-section">本地规则</div>
+    <div id="dg-findings"></div>
+    <div class="dg-section">AI 分析 <span class="dg-model" id="dg-ai-model"></span></div>
+    <div id="dg-ai"></div>
+    <div id="dg-tk"></div>
+  </div>
+  <div class="dg-compose">
+    <div class="dg-memo" id="dg-memo" hidden><span class="dg-memo-label">记住的说明</span><span id="dg-memo-text"></span><button class="btn btn-xs" id="dg-memo-clear">清除</button></div>
+    <textarea id="dg-input" rows="2" maxlength="2000"
+      placeholder="跟 AI 说：描述问题、追问刚才的结论、让它换个办法，或者「模型我自己有，缺模型不用管」（Ctrl+Enter 发送）"></textarea>
+    <div class="dg-compose-row"><label class="dg-remember"><input type="checkbox" id="dg-remember"> 记住这句，以后诊断和接管都带上</label><button class="btn btn-xs btn-accent" id="dg-send">发给 AI</button></div>
+  </div>
+  <div class="dg-foot"><button class="btn btn-xs" id="dg-copy">复制诊断报告</button><span class="hint">Ctrl+Shift+D 诊断启动器 · Esc 关闭</span></div>
+</aside>
 <!-- 顶部加载条 -->
 <div id="loadbar"><div class="topbar-fill"><span class="topbar-glow"></span></div></div>
 
@@ -1009,6 +1061,7 @@
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
 <script src="js/outputs.js"></script>
+<script src="js/diagnose.js"></script>
 <script src="js/perfmon.js"></script>
 <script src="js/liquid.js"></script>
 <script src="js/neumorph.js"></script>

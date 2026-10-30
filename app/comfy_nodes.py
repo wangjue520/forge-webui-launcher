@@ -435,9 +435,10 @@ def install(ids, comfy_dir, py, git_exe, run, log, env=None, cancelled=lambda: F
     for nid in ids:
         if cancelled():
             break
-        node = find(nid)
+        node = nid if isinstance(nid, dict) else find(nid)   # dict = 目录表之外的节点（报错诊断查到的）
         if not node:
             continue
+        nid = node["id"]
         if is_installed(node, comfy_dir, py):
             res["skipped"].append(nid)
             continue
