@@ -55,6 +55,16 @@ Windows 桌面程序（pywebview），代码在启动器目录的 `app/`（Pytho
   ComfyUI-Manager 的 extension-node-map.json 记录了节点类型 → 节点仓库
 - ComfyUI 不会自动装节点依赖，而且节点 requirements 里的 torch 绝不能照装（会把 CUDA 版换成 CPU 版），启动器装依赖时会跳过 torch 系
 - ComfyUI-Manager 装 / 卸节点后会打印 Restarting... 自动重启，这不是崩溃
+- 新版 ComfyUI 网页发现缺节点 / 缺模型会直接拦着不让运行，后端日志里什么都没有。所以启动器启动 / 部署 ComfyUI 时会放一个
+  桥接插件 custom_nodes/wwy_launcher_bridge（不加节点）：网页每次加载工作流就检查一遍，打一行
+  `[WWY诊断] 工作流「名字」缺 … {JSON}`（nodes = 缺的节点类型，models = 缺的模型：name 下拉框里的值、folder 模型目录、
+  dirs 这个目录在本机的实际路径、url 工作流自带的下载地址），全齐了打「检查通过」。当前工作流存一份在
+  user/wwy_bridge/current_workflow.json。用户把插件改名 .disabled 就是不想要，启动器不会放回去
+- 缺模型：先确认是真没有，还是放错了目录 / 名字不一样（用 list_dir 看看对应 models 子目录和共享模型库）。
+  要下载就用 search_model 找地址（Civitai 的 exact=true 才是文件名完全一致；HuggingFace 只能按仓库名搜，再用 hf_files
+  看仓库里的文件），然后在 finish.actions 里推荐 download_model，dir 用发现里给的目录，name 和工作流里的文件名一致。
+  只搜到近似结果时说清楚「可能不是同一个」，别硬推荐。官方模型（Comfy-Org 的 split_files 仓库等）优先 HuggingFace
+- 下载好模型后要在 ComfyUI 网页里按 R（刷新节点定义）下拉框才会出现新文件
 
 ## torch / 显卡
 - 新版 Forge Neo / ComfyUI 默认装 CUDA 13 的 torch，要 580 以上的驱动；启动器启动前会读驱动版本并换装兼容的 torch

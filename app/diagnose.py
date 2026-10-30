@@ -16,6 +16,7 @@ scope（deploy / ext / ver / civitai ...），启动器自己的内部错误记�
 AI 层（diagnose_llm）推荐的动作也走这张表校验，且一律要用户点。
 """
 import collections
+import hashlib
 import json
 import os
 import re
@@ -29,6 +30,8 @@ APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LAUNCHER_LOG = os.path.join(APP_DIR, "launcher_data", "launcher.log")
 NODE_MAP_CACHE = os.path.join(APP_DIR, "launcher_data", "comfy_node_map.json")
 NODE_MAP_URL = "https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main/extension-node-map.json"
+MODEL_LIST_CACHE = os.path.join(APP_DIR, "launcher_data", "comfy_model_list.json")
+MODEL_LIST_URL = "https://raw.githubusercontent.com/Comfy-Org/ComfyUI-Manager/main/model-list.json"
 
 MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".gguf", ".sft")
 
@@ -112,7 +115,8 @@ def read_launcher_log(max_bytes=200_000):
 QUICK_TRIGGER = re.compile(
     r"error|exception|traceback|nan|import failed|cannot import|does not exist|not found|out of memory|"
     r"页面文件|paging file|proxy|timed out|timeout|max retries|no module named|numpy|refused|"
-    r"ssl|unauthorized|forbidden|no space|空间不足|deserializ|pytorchstreamreader|invalid value encountered",
+    r"ssl|unauthorized|forbidden|no space|空间不足|deserializ|pytorchstreamreader|invalid value encountered|"
+    r"\[WWY诊断\]",
     re.IGNORECASE)
 
 
@@ -298,8 +302,17 @@ ACTIONS = {
     "pip_install": {"risk": "confirm", "params": "iid, packages: [包名或版本约束，如 numpy<2]",
                     "desc": "往 ComfyUI 实例的 Python 里装 / 换 pip 包（不允许动 torch 系），实例需先停止"},
     "ext_disable": {"risk": "confirm", "params": "iid, rel: 扩展/节点文件夹名", "desc": "停用一个出错的扩展或节点（可再启用）"},
+    "download_model": {"risk": "confirm",
+                       "params": "iid, url: 直接下载地址（huggingface.co/…/resolve/…、civitai.com/api/download/models/版本号、"
+                                 "modelscope.cn/…、github.com/…/releases/download/…）, dir: 模型要放的文件夹（缺模型发现里给出的目录）, "
+                                 "name: 文件名（和工作流里写的一致）",
+                       "desc": "在后台下载缺的模型到 ComfyUI 的模型目录（可续传，HuggingFace 按网络情况走 hf-mirror）"},
+    "ai_ask": {"risk": "ui", "params": "note: 交给 AI 的问题说明", "desc": "让 AI 接着查（规则查不到下载地址时用）"},
     "trash_file": {"risk": "danger", "params": "path: 模型文件", "desc": "把损坏的模型文件移到回收站"},
 }
+_DL_URL_RE = re.compile(
+    r"^https://(?:(?:huggingface\.co|hf-mirror\.com)/\S+/resolve/\S+|civitai\.(?:com|green)/api/download/models/\d+\S*|"
+    r"(?:www\.)?modelscope\.cn/\S+|github\.com/\S+/releases/download/\S+)$")
 
 
 def action(aid, label, auto=False, **params):
@@ -318,7 +331,8 @@ def validate_action(api, aid, params, allowed_roots=()):
         return None, f"未知动作 {aid}"
     p = dict(params or {})
     if "iid" in p or aid in ("set_instance_cfg", "add_launch_arg", "remove_launch_arg", "restart_instance",
-                             "comfy_install_deps", "comfy_install_node", "pip_install", "ext_disable"):
+                             "comfy_install_deps", "comfy_install_node", "pip_install", "ext_disable",
+                             "download_model"):
         iid = p.get("iid") or api.cfg.get("active_instance")
         if not cm.find_instance(api.cfg, iid):
             return None, "实例不存在"
@@ -385,6 +399,20 @@ def validate_action(api, aid, params, allowed_roots=()):
                 or not os.path.isdir(nd):
             return None, "不是这个实例的节点文件夹"
         p["node_dir"] = nd
+    elif aid == "download_model":
+        url = str(p.get("url") or "").strip()
+        if not _DL_URL_RE.match(url):
+            return None, "只能从 HuggingFace / hf-mirror / Civitai / ModelScope / GitHub Releases 的直接下载地址下"
+        name = str(p.get("name") or "").strip()
+        if not name or os.path.basename(name) != name or name in (".", "..") or \
+                not name.lower().endswith(MODEL_EXTS + (".onnx",)):
+            return None, "文件名不对（只能是模型文件名，不能带路径）"
+        d = os.path.abspath(str(p.get("dir") or ""))
+        if not p.get("dir") or not allowed_roots or not any(_under(d, r) for r in allowed_roots):
+            return None, "目标文件夹不在实例或模型库目录里"
+        p.update(url=url, name=name, dir=d)
+    elif aid == "ai_ask":
+        p["note"] = str(p.get("note") or "")[:2000]
     return p, None
 
 
@@ -465,12 +493,58 @@ def _b_comfy_import(m, text, ctx):
 
 def _b_comfy_missing(m, text, ctx):
     names = sorted(set(re.findall(r"node (\S+?) does not exist|Node '([^']+)' not found|"
-                                  r"missing_node_type[^\n]*?'([A-Za-z0-9_ .|-]+)'", text)))
+                                  r"'class_type':\s*'([^']+)'", text)))
     flat = sorted({x for tup in names for x in tup if x and not x.startswith("ID")})
     return _finding("comfy_missing_node", "工作流里有没装的节点",
                     "工作流用到了这个 ComfyUI 里没有的节点：" + ("、".join(flat[:12]) or m.group(0)) + "。\n"
                     "装上对应的节点包再重启 ComfyUI 就行。诊断会去 ComfyUI-Manager 的节点表里查是哪个包。",
                     m.group(0), [], key="comfy_missing_node", node_types=flat)
+
+
+# 启动器桥接插件（assets/comfyui/wwy_launcher_bridge）打的日志：网页加载工作流时查出来的缺节点 / 缺模型。
+# 每行都是当前工作流的完整状态，只看最后一行（缺的都补上了会打一行「检查通过」，发现随之消失）
+BRIDGE_RE = re.compile(r"\[WWY诊断\] (工作流「[^\n]*?) (\{[^\n]*\})[ \t\r]*$", re.MULTILINE)
+
+
+def _bridge(m):
+    try:
+        r = json.loads(m.group(2))
+    except ValueError:
+        return None
+    return r if isinstance(r, dict) else None
+
+
+def _bridge_sig(items):
+    return hashlib.md5(json.dumps(sorted(items), ensure_ascii=False).encode("utf-8")).hexdigest()[:8]
+
+
+def _b_bridge_nodes(m, text, ctx):
+    r = _bridge(m)
+    types = [str(t) for t in (r or {}).get("nodes") or []]
+    if not types:
+        return None
+    return _finding("comfy_missing_node", "工作流里有没装的节点",
+                    f"工作流「{r.get('wf') or '当前工作流'}」用到了这个 ComfyUI 里没有的节点：{'、'.join(types[:12])}。\n"
+                    "ComfyUI 网页会直接拦着不让运行，所以运行日志里没有报错，是启动器桥接插件在网页里查到的。\n"
+                    "装上对应的节点包再重启 ComfyUI 就行。诊断会去 ComfyUI-Manager 的节点表里查是哪个包。",
+                    m.group(1), [], key="comfy_missing_node:" + _bridge_sig(types), node_types=types,
+                    cnr=r.get("cnr") or {})
+
+
+def _b_bridge_models(m, text, ctx):
+    r = _bridge(m)
+    models = [x for x in (r or {}).get("models") or [] if isinstance(x, dict) and x.get("name")]
+    if not models:
+        return None
+    rows = []
+    for x in models[:12]:
+        where = f"，放 models\\{x['folder']}" if x.get("folder") else ""
+        rows.append(f"· {x['name']}（{x.get('node_title') or x.get('node_type') or '?'} 的 {x.get('input') or '?'}{where}）")
+    return _finding("comfy_missing_model", "工作流里的模型本机没有",
+                    f"工作流「{r.get('wf') or '当前工作流'}」选的这些模型在本机的模型目录里找不到：\n" + "\n".join(rows) +
+                    "\nComfyUI 网页会拦着不让运行。下好放进对应目录后，在网页里按 R 刷新再运行。",
+                    m.group(1), [], key="comfy_missing_model:" + _bridge_sig(x["name"] for x in models),
+                    models=models[:12])
 
 
 # ---- 网络 ----
@@ -722,6 +796,8 @@ RULES = [
     Rule("comfy_import_failed", r"Cannot import (.+?) module for custom nodes:\s*([^\r\n]+)", _b_comfy_import, {"comfy"}),
     Rule("comfy_missing_node", r"node \S+ does not exist|Node '[^']+' not found|missing_node_type", _b_comfy_missing,
          {"comfy"}),
+    Rule("bridge_nodes", BRIDGE_RE, _b_bridge_nodes, {"comfy"}),
+    Rule("bridge_models", BRIDGE_RE, _b_bridge_models, {"comfy"}),
     Rule("model_corrupt", r"SafetensorError|Error while deserializing header|MetadataIncompleteBuffer|HeaderTooLarge|"
                           r"InvalidHeaderDeserialization|incomplete metadata|PytorchStreamReader failed|"
                           r"failed finding central directory|invalid load key|_pickle\.UnpicklingError|"
@@ -777,6 +853,10 @@ def scan(text, ctx):
     # 代理坏了时，同一处的「连不上 xxx」是它的后果，不单独列
     if any(f["rule"] == "proxy_bad" for f in found.values()):
         found = {k: f for k, f in found.items() if f["rule"] != "net_unreachable"}
+    # 缺节点有两个来源（运行时后端报的、桥接插件在网页里查的），只留最近的那条
+    miss = sorted((f for f in found.values() if f["rule"] == "comfy_missing_node"), key=lambda f: -f["pos"])
+    for f in miss[1:]:
+        found.pop(f["key"], None)
     return sorted(found.values(), key=lambda f: -f["pos"])
 
 
@@ -791,62 +871,81 @@ def _is_node_map(data):
     return isinstance(k, str) and k.startswith("http") and isinstance(v, list) and v and isinstance(v[0], list)
 
 
-def local_node_maps(comfy_dir):
-    """本机已有的节点表：custom_nodes 里的旧版 Manager、新版内置 Manager 的缓存目录"""
+def _manager_files(comfy_dir, basename, cache):
+    """本机已有的 ComfyUI-Manager 数据文件：custom_nodes 里的旧版 Manager（停用了的也算）、
+    新版内置 Manager 的缓存目录（文件名带时间戳前缀，内容靠调用方校验），最后是启动器自己的缓存"""
     cands = []
     cn = os.path.join(comfy_dir or "", "custom_nodes")
-    for d in ("comfyui-manager", "ComfyUI-Manager"):
-        cands.append(os.path.join(cn, d, "extension-node-map.json"))
+    for d in ("comfyui-manager", "ComfyUI-Manager", "comfyui-manager.disabled", "ComfyUI-Manager.disabled"):
+        cands.append(os.path.join(cn, d, basename))
     for base in (os.path.join(comfy_dir or "", "user", "default", "ComfyUI-Manager", "cache"),
                  os.path.join(comfy_dir or "", "user", "__manager", "cache"),
                  os.path.join(comfy_dir or "", "custom_nodes", "comfyui-manager", ".cache")):
         try:
-            cands += [os.path.join(base, n) for n in os.listdir(base) if n.endswith(".json")]
+            cands += [os.path.join(base, n) for n in sorted(os.listdir(base), reverse=True) if n.endswith(".json")]
         except OSError:
             pass
-    cands.append(NODE_MAP_CACHE)
+    cands.append(cache)
     return [c for c in cands if os.path.isfile(c)]
 
 
-def load_node_map(comfy_dir, fetch=None, max_age=7 * 86400):
-    """优先本机，其次启动器缓存（7 天），都没有再用 fetch() 下载并缓存。返回 dict 或 {}"""
-    for path in local_node_maps(comfy_dir):
-        if path == NODE_MAP_CACHE and time.time() - os.path.getmtime(path) > max_age and fetch:
+def local_node_maps(comfy_dir):
+    return _manager_files(comfy_dir, "extension-node-map.json", NODE_MAP_CACHE)
+
+
+def _load_manager_json(paths, valid, url, cache, fetch, max_age):
+    """优先本机，其次启动器缓存（max_age 内），都没有再用 fetch() 下载并缓存。返回数据或 None"""
+    for path in paths:
+        if path == cache and time.time() - os.path.getmtime(path) > max_age and fetch:
             continue
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except (OSError, ValueError):
             continue
-        if _is_node_map(data):
+        if valid(data):
             return data
     if not fetch:
-        return {}
+        return None
     try:
-        data = fetch(NODE_MAP_URL)
+        data = fetch(url)
     except Exception:
-        return {}
-    if _is_node_map(data):
-        try:
-            os.makedirs(os.path.dirname(NODE_MAP_CACHE), exist_ok=True)
-            with open(NODE_MAP_CACHE, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
-        except OSError:
-            pass
-        return data
-    return {}
+        return None
+    if not valid(data):
+        return None
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+    except OSError:
+        pass
+    return data
+
+
+def load_node_map(comfy_dir, fetch=None, max_age=7 * 86400):
+    """节点表 dict（{仓库地址: [[节点类型...], {元信息}]}），拿不到返回 {}"""
+    return _load_manager_json(local_node_maps(comfy_dir), _is_node_map, NODE_MAP_URL, NODE_MAP_CACHE,
+                              fetch, max_age) or {}
+
+
+def _clean_type(name):
+    """ComfyUI 网页加载缺失节点时会去掉类型名里的 & < > 引号等（sanitizeNodeName），存回去的工作流里就是去掉后的名字"""
+    return " ".join(re.sub(r"[&<>\"'`=]", "", name).split())
 
 
 def resolve_node_types(node_types, node_map):
     """节点类型名 → [(仓库地址, 包名, [命中的类型])]，没查到的单独返回"""
     by_repo, missing = {}, []
     for t in node_types:
-        exact, by_pat = [], []
+        exact, by_pat, by_clean = [], [], []
         for url, entry in node_map.items():
             names = entry[0] if entry else []
             meta = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
             if t in names:
                 exact.append((url, meta, names))
+                continue
+            if not exact and _clean_type(t) in {_clean_type(n) for n in names if isinstance(n, str)}:
+                by_clean.append((url, meta, names))
                 continue
             pat = meta.get("nodename_pattern")
             if pat:
@@ -857,7 +956,7 @@ def resolve_node_types(node_types, node_map):
                     pass
         # 同名节点常有好几个仓库提供（单节点小仓库、整合包）：Manager 标了 preemptions 的优先，
         # 其次是这次已经选中的仓库，再其次挑节点多的大包（ImageResize+ 该装 cubiq 的 essentials）
-        hit = max(exact or by_pat, default=None,
+        hit = max(exact or by_clean or by_pat, default=None,
                   key=lambda c: (t in (c[1].get("preemptions") or ()), c[0] in by_repo, len(c[2])))
         if hit:
             url, meta, _ = hit
@@ -866,6 +965,43 @@ def resolve_node_types(node_types, node_map):
         else:
             missing.append(t)
     return [tuple(v) for v in by_repo.values()], missing
+
+
+# ============================================================
+# ComfyUI 缺失模型 → 下载地址（ComfyUI-Manager 的 model-list.json）
+# ============================================================
+
+def _is_model_list(data):
+    return isinstance(data, dict) and isinstance(data.get("models"), list) and \
+        any(isinstance(m, dict) and m.get("filename") and m.get("url") for m in data["models"][:20])
+
+
+def load_model_list(comfy_dir, fetch=None, max_age=7 * 86400):
+    """模型表里的条目列表 [{name, filename, url, save_path, size, ...}]，拿不到返回 []"""
+    data = _load_manager_json(_manager_files(comfy_dir, "model-list.json", MODEL_LIST_CACHE), _is_model_list,
+                              MODEL_LIST_URL, MODEL_LIST_CACHE, fetch, max_age)
+    return (data or {}).get("models") or []
+
+
+def model_list_lookup(entries, filename):
+    """按文件名（不分大小写）找模型表条目"""
+    low = os.path.basename(str(filename).replace("\\", "/")).lower()
+    for m in entries:
+        if isinstance(m, dict) and str(m.get("filename") or "").lower() == low and m.get("url"):
+            return m
+    return None
+
+
+# ComfyUI 的模型目录 → Civitai 搜索用的角色（civitai_downloader._ROLE_SEARCH_TYPES）
+FOLDER_ROLES = {"checkpoints": "Checkpoint", "loras": "LoRA", "vae": "VAE", "embeddings": "Embedding",
+                "controlnet": "ControlNet", "upscale_models": "Upscaler", "text_encoders": "TextEncoder",
+                "clip": "TextEncoder", "diffusion_models": "Checkpoint", "unet": "Checkpoint"}
+
+
+def split_model_name(name):
+    """下拉框里的值 "Anima\\x.safetensors" → ("Anima", "x.safetensors")"""
+    parts = [p for p in str(name).replace("\\", "/").split("/") if p and p not in (".", "..")]
+    return (os.path.join(*parts[:-1]) if len(parts) > 1 else ""), (parts[-1] if parts else "")
 
 
 # ============================================================

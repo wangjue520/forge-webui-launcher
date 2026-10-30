@@ -148,6 +148,11 @@ class RuleTest(_Base):
         repos, _ = dg.resolve_node_types(["ImageResize+", "Grain"], nm)
         self.assertEqual([u for u, _, _ in repos], ["https://github.com/cubiq/ComfyUI_essentials",
                                                     "https://github.com/y/pre"])
+        # ComfyUI 网页存回去的工作流里，类型名的 & 被去掉了
+        nm = {"https://github.com/chflame163/ComfyUI_LayerStyle": [["LayerFilter: Sharp & Soft"], {}]}
+        repos, missing = dg.resolve_node_types(["LayerFilter: Sharp  Soft"], nm)
+        self.assertEqual(repos[0][0], "https://github.com/chflame163/ComfyUI_LayerStyle")
+        self.assertEqual(missing, [])
 
     def test_node_map_cache_and_fetch(self):
         nm = {"https://github.com/a/foo": [["FooNode"], {}]}

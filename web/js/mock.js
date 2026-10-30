@@ -441,6 +441,11 @@
               { aid: "redetect_network", label: "重新检测网络", risk: "low", params: {} },
               { aid: "open_page", label: "去设置网络代理", risk: "ui", params: { page: "launcher" } }] }] }
         : { ok: true, target: t, name: "ComfyUI", kind: "comfy", lines: 1834, ai_ready: true, ai_model: "deepseek-v4-flash", findings: [
+          { rule: "comfy_missing_model", key: "m", level: "error", title: "工作流里的模型本机没有",
+            text: "工作流「诊断测试_缺节点（Anima）.json」选的这些模型在本机的模型目录里找不到：\n· anima_baseV10.safetensors（UNet加载器 的 unet_name，放 models\\diffusion_models）\n· kieed-step00006000.safetensors（加载LoRA 的 lora_name，放 models\\loras）\nComfyUI 网页会拦着不让运行。下好放进对应目录后，在网页里按 R 刷新再运行。\n找到的下载地址：\n· anima_baseV10.safetensors → Civitai：Anima / v1.0（文件名完全一致）\n没直接找到下载地址：kieed-step00006000.safetensors。可以让 AI 去 Civitai / HuggingFace 上搜。",
+            evidence: "工作流「诊断测试_缺节点（Anima）.json」缺 2 个模型，ComfyUI 网页会拦着不让运行（启动器的「诊断」里能一键处理）",
+            actions: [{ aid: "download_model", label: "下载 anima_baseV10.safetensors", risk: "confirm", params: {} },
+              { aid: "ai_ask", label: "让 AI 找下载地址", risk: "ui", params: { note: "工作流缺这些模型，帮我找到下载地址并给出下载按钮：\n- kieed-step00006000.safetensors（LoraLoader 的 lora_name，目录 models/loras）" } }] },
           { rule: "vae_nan", key: "vae_nan", level: "error", title: "VAE 溢出（出图全黑 / NaN）",
             text: "解码图片时 VAE 用半精度算溢出了，结果是 NaN，出来就是黑图或报错。SDXL 原版 VAE 和不少二次元模型自带的 VAE 都有这个毛病。\n解决：让 VAE 用 FP32 算（略慢一点、多占一点显存），或者换一个修过的 VAE（如 sdxl-vae-fp16-fix）。",
             evidence: "nodes.py:1595: RuntimeWarning: invalid value encountered in cast",
@@ -453,10 +458,19 @@
             actions: [{ aid: "comfy_install_deps", label: "重装「ComfyUI-Foo」的依赖", risk: "confirm", params: {} },
               { aid: "pip_install", label: "安装缺的包 opencv-python", risk: "confirm", params: {} },
               { aid: "ext_disable", label: "先停用「ComfyUI-Foo」", risk: "confirm", params: {} }] }] }),
-      diag_ai: () => {
+      diag_ai: (t, note) => {
         const job = "ai1";
         const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, ...data }), ms);
         send("ai_step", { text: "正在请求 deepseek-v4-flash ..." }, 300);
+        if (note && /模型/.test(note)) {
+          send("ai_step", { text: "搜索模型 kieed-step00006000.safetensors" }, 900);
+          send("ai_done", { result: { summary: "kieed 这个 LoRA 在 Civitai 上找到了同名文件", confidence: "medium",
+            cause: "search_model 在 Civitai 搜到「Kieed 画风」v6000，文件名 kieed-step00006000.safetensors 完全一致，大小 151 MB。",
+            steps: ["点下面的「下载」，下好后在 ComfyUI 网页里按 R 刷新再运行"],
+            actions: [{ aid: "download_model", label: "下载 kieed-step00006000.safetensors", risk: "confirm", params: {} }],
+            dropped: [] } }, 1700);
+          return ok({ ok: true, job });
+        }
         send("ai_step", { text: "查看目录 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo" }, 900);
         send("ai_step", { text: "读取文件 D:\\ComfyUI\\custom_nodes\\ComfyUI-Foo\\requirements.txt" }, 1500);
         send("ai_done", { result: { summary: "ComfyUI-Foo 的依赖没装，缺 opencv", confidence: "high",
@@ -466,7 +480,7 @@
         return ok({ ok: true, job });
       },
       diag_ai_cancel: () => ok({ ok: true }),
-      diag_fix: (aid) => ok(aid === "open_page" || aid === "open_url" ? { ok: true, ui: true, params: {} }
+      diag_fix: (aid, p) => ok(aid === "open_page" || aid === "open_url" || aid === "ai_ask" ? { ok: true, ui: true, params: p || {} }
         : { ok: true, text: "（预览模式）已执行：" + aid }),
       diag_undo: () => ok({ ok: true, text: "已撤销" }),
       diag_llm_test: () => ok({ ok: true, text: "（预览模式）deepseek-v4-flash 已连通（0.8 秒），回复：正常" }),

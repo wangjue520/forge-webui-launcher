@@ -146,6 +146,11 @@
       const inp = $("#cv-url");
       if (inp) { inp.value = p.url; const go = $("#cv-fetch"); if (go) go.click(); }
     }
+    if (a.aid === "ai_ask") {
+      const note = $("#dg-note");
+      if (note) note.value = p.note || "";
+      if (!job) startAi();
+    }
   }
 
   async function doAction(a, btn, wrap) {
@@ -227,7 +232,8 @@
   async function startAi() {
     aiSteps = []; aiResult = null; aiError = "";
     let r;
-    try { r = await App.api.diag_ai(target); } catch (e) { r = { ok: false, error: e.message }; }
+    const note = (($("#dg-note") || {}).value || "").trim();
+    try { r = await App.api.diag_ai(target, note); } catch (e) { r = { ok: false, error: e.message }; }
     if (!r || !r.ok) { aiError = (r && r.error) || "启动 AI 诊断失败"; renderAi(); return; }
     job = r.job;
     renderAi();
@@ -367,6 +373,10 @@
         if (e.job !== job) return;
         job = ""; aiError = e.error;
         renderAi();
+      });
+      App.on("diag", "download_done", (e) => {
+        App.toast(e.ok ? `${e.name} 已下好：在 ComfyUI 网页里按 R 刷新模型列表再运行` :
+          `${e.name} 没下成，原因看运行日志`, e.ok ? "ok" : "error", 8000);
       });
       App.on("diag", "cfg_changed", async () => {
         // 诊断改了设置：同步界面上的配置控件和启动参数预览

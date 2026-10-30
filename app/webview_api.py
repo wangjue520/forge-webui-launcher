@@ -19,6 +19,7 @@ _emit() -> window.App.onEvent({scope, type, ...}) 推送给前端。
 """
 import base64
 import collections
+import concurrent.futures
 import json
 import os
 import queue
@@ -47,6 +48,7 @@ import updater
 import model_library as ml
 import output_index as oi
 import comfy_nodes
+import comfy_bridge
 import diagnose as dg
 import diagnose_llm as dl
 import version_manager as vm
@@ -628,6 +630,7 @@ class LauncherApi:
         self._diag_last_auto = {}    # 启动器自动诊断的去重
         self._diag_jobs = {}         # AI 诊断任务 -> 取消标记
         self._diag_seq = 0
+        self._diag_dl = set()        # 诊断正在下载的模型（目标路径）
 
     # ---------------------------------------------------------- 基础设施 ----
 
@@ -1077,6 +1080,8 @@ class LauncherApi:
             comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
             if comfy_dir:
                 comfy_nodes.fix_rgthree_compat(comfy_dir, log)
+                if self.cfg.get("diag_comfy_bridge", True):
+                    comfy_bridge.ensure(comfy_dir, log)
 
     # 以下几个是 V2 的接口，iid 省略 = 当前实例；前端启动页照旧调用
     def launch_status(self, iid=None):
@@ -2881,6 +2886,8 @@ def _deploy_flow_comfy(self, target, use_portable):
                 else:
                     log("[部署] 注意：ComfyUI-Manager 没能装上（上面日志有原因），"
                         "网络好转后可到「常用插件」页勾选重装\n")
+        if dcfg.get("diag_comfy_bridge", True):
+            comfy_bridge.ensure(target, lambda m: log(m.replace("[启动器]", "[部署]")))
 
         # ---- 7. 冒烟测试（失败只提醒，不算部署失败）----
         log("\n[部署] 冒烟测试：以 CPU 模式初始化一次 ComfyUI ...\n")
@@ -8106,8 +8113,10 @@ def _diag_fetch_json(self, url):
 
 
 def _diag_enrich(self, findings, ctx):
-    """缺失节点：查 ComfyUI-Manager 的节点表，换成具体的「安装 xxx」按钮"""
+    """缺失节点：查 ComfyUI-Manager 的节点表，换成具体的「安装 xxx」按钮；缺失模型：找下载地址"""
     for f in findings:
+        if f["rule"] == "comfy_missing_model" and ctx.get("comfy_dir"):
+            _diag_enrich_models(self, f, ctx)
         if f["rule"] != "comfy_missing_node" or not ctx.get("comfy_dir"):
             continue
         types = f["facts"].get("node_types") or []
@@ -8123,6 +8132,143 @@ def _diag_enrich(self, findings, ctx):
             f["text"] += "\n需要装的节点包：\n" + "\n".join(f"· {t}（{'、'.join(h[:5])}）" for _u, t, h in repos)
         if missing:
             f["text"] += "\n节点表里没查到：" + "、".join(missing) + "（可能是很新的或私人节点，去工作流的发布页找）"
+
+
+def _diag_model_dir(self, ctx, m):
+    """缺的模型该下到哪：桥接插件报的目录里优先选共享模型库里的（WebUI 也能用），没有就用第一个"""
+    sub, _name = dg.split_model_name(m.get("name"))
+    dirs = [d for d in m.get("dirs") or [] if d]
+    lib = (self.cfg.get("model_library_path") or "").strip()
+    d = next((x for x in dirs if lib and dg._under(x, lib)), dirs[0] if dirs else "")
+    if not d and m.get("folder") and re.match(r"^[\w.-]+$", str(m["folder"])):
+        d = os.path.join(ctx["comfy_dir"], "models", m["folder"])
+    return os.path.join(d, sub) if d and sub else d
+
+
+def _diag_civitai_exact(self, name, folder):
+    """Civitai 上文件名完全一致的文件 → (下载地址, 说明)。模糊结果不算（可能认错，交给 AI 或用户挑）"""
+    try:
+        cands, _f = cd.search_models_smart(name, dg.FOLDER_ROLES.get(folder or "", ""), "",
+                                           (self.cfg.get("civitai_api_key") or "").strip() or None, limit=3)
+    except Exception:
+        return None
+    for c in cands:
+        mf = c.get("match_file") or {}
+        if c.get("exact") and mf.get("downloadUrl") and str(mf.get("name") or "").lower() == name.lower():
+            return mf["downloadUrl"], f"Civitai：{c.get('model_name')} / {c.get('version_name') or ''}（文件名完全一致）"
+    return None
+
+
+def _diag_enrich_models(self, f, ctx):
+    """缺失模型的下载地址，依次找：工作流里写的地址 → ComfyUI-Manager 模型表 → Civitai 文件名完全一致。
+    都没有就给一个「让 AI 找」"""
+    models = f["facts"].get("models") or []
+    mlist = dg.load_model_list(ctx["comfy_dir"], fetch=lambda u: _diag_fetch_json(self, u))
+    found, need_search = {}, []
+    for m in models[:8]:
+        _sub, name = dg.split_model_name(m["name"])
+        hit = dg.model_list_lookup(mlist, name)
+        if m.get("url"):
+            found[m["name"]] = (m["url"], "工作流里写的下载地址")
+        elif hit:
+            found[m["name"]] = (hit["url"], f"ComfyUI-Manager 模型表：{hit.get('name') or name}")
+        else:
+            need_search.append(m)
+    if need_search:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            for m, hit in zip(need_search, pool.map(
+                    lambda x: _diag_civitai_exact(self, dg.split_model_name(x["name"])[1], x.get("folder")),
+                    need_search)):
+                if hit:
+                    found[m["name"]] = hit
+    rows, missing = [], []
+    for m in models[:8]:
+        _sub, name = dg.split_model_name(m["name"])
+        dest = _diag_model_dir(self, ctx, m)
+        if m["name"] in found and dest:
+            url, why = found[m["name"]]
+            f["actions"].append(dg.action("download_model", f"下载 {name}", iid=ctx["iid"], url=url, dir=dest,
+                                          name=name))
+            rows.append(f"· {name} → {why}")
+        else:
+            missing.append(m)
+    if rows:
+        f["text"] += "\n找到的下载地址：\n" + "\n".join(rows)
+    if missing:
+        names = "、".join(dg.split_model_name(m["name"])[1] for m in missing)
+        f["text"] += f"\n没直接找到下载地址：{names}。可以让 AI 去 Civitai / HuggingFace 上搜。"
+        note = "工作流缺这些模型，帮我找到下载地址并给出下载按钮：\n" + "\n".join(
+            f"- {m['name']}（{m.get('node_type')} 的 {m.get('input')}，目录 models/{m.get('folder') or '?'}，"
+            f"下载到 {_diag_model_dir(self, ctx, m) or '?'}）" for m in missing)
+        f["actions"].append(dg.action("ai_ask", "让 AI 找下载地址", note=note))
+
+
+def _diag_dl_sources(self, url):
+    """下载源顺序：HuggingFace 按网络情况先镜像或先源站；GitHub Releases 加速代理；其余原样"""
+    import mirror_manager as mm
+    if url.startswith("https://huggingface.co/"):
+        try:
+            cn = bool(mm.resolve_mode(self.cfg))
+        except Exception:
+            cn = False
+        pair = [mm.huggingface_url(url, True), url]
+        return pair if cn else pair[::-1]
+    if url.startswith("https://github.com/"):
+        try:
+            cn = bool(mm.resolve_github_mode(self.cfg))
+        except Exception:
+            cn = True
+        mirrors = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
+        return mirrors + [url] if cn else [url] + mirrors
+    return [url]
+
+
+def _diag_download(self, p):
+    dest = os.path.join(p["dir"], p["name"])
+    if os.path.isfile(dest):
+        return {"ok": True, "text": f"{p['name']} 已经在 {p['dir']} 里了，在 ComfyUI 网页里按 R 刷新即可"}
+    key = os.path.normcase(dest)
+    with self._diag_lock:
+        if key in self._diag_dl:
+            return {"ok": False, "error": f"{p['name']} 已经在下载了，进度看运行日志"}
+        self._diag_dl.add(key)
+    r = self._runner(p["iid"])
+    log = lambda m: r.log(f"[诊断] {m}\n")
+    api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
+
+    def work():
+        try:
+            os.makedirs(p["dir"], exist_ok=True)
+            for url in _diag_dl_sources(self, p["url"]):
+                host = url.split("/")[2]
+                last = [0.0]
+
+                def progress(done, total, _last=last, _host=host):
+                    now = time.monotonic()
+                    if now - _last[0] >= 10:
+                        _last[0] = now
+                        size = f" / {total / 1048576:.0f} MB" if total else " MB"
+                        log(f"下载 {p['name']}：{done / 1048576:.0f}{size}（{_host}）")
+
+                log(f"开始下载 {p['name']}（{host}）→ {p['dir']}")
+                try:
+                    path, _ok = cd.download_file({"downloadUrl": url, "name": p["name"], "hashes": {}}, p["dir"],
+                                                 api_key=api_key if cd._is_civitai_host(url) else None,
+                                                 progress_cb=progress)
+                except Exception as e:
+                    log(f"从 {host} 下载 {p['name']} 失败：{str(e)[:200]}")
+                    continue
+                log(f"{p['name']} 已下好：{path}\n[诊断] 在 ComfyUI 网页里按 R 刷新模型列表（或重新打开工作流），就能运行了")
+                self._emit("diag", "download_done", iid=p["iid"], name=p["name"], ok=True)
+                return
+            log(f"{p['name']} 没下成（上面是每个来源的原因）。下到一半的 .part 文件留着，再点一次会接着下")
+            self._emit("diag", "download_done", iid=p["iid"], name=p["name"], ok=False)
+        finally:
+            with self._diag_lock:
+                self._diag_dl.discard(key)
+
+    self._spawn(work, name="diag-download")
+    return {"ok": True, "text": f"已开始下载 {p['name']}，进度看「一键启动」页的运行日志", "page": "launch"}
 
 
 def _diag_undo_token(self, rec):
@@ -8237,6 +8383,8 @@ def _diag_exec(self, aid, p):
         if not r.get("ok"):
             return r
         return {"ok": True, "text": f"已停用「{p['rel']}」，可在「常用插件」页重新启用"}
+    if aid == "download_model":
+        return _diag_download(self, p)
     if aid == "trash_file":
         if not ml.send_to_trash(p["path"]):
             return {"ok": False, "error": "移到回收站失败（文件可能正被 WebUI / ComfyUI 占用，先停止实例）"}
@@ -8294,7 +8442,7 @@ def _diag_new_job(self):
     return job
 
 
-def _diag_run_ai(self, job, target):
+def _diag_run_ai(self, job, target, note=""):
     cancel = self._diag_jobs.get(job)
 
     def work():
@@ -8303,7 +8451,7 @@ def _diag_run_ai(self, job, target):
             findings = dg.scan(text, ctx)
             res = dl.run(self, ctx, text, findings,
                          on_step=lambda t: self._emit("diag", "ai_step", job=job, text=t),
-                         cancelled=cancel.is_set)
+                         cancelled=cancel.is_set, note=note)
             self._emit("diag", "ai_done", job=job, result=res)
         except dl.LlmError as e:
             self._emit("diag", "ai_error", job=job, error=str(e))
@@ -8324,11 +8472,12 @@ def _api_diag_run(self, target=None):
         return {"ok": False, "error": f"诊断出错：{e}"}
 
 
-def _api_diag_ai(self, target=None):
+def _api_diag_ai(self, target=None, note=""):
+    """note：用户在诊断面板里自己写的问题描述"""
     if not dl.resolve(self.cfg):
         return {"ok": False, "need_setup": True, "error": "还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key"}
     job = _diag_new_job(self)
-    _diag_run_ai(self, job, target)
+    _diag_run_ai(self, job, target, str(note or "")[:2000])
     return {"ok": True, "job": job}
 
 

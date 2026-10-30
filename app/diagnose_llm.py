@@ -193,6 +193,15 @@ TOOL_SPECS = [
     ("test_url", "从这台电脑（按启动器当前的代理设置）访问一个网址，看能不能连通、耗时多少。",
      _obj({"url": _S}, ["url"])),
     ("instance_info", "某个实例的详细信息：类型、目录、启动参数、torch、已装的节点 / 扩展。", _obj({"iid": _S}, ["iid"])),
+    ("search_model", "按文件名找模型的下载地址：ComfyUI-Manager 模型表、Civitai（按名字搜，exact=文件名完全一致）、"
+                     "HuggingFace 仓库（只按仓库名搜，要再用 hf_files 看仓库里的文件）。",
+     _obj({"name": {"type": "string", "description": "模型文件名，如 anima_baseV10.safetensors"},
+           "folder": {"type": "string", "description": "可选，ComfyUI 模型目录名：checkpoints / loras / vae / "
+                                                       "diffusion_models / text_encoders / controlnet / upscale_models"}},
+          ["name"])),
+    ("hf_files", "列出 HuggingFace 仓库里的模型文件和直接下载地址。", _obj({"repo": {"type": "string",
+                                                                       "description": "仓库名，如 Comfy-Org/x"}},
+                                                                     ["repo"])),
     ("finish", "诊断结束时调用，交最终结论。",
      _obj({"summary": {"type": "string", "description": "一句话结论"},
            "cause": {"type": "string", "description": "原因分析，引用日志 / 文件里的证据"},
@@ -387,6 +396,60 @@ class Tools:
     def t_instance_info(self, iid):
         return instance_info(self.api, iid)
 
+    def _hf_base(self):
+        try:
+            import mirror_manager as mm
+            return mm.HF_MIRROR if mm.resolve_mode(self.api.cfg) else "https://huggingface.co"
+        except Exception:
+            return "https://huggingface.co"
+
+    def t_search_model(self, name, folder=""):
+        import requests
+        import civitai_downloader as cd
+        stem = os.path.splitext(os.path.basename(str(name).replace("\\", "/")))[0]
+        out = {}
+        if self.ctx.get("comfy_dir"):
+            hit = dg.model_list_lookup(dg.load_model_list(self.ctx["comfy_dir"]), name)
+            if hit:
+                out["ComfyUI-Manager 模型表"] = {k: hit.get(k) for k in ("name", "filename", "url", "save_path", "size",
+                                                                     "base")}
+        try:
+            cands, _f = cd.search_models_smart(name, dg.FOLDER_ROLES.get(folder or "", ""), "",
+                                               (self.api.cfg.get("civitai_api_key") or "").strip() or None, limit=5)
+            out["Civitai"] = [{"模型": c.get("model_name"), "版本": c.get("version_name"), "底模": c.get("base_model"),
+                               "类型": c.get("model_type"), "文件": (c.get("match_file") or {}).get("name"),
+                               "大小MB": round(((c.get("match_file") or {}).get("sizeKB") or 0) / 1024),
+                               "下载地址": (c.get("match_file") or {}).get("downloadUrl"), "exact": c.get("exact"),
+                               "页面": f"https://civitai.com/models/{c.get('model_id')}"} for c in cands] or "没搜到"
+        except Exception as e:
+            out["Civitai"] = f"搜索失败：{str(e)[:200]}"
+        base = self._hf_base()
+        try:
+            r = requests.get(f"{base}/api/models", params={"search": stem[:60], "limit": 8}, timeout=15)
+            out["HuggingFace 仓库（" + base + "）"] = [m.get("id") or m.get("modelId") for m in r.json()][:8] \
+                if r.status_code == 200 else f"HTTP {r.status_code}"
+        except Exception as e:
+            out["HuggingFace"] = f"搜索失败：{str(e)[:200]}"
+        return out
+
+    def t_hf_files(self, repo):
+        import requests
+        repo = str(repo or "").strip().strip("/")
+        if not re.match(r"^[\w.-]+/[\w.-]+$", repo) or any(x.strip(".") == "" for x in repo.split("/")):
+            return "仓库名格式应为 作者/仓库"
+        base = self._hf_base()
+        try:
+            r = requests.get(f"{base}/api/models/{repo}", timeout=15)
+        except Exception as e:
+            return f"访问失败：{str(e)[:200]}"
+        if r.status_code != 200:
+            return f"HTTP {r.status_code}（仓库不存在或需要登录授权）"
+        files = [s.get("rfilename") for s in r.json().get("siblings") or []]
+        exts = dg.MODEL_EXTS + (".onnx",)
+        rows = [f"{f} → https://huggingface.co/{repo}/resolve/main/{f}" for f in files
+                if f and f.lower().endswith(exts)]
+        return "\n".join(rows[:150]) or f"仓库里没有模型文件（共 {len(files)} 个文件）"
+
     def t_finish(self, **kw):
         return "ok"
 
@@ -522,6 +585,10 @@ def environment(api, ctx):
     env["当前实例"] = api.cfg.get("active_instance")
     if ctx.get("iid"):
         env["诊断对象"] = instance_info(api, ctx["iid"])
+    if ctx.get("comfy_dir"):
+        wf = os.path.join(ctx["comfy_dir"], "user", "wwy_bridge", "current_workflow.json")
+        if os.path.isfile(wf):
+            env["ComfyUI 网页里最近打开的工作流（桥接插件存的，可用 read_file 读）"] = wf
     return dg.redact(json.dumps(env, ensure_ascii=False, indent=1, default=str))
 
 
@@ -555,8 +622,9 @@ def system_prompt(api, ctx):
         "===== 启动器 / WebUI / ComfyUI 知识 =====\n" + knowledge())
 
 
-def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambda: False, post=None):
-    """跑一次 agent。返回 {"summary","cause","steps","actions","confidence","rounds"}；出错抛 LlmError"""
+def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambda: False, post=None, note=""):
+    """跑一次 agent。返回 {"summary","cause","steps","actions","confidence","rounds"}；出错抛 LlmError。
+    note：用户自己写的问题描述（可能日志里根本没报错，比如出图不对、界面卡住）"""
     conf = resolve(api.cfg)
     if not conf:
         raise LlmError("还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key")
@@ -565,7 +633,9 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
     chat = Chat(fmt, base, model, key, system_prompt(api, ctx), TOOL_SPECS, post=post)
     what = "启动器本身" if ctx.get("kind") == "launcher" else f"实例「{ctx.get('name')}」（id={ctx.get('iid')}）"
     rule_txt = "\n".join(f"- {f['title']}：{f['evidence'][:200]}" for f in findings) or "（本地规则没认出来）"
-    chat.user(f"要诊断的对象：{what}\n\n环境信息：\n{environment(api, ctx)}\n\n"
+    note = dg.redact(str(note or "").strip()[:2000])
+    ask = f"用户的描述（优先解决这个问题）：\n{note}\n\n" if note else ""
+    chat.user(f"{ask}要诊断的对象：{what}\n\n环境信息：\n{environment(api, ctx)}\n\n"
               f"本地规则的识别结果：\n{rule_txt}\n\n"
               f"日志片段（已脱敏）：\n```\n{dg.redact(dg.snippet(log_text, findings))}\n```")
     on_step(f"正在请求 {model} ...")
@@ -595,8 +665,8 @@ def _step_label(name, args):
     a = args or {}
     labels = {"list_dir": "查看目录", "read_file": "读取文件", "search_files": "搜索", "get_log": "查看日志",
               "python_packages": "查看 Python 包", "check_model_file": "核对模型文件", "test_url": "测试网址",
-              "instance_info": "查看实例信息"}
-    target = a.get("path") or a.get("url") or a.get("source") or a.get("iid") or ""
+              "instance_info": "查看实例信息", "search_model": "搜索模型", "hf_files": "查看 HuggingFace 仓库"}
+    target = a.get("path") or a.get("url") or a.get("source") or a.get("iid") or a.get("name") or a.get("repo") or ""
     extra = f"「{a['pattern']}」" if a.get("pattern") else ""
     return f"{labels.get(name, name)} {dg.redact(str(target))} {extra}".strip()
 

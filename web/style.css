@@ -1319,6 +1319,7 @@ textarea.ta-prompt {
 .dg-model { margin-left: 6px; color: var(--text-faint); letter-spacing: 0; }
 .dg-empty { padding: 10px 12px; font-size: 12.5px; line-height: 1.7; color: var(--text-dim); border: 1px dashed var(--line-strong); }
 .dg-bad { color: var(--bad); border-color: var(--bad); }
+.dg-note { display: block; width: 100%; box-sizing: border-box; margin-bottom: 8px; resize: vertical; min-height: 54px; font-size: 12.5px; line-height: 1.6; }
 .dg-card {
   margin-bottom: 10px; padding: 10px 12px; border: 1px solid var(--line); border-left: 4px solid var(--bad);
   background: var(--card);
