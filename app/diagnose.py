@@ -841,23 +841,26 @@ def resolve_node_types(node_types, node_map):
     """节点类型名 → [(仓库地址, 包名, [命中的类型])]，没查到的单独返回"""
     by_repo, missing = {}, []
     for t in node_types:
-        hit = None
+        exact, by_pat = [], []
         for url, entry in node_map.items():
             names = entry[0] if entry else []
             meta = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
             if t in names:
-                hit = (url, meta)
-                break
+                exact.append((url, meta, names))
+                continue
             pat = meta.get("nodename_pattern")
             if pat:
                 try:
                     if re.search(pat, t):
-                        hit = (url, meta)
-                        break
+                        by_pat.append((url, meta, names))
                 except re.error:
                     pass
+        # 同名节点常有好几个仓库提供（单节点小仓库、整合包）：Manager 标了 preemptions 的优先，
+        # 其次是这次已经选中的仓库，再其次挑节点多的大包（ImageResize+ 该装 cubiq 的 essentials）
+        hit = max(exact or by_pat, default=None,
+                  key=lambda c: (t in (c[1].get("preemptions") or ()), c[0] in by_repo, len(c[2])))
         if hit:
-            url, meta = hit
+            url, meta, _ = hit
             title = meta.get("title_aux") or url.rstrip("/").rsplit("/", 1)[-1]
             by_repo.setdefault(url, [url, title, []])[2].append(t)
         else:

@@ -140,6 +140,15 @@ class RuleTest(_Base):
                                                          ("https://github.com/b/bar", "Bar")])
         self.assertEqual(missing, ["Nope"])
 
+    def test_node_map_prefers_big_pack(self):
+        nm = {"https://github.com/x/resize-plus": [["ImageResize+"], {}],
+              "https://github.com/cubiq/ComfyUI_essentials": [["ImageResize+", "ImageCrop+", "MaskBlur+"], {}],
+              "https://github.com/y/pre": [["Grain"], {"preemptions": ["Grain"]}],
+              "https://github.com/z/big": [["Grain", "A", "B", "C"], {}]}
+        repos, _ = dg.resolve_node_types(["ImageResize+", "Grain"], nm)
+        self.assertEqual([u for u, _, _ in repos], ["https://github.com/cubiq/ComfyUI_essentials",
+                                                    "https://github.com/y/pre"])
+
     def test_node_map_cache_and_fetch(self):
         nm = {"https://github.com/a/foo": [["FooNode"], {}]}
         cache = os.path.join(self.tmp, "map.json")
