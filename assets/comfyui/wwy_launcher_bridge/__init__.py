@@ -122,7 +122,7 @@ def handle_report(data):
     if nodes_missing or models:
         parts = ([f"{len(nodes_missing)} 个节点"] if nodes_missing else []) + \
                 ([f"{len(models)} 个模型"] if models else [])
-        head = f"工作流「{report['wf']}」缺 {'、'.join(parts)}，ComfyUI 网页会拦着不让运行（启动器的「诊断」里能一键处理）"
+        head = f"工作流「{report['wf']}」缺 {'、'.join(parts)}，运行会被网页拦下或在那个节点报错（启动器的「诊断」里能一键处理）"
     else:
         head = f"工作流「{report['wf']}」检查通过"
     line = f"[WWY诊断] {head} {json.dumps(report, ensure_ascii=False)}"

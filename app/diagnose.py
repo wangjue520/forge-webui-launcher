@@ -542,7 +542,7 @@ def _b_bridge_models(m, text, ctx):
         rows.append(f"· {x['name']}（{x.get('node_title') or x.get('node_type') or '?'} 的 {x.get('input') or '?'}{where}）")
     return _finding("comfy_missing_model", "工作流里的模型本机没有",
                     f"工作流「{r.get('wf') or '当前工作流'}」选的这些模型在本机的模型目录里找不到：\n" + "\n".join(rows) +
-                    "\nComfyUI 网页会拦着不让运行。下好放进对应目录后，在网页里按 R 刷新再运行。",
+                    "\n运行时会被网页拦下，或者跑到用它的节点时报错。下好放进对应目录后，在网页里按 R 刷新再运行。",
                     m.group(1), [], key="comfy_missing_model:" + _bridge_sig(x["name"] for x in models),
                     models=models[:12])
 
@@ -857,7 +857,95 @@ def scan(text, ctx):
     miss = sorted((f for f in found.values() if f["rule"] == "comfy_missing_node"), key=lambda f: -f["pos"])
     for f in miss[1:]:
         found.pop(f["key"], None)
+    if kind in ("forge", "comfy"):
+        g = _generic_error(text, ctx)
+        if g:
+            found[g["key"]] = g
     return sorted(found.values(), key=lambda f: -f["pos"])
+
+
+# ---- 兜底：规则不认识的运行时报错 ----
+# 只认真正的「出错」：ComfyUI 执行节点出异常 / 提交时校验没过、Python 的 Traceback 堆栈。
+# 同一处已经有专门规则认出来的不重复报；用户自己点了中断的不算。
+
+_TB_RE = re.compile(r"^.*Traceback \(most recent call last\):[ \t]*\r?$", re.MULTILINE)
+_COMFY_EXC_RE = re.compile(r"!!! Exception during processing !!!\s*([^\r\n]*)")
+_COMFY_INVALID_RE = re.compile(r"(?:Failed to validate prompt for output [^\r\n]*|Prompt outputs failed validation[^\r\n]*)"
+                               r"((?:\r?\n[ \t]*[*-][^\r\n]*){0,6})")
+_EXC_LINE_RE = re.compile(r"^((?:[A-Za-z_][\w]*\.)*[A-Z]\w*(?:Error|Exception|Exit|Fault))(?::\s*(.*))?$")
+_FRAME_RE = re.compile(r'File "([^"]+)"')
+_BENIGN_EXC = ("KeyboardInterrupt", "InterruptProcessingException", "CancelledError", "SystemExit")
+
+
+def _traceback_at(text, start):
+    """从 Traceback 那一行往下找异常类型那一行。返回 (结束位置, 异常类型, 信息, 出错的节点包 / 扩展)"""
+    pack = ""
+    off = text.find("\n", start)
+    off = len(text) if off < 0 else off + 1
+    for ln in text[off:off + 30000].split("\n")[:400]:
+        s = ln.rstrip("\r")
+        fm = _FRAME_RE.search(s)
+        if fm:
+            m = re.search(r"\\(?:custom_nodes|extensions(?:-builtin)?)\\([^\\]+)\\", fm.group(1).replace("/", "\\"))
+            if m:
+                pack = m.group(1)       # 最深的那一层节点包 / 扩展
+        if s and not s[0].isspace():
+            em = _EXC_LINE_RE.match(re.sub(r"^\[[\d\-: .]+\]\s*", "", s).strip())   # 去掉 ComfyUI 行首时间戳
+            if em:
+                return off + len(ln), em.group(1).rsplit(".", 1)[-1], (em.group(2) or "").strip(), pack
+        off += len(ln) + 1
+    return off, "", "", pack
+
+
+def _explained(text, s, e, ctx):
+    """这一段报错是不是已经被专门规则认出来了"""
+    win = text[max(0, s - 400):e + 600]
+    kind = ctx.get("kind")
+    for rule in RULES:
+        if rule.kinds and kind not in rule.kinds:
+            continue
+        if rule.id in ("bridge_nodes", "bridge_models"):
+            continue
+        if rule.re.search(win):
+            return True
+    return False
+
+
+def _generic_error(text, ctx):
+    events = []
+    for m in _COMFY_EXC_RE.finditer(text):
+        tb = _TB_RE.search(text, m.end(), m.end() + 400)
+        end, etype, msg, pack = _traceback_at(text, tb.start()) if tb else (m.end(), "", "", "")
+        events.append((m.start(), end, etype, m.group(1).strip() or msg, pack))
+    for m in _TB_RE.finditer(text):
+        if any(s <= m.start() <= e for s, e, *_r in events):
+            continue
+        end, etype, msg, pack = _traceback_at(text, m.start())
+        if etype:
+            events.append((m.start(), end, etype, msg, pack))
+    for m in _COMFY_INVALID_RE.finditer(text):
+        detail = " ".join(x.strip(" *-\t\r") for x in m.group(1).split("\n") if x.strip(" *-\t\r"))
+        events.append((m.start(), m.end(), "", detail[:300] or m.group(0).strip(), ""))
+    for s, e, etype, msg, pack in sorted(events, key=lambda x: -x[0]):
+        if etype in _BENIGN_EXC or _explained(text, s, e, ctx):
+            continue
+        comfy = ctx.get("kind") == "comfy"
+        what = ("ComfyUI" if comfy else "WebUI") + " 运行时报错"
+        head = f"{etype}: {msg}" if etype else msg
+        where = (f"\n出错的位置在{'节点包' if comfy else '扩展'}「{pack}」里。" if pack else "")
+        f = _finding(
+            "runtime_error", f"{what}：{(msg or etype)[:60]}",
+            f"报错信息：{head}{where}\n"
+            "本地规则不认识这个报错。可以让 AI 结合日志和本地文件分析原因；如果是节点 / 扩展自己给的提示"
+            "（比如某两个节点不能一起用、参数超出范围），照提示改工作流或设置就行。",
+            head[:400] if etype else _line_at(text, s),
+            [action("ai_ask", "让 AI 分析这个报错", note=f"运行时报错：{head[:400]}" +
+                    (f"（出在「{pack}」）" if pack else "") + "。帮我看看是什么原因、该怎么改。")],
+            key="runtime_error:" + hashlib.md5(head.encode("utf-8", "replace")).hexdigest()[:8],
+            exc_type=etype, message=msg, pack=pack)
+        f["pos"] = s
+        return f
+    return None
 
 
 # ============================================================
