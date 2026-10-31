@@ -513,12 +513,46 @@
     });
   }
 
+  /* ---------- 联动：远程模式 ---------- */
+  // 控制远程主机时，界面上的操作都发给主机的启动器（remote_call 由本机后端转发）；
+  // 下面这些仍然在本机执行：联动本身、开浏览器、本机文件选择 / 拖放、本机启动器的更新和退出
+  const LOCAL_API = new Set(["remote_call", "open_url", "exit_app", "request_exit_confirm", "drop_files",
+    "drop_debug", "handle_dropped_paths", "launcher_check_update", "launcher_update", "launcher_restart",
+    "choose_files", "choose_images"]);
+  function makeRemoteApi(local) {
+    return new Proxy(local, {
+      get(t, name) {
+        if (typeof name !== "string" || name.startsWith("link_") || LOCAL_API.has(name)) return t[name];
+        if (!(name in t)) return t[name];
+        if (name === "choose_directory") {
+          return async () => {
+            App.toast("正在控制远程主机：请直接在输入框里填主机上的路径", "", 5000);
+            return { ok: false, path: "" };
+          };
+        }
+        return (...args) => {
+          while (args.length && args[args.length - 1] === undefined) args.pop();
+          return t.remote_call(name, args);
+        };
+      },
+    });
+  }
+
   /* ---------- 启动 ---------- */
   let bootStarted = false;  // pywebviewready 与 400ms 兜底可能先后触发，boot 必须幂等
   async function boot() {
     if (bootStarted) return;
     bootStarted = true;
     App.api = window.pywebview.api;
+    App.remote = null;
+    try {
+      const m = App.api.link_mode ? await App.api.link_mode() : null;
+      if (m && m.remote) {
+        App.remote = m;
+        App.api = makeRemoteApi(window.pywebview.api);
+        document.body.classList.add("remote-mode");
+      }
+    } catch (e) { console.error(e); }
     initNav();
     bindConfigControls();
     registerGlobalEvents();
@@ -526,6 +560,12 @@
     try {
       App.state = await App.api.get_state();
     } catch (e) {
+      if (App.remote) {     // 主机连不上：退回本机界面，别卡在一个空壳里
+        try { await window.pywebview.api.link_leave(); } catch (e2) { /* 忽略 */ }
+        try { sessionStorage.setItem("link-left", "连不上远程主机，已回到本机：" + e.message); } catch (e2) {}
+        location.reload();
+        return;
+      }
       bootStarted = false;  // 初始化失败时允许兜底逻辑重试
       App.toast("后端初始化失败：" + e.message, "error", 8000);
       console.error(e);

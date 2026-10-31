@@ -111,6 +111,12 @@
       <span class="is-label">INSTANCE // 当前实例</span>
       <div class="is-row"><i class="is-dot" id="inst-switch-dot"></i><select id="inst-switch-select"></select></div>
     </div>
+    <!-- 联动：正在控制远程主机时显示（js/link.js） -->
+    <div class="inst-switch link-banner" id="link-banner" hidden>
+      <span class="is-label">REMOTE // 正在控制远程主机</span>
+      <div class="is-row"><i class="is-dot" id="link-banner-dot" data-state="ready"></i><b id="link-banner-name"></b></div>
+      <button class="btn btn-xs" id="link-leave">返回本机</button>
+    </div>
     <nav id="nav">
       <button class="nav-item" data-page="launch"><svg><use href="#i-launch"/></svg><span>一键启动</span></button>
       <button class="nav-item nav-multi" data-page="instances" hidden><svg><use href="#i-stack"/></svg><span>实例管理</span></button>
@@ -121,8 +127,8 @@
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
       <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
-      <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>图片反推</span></button>
-      <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
+      <button class="nav-item" data-page="wd14" data-local-only><svg><use href="#i-tag"/></svg><span>图片反推</span></button>
+      <button class="nav-item" data-page="meta" data-local-only><svg><use href="#i-image"/></svg><span>图片信息</span></button>
     </nav>
     <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
     <section class="perf-mon" id="perf-mon" aria-label="性能监控"></section>
@@ -153,6 +159,8 @@
         <div class="inst-cards" id="launch-instances" hidden></div>
         <!-- LoRA 训练器：部署好之后才出现（trainer.js） -->
         <div class="inst-cards" id="launch-trainer" hidden></div>
+        <!-- 联动：已连接过的远程主机和它们的实例（js/link.js），远程模式下不显示 -->
+        <div class="inst-cards" id="launch-remote" data-local-only hidden></div>
         <div class="card">
           <!-- 初始文案只是 boot 前的兜底：applyKindTexts()（js/instances.js）会按实例类型覆盖 -->
           <div class="card-title"><span id="launch-root-title">根目录</span><span class="card-title-hint" id="launch-root-hint">ComfyUI 是包含 main.py 的文件夹；WebUI 是包含 webui.bat 的文件夹</span></div>
@@ -193,7 +201,7 @@
           <button class="btn" id="launch-open-browser" disabled>在浏览器中打开</button>
         </div>
 
-        <div class="card">
+        <div class="card" data-local-only>
           <div class="card-title">输出图片<span class="card-title-hint">快速打开出图目录（当天目录不存在时会自动创建）</span>
             <div class="hint" id="launch-output-hint" style="margin:2px 0 8px"></div><span style="display:none"></span></div>
           <div class="action-row" style="margin-top:0">
@@ -328,6 +336,44 @@
           <div class="progress" id="up-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
           <div class="hint" id="up-status"></div>
           <div class="hint">更新只覆盖启动器自身的代码文件：你的配置（launcher_config.json）、已下载的便携 Python/Git、WD14 环境和模型缓存都会原样保留。git 克隆安装的走增量拉取（只下载变化的部分），ZIP 安装的走整包覆盖。</div>
+        </div>
+
+        <div class="card" id="link-card" data-local-only>
+          <div class="card-title">局域网 / 广域网联动<span class="card-title-hint">另一台电脑上的启动器输入这台的密钥，就能管理这台的 LoRA、下载输出、启动和使用这台的 WebUI / ComfyUI</span></div>
+          <div class="link-cols">
+            <div class="link-col">
+              <div class="link-sub">本机作为主机</div>
+              <label class="chk-row"><input type="checkbox" id="link-host-on"><i></i><span>允许其他电脑联动控制这台电脑</span></label>
+              <div id="link-host-box" hidden>
+                <div class="link-key-row">
+                  <code class="link-key" id="link-key">—</code>
+                  <button class="btn btn-xs" id="link-key-copy">复制密钥</button>
+                  <button class="btn btn-xs" id="link-key-regen" title="换一把新密钥，之前连过的电脑都要重新输入">换新密钥</button>
+                </div>
+                <div class="form-grid link-form">
+                  <label>端口</label>
+                  <div class="row"><input type="text" id="link-port" style="max-width:110px"><button class="btn btn-xs" id="link-port-save">应用</button></div>
+                  <label>本机地址</label><span class="hint" id="link-ips">—</span>
+                  <label>已连接</label><span class="hint" id="link-clients">暂无</span>
+                </div>
+                <div class="hint" id="link-host-err" hidden></div>
+                <div class="hint">同一个局域网：远程那台直接输入密钥即可。不在一个网络：远程还要填这台的公网地址和端口（路由器做端口转发），
+                  或者两台都装 Tailscale / ZeroTier 后填虚拟局域网地址（更安全，推荐）。<br>
+                  密钥就是这台电脑的完全控制权（能删模型、能启动程序），只给信得过的人；不放心了点「换新密钥」。</div>
+                <div class="row" style="margin-top:8px"><button class="btn btn-xs" id="link-firewall">Windows 防火墙放行…</button>
+                  <span class="hint">远程连不上时点一下（会弹管理员确认）</span></div>
+              </div>
+            </div>
+            <div class="link-col">
+              <div class="link-sub">连接远程主机</div>
+              <div class="form-grid link-form">
+                <label>密钥</label><input type="text" id="link-in-key" placeholder="主机上显示的 24 位密钥" autocomplete="off" spellcheck="false">
+                <label>地址</label><input type="text" id="link-in-addr" placeholder="局域网可留空自动查找；广域网填 IP:端口" autocomplete="off" spellcheck="false">
+              </div>
+              <div class="row"><button class="btn btn-primary btn-sm" id="link-connect">连接</button><span class="hint" id="link-connect-hint"></span></div>
+              <div class="link-peers" id="link-peers"></div>
+            </div>
+          </div>
         </div>
 
         <div class="card">
@@ -697,7 +743,8 @@
             </div>
             <div class="detail-view" id="md-detail"></div>
             <div class="detail-actions">
-              <button class="btn btn-xs" id="md-open" disabled title="在资源管理器中定位">在资源管理器中定位</button>
+              <button class="btn btn-xs" id="md-open" disabled title="在资源管理器中定位" data-local-only>在资源管理器中定位</button>
+              <button class="btn btn-xs btn-accent" id="md-dl" disabled title="连同预览图和 Civitai 信息一起下载到这台电脑" data-remote-only>下载到本机</button>
               <button class="btn btn-xs" id="md-copy-name" disabled title="复制文件名（不含后缀）">复制文件名</button>
               <button class="btn btn-xs btn-accent" id="md-copy-lora" disabled title="复制 &lt;lora:名字:1&gt; 调用格式">复制 lora 调用格式</button>
               <button class="btn btn-xs" id="md-hash-lookup" disabled title="按哈希查询并补全信息（先查 Civitai，查不到再查 liblib）">哈希查询补全信息</button>
@@ -1037,6 +1084,7 @@
               <span id="out-sel-count">已选 0 张</span>
               <select id="out-sel-col"></select>
               <button class="btn btn-xs" id="out-sel-add">加入收藏夹</button>
+              <button class="btn btn-xs btn-accent" id="out-sel-dl" data-remote-only>下载到本机</button>
               <button class="btn btn-xs btn-danger-text" id="out-sel-del">删除（进回收站）</button>
               <button class="btn btn-xs" id="out-sel-clear">取消选择</button>
             </div>
@@ -1054,8 +1102,9 @@
             <button class="btn btn-xs" id="od-prev">‹ 上一张</button>
             <button class="btn btn-xs" id="od-next">下一张 ›</button>
             <button class="btn btn-xs" id="od-open">打开</button>
-            <button class="btn btn-xs" id="od-reveal">定位</button>
-            <button class="btn btn-xs" id="od-meta">发送到图片信息</button>
+            <button class="btn btn-xs" id="od-reveal" data-local-only>定位</button>
+            <button class="btn btn-xs btn-accent" id="od-dl" data-remote-only>下载到本机</button>
+            <button class="btn btn-xs" id="od-meta" data-local-only>发送到图片信息</button>
             <button class="btn btn-xs btn-danger-text" id="od-del">删除</button>
           </div>
           <div class="od-cols" id="od-cols"></div>
@@ -1112,6 +1161,11 @@
 <!-- 顶部加载条 -->
 <div id="loadbar"><div class="topbar-fill"><span class="topbar-glow"></span></div></div>
 
+<!-- 联动：上传 / 下载到本机的进度（js/link.js） -->
+<div class="link-xfer" id="link-xfer" hidden>
+  <div class="lx-head"><b id="link-xfer-title">传输中</b><button class="btn btn-xs" id="link-xfer-cancel">取消</button></div>
+  <div class="progress"><div class="progress-bar" id="link-xfer-bar"></div><span class="progress-text" id="link-xfer-text"></span></div>
+</div>
 <div id="toasts"></div>
 
 <script src="js/current_theme.js"></script>
@@ -1139,6 +1193,7 @@
 <script src="js/imgcontainer.js"></script>
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
+<script src="js/link.js"></script>
 <script src="js/outputs.js"></script>
 <script src="js/diagnose.js"></script>
 <script src="js/perfmon.js"></script>

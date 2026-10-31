@@ -852,6 +852,14 @@
       $("#od-next").addEventListener("click", () => { if (detailIdx < ids.length - 1) openDetail(detailIdx + 1); });
       $("#od-open").addEventListener("click", () => detail && App.api.outputs_open(detail.id));
       $("#od-reveal").addEventListener("click", () => detail && App.api.outputs_reveal(detail.id));
+      // 联动：控制远程主机时把主机的出图下载到这台电脑
+      const downloadIds = async (list) => {
+        if (!list.length) { App.toast("先点选要下载的图", "error"); return; }
+        const r = await App.api.link_download_outputs(list);
+        if (r && r.ok === false && !r.cancelled) App.toast(r.error || "下载失败", "error", 6000);
+      };
+      $("#od-dl").addEventListener("click", () => detail && downloadIds([detail.id]));
+      $("#out-sel-dl").addEventListener("click", () => downloadIds(Array.from(selected)));
       $("#od-del").addEventListener("click", () => detail && deleteIds([detail.id]));
       $("#od-meta").addEventListener("click", () => {
         if (!detail || !App.pages.meta) return;

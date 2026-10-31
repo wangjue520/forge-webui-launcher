@@ -58,6 +58,7 @@ import h3_models as h3m
 import amd_rocm
 import netspeed
 import lora_trainer as lt
+import remote_link as rl
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
@@ -649,11 +650,17 @@ class LauncherApi:
                 _diag_hook(self, scope, type_, data)   # 日志抄一份给报错诊断
             except Exception:
                 pass
+        evt = {"scope": scope, "type": type_, **data}
+        host = getattr(self, "_link_host", None)
+        if host is not None and scope != "link":   # 联动：远程启动器的界面也要收到主机的事件
+            host.publish(dict(evt))
+        self._queue_event(evt)
+
+    def _queue_event(self, evt):
         if not self._window:
             return
         self._ensure_emit_sender()
-        evt = {"scope": scope, "type": type_, **data}
-        if type_ != "log":
+        if evt.get("type") != "log":
             # state/ask/progress 等控制事件不允许丢，队列满了就阻塞等 sender 消化
             self._emit_q.put(evt)
             return
@@ -721,7 +728,8 @@ class LauncherApi:
                             nxt = self._emit_q.get(timeout=0.05)
                         except queue.Empty:
                             break
-                        if nxt.get("type") == "log" and nxt.get("scope") == scope:
+                        if (nxt.get("type") == "log" and nxt.get("scope") == scope
+                                and nxt.get("_remote") == evt.get("_remote")):
                             piece = nxt.get("text") or ""
                             # 前端对每条事件之间自行补换行；合并后缺换行要补上，
                             # 否则两条日志会粘成一行
@@ -740,6 +748,9 @@ class LauncherApi:
         window = self._window
         if not window:
             return
+        if not _link_should_show(self, evt):
+            return
+        evt.pop("_remote", None)
         try:
             payload = json.dumps(evt, ensure_ascii=False)
             window.evaluate_js(f"window.App && window.App.onEvent({payload})")
@@ -840,6 +851,7 @@ class LauncherApi:
         # 第一次拿状态 = 前端已就绪：根目录为空/失效（新用户、换了电脑）就在后台找一下本机的安装
         if not getattr(self, "_auto_pick_started", False):
             self._auto_pick_started = True
+            _link_init(self)      # 开着联动的话主机服务跟着启动
             self._spawn(lambda: _auto_pick_install(self), name="auto-pick-install")
             self._spawn(lambda: _ensure_shortcuts(self), name="shortcuts")
         # 每次打开 / 刷新页面都按目录重新认一遍各实例的类型，记录错了就在这里纠正，
@@ -1098,7 +1110,9 @@ class LauncherApi:
         return self._runner(iid).precheck(root)
 
     def launch_start(self, root, fix_overrides=False, kill_pid=0, iid=None, rebuild_venv=False):
-        return self._runner(iid).start(root, fix_overrides, kill_pid, rebuild_venv)
+        r = self._runner(iid)
+        r.remote_started = _link_from_remote(self)
+        return r.start(root, fix_overrides, kill_pid, rebuild_venv)
 
     def launch_stop(self, iid=None):
         return self._runner(iid).stop()
@@ -8906,7 +8920,592 @@ def _api_diag_report_error(self, text):
 # 把分节写的函数挂到 LauncherApi 上
 # ============================================================
 
+# ============================================================
+# 局域网 / 广域网联动（协议和网络部分在 remote_link.py）
+#
+# 主机：开着联动服务，远程启动器发来的接口调用经 _link_dispatch 直接调本机 LauncherApi 的方法，
+#      主机界面收到的事件同时进 LinkHost 的事件环给远程长轮询。
+# 远程：进入「远程模式」后前端把绝大部分 App.api 调用改成 remote_call(方法, 参数)，
+#      这里转给主机；结果和事件里主机本地的地址（WebUI、输出文件服务）换成本机的转发端口。
+# ============================================================
+# 远程不能让主机做的事：在主机屏幕上弹对话框 / 开窗口、退出或更新主机的启动器、改联动本身
+_LINK_DENY = {
+    "exit_app", "request_exit_confirm", "choose_directory", "choose_files", "choose_images",
+    "open_url", "reveal_in_explorer", "drop_files", "drop_debug", "handle_dropped_paths",
+    "launcher_update", "launcher_restart", "remote_call", "outputs_reveal", "outputs_open",
+    "reveal_image", "open_output_folder", "ver_open_backup", "ext_open_dir", "trainer_open",
+}
+# 远程模式下仍然显示本机事件的 scope（联动自己的状态、本机启动器的自更新）
+_LINK_LOCAL_SCOPES = {"link", "launcher"}
+# 远程模式下界面风格等按本机的来，不去改主机的
+_LINK_LOCAL_CFG = {"ui_theme"}
+_LINK_NO_LOCAL_FILES = "这是主机上的文件 / 文件夹，没法在这台电脑上直接打开；需要的话用「下载到本机」"
+_link_tls = threading.local()
+
+
+def _link_from_remote(self):
+    """当前这次接口调用是不是联动的远程启动器发来的"""
+    return bool(getattr(_link_tls, "remote", False))
+
+
+def _link_init(self):
+    if getattr(self, "_link_state", None) is not None:
+        return
+    self._link_state = rl.load_state()
+    self._link_host = None
+    self._link_client = rl.LinkClient(
+        deliver=lambda evt: _link_deliver(self, evt),
+        on_status=lambda online, text: self._emit("link", "status", online=online, text=text))
+    self._link_staged = {}           # 远程模式上传过的本机文件 -> 主机收件箱里的路径
+    self._link_xfer_cancel = False
+    self._link_xfer_thread = None
+    h = self._link_state["host"]
+    if h.get("enabled") and h.get("key"):
+        _link_host_start(self)
+
+
+def _link_save(self):
+    try:
+        rl.save_state(self._link_state)
+    except OSError:
+        pass
+
+
+def _link_deliver(self, evt):
+    evt["_remote"] = True
+    self._queue_event(evt)
+
+
+def _link_should_show(self, evt):
+    """远程模式只显示主机的事件（加上联动自己的状态）；本机模式不显示主机的事件"""
+    cli = getattr(self, "_link_client", None)
+    remote_mode = cli is not None and cli.active
+    scope = evt.get("scope")
+    if evt.get("_remote"):
+        return remote_mode and scope not in _LINK_LOCAL_SCOPES
+    return not remote_mode or scope in _LINK_LOCAL_SCOPES or scope == "app"
+
+
+# ---------------------------------------------------------- 主机端 ----
+def _link_host_start(self):
+    h = self._link_state["host"]
+    if self._link_host is None:
+        self._link_host = rl.LinkHost(lambda m, a: _link_dispatch(self, m, a),
+                                      lambda q: _link_file_resolver(self, q))
+    rl.clean_inbox()
+    return self._link_host.start(h["key"], int(h.get("port") or rl.DEFAULT_PORT))
+
+
+def _link_dispatch(self, method, args):
+    if method == "link_hello":
+        return _link_hello(self)
+    if method == "link_import_start":
+        return _link_import_start(self, *args)
+    if method == "link_model_bundle":
+        return _link_model_bundle(self, *args)
+    if method.startswith(("_", "link_")) or method in _LINK_DENY:
+        raise PermissionError(f"远程不能调用主机的 {method}")
+    fn = getattr(self, method, None)
+    if not callable(fn):
+        raise PermissionError(f"主机的启动器没有「{method}」这个功能，两边版本可能不一样：先把两台的启动器都更新到最新")
+    _link_tls.remote = True
+    try:
+        return fn(*args)
+    finally:
+        _link_tls.remote = False
+
+
+def _link_hello(self):
+    p = _instances_payload(self)
+    return {"proto": rl.PROTO, "name": socket.gethostname(),
+            "version": updater.get_local_info(self.cfg)["version"],
+            "instances": [{"id": i["id"], "name": i["name"], "kind": i["kind"], "kind_label": i["kind_label"],
+                           "active": i["active"], "status": i["status"]} for i in p["instances"]]}
+
+
+def _link_under(path, roots):
+    real = os.path.normcase(os.path.realpath(path))
+    for r in roots:
+        if not r:
+            continue
+        rr = os.path.normcase(os.path.realpath(r))
+        if real == rr or real.startswith(rr.rstrip("\\/") + os.sep):
+            return True
+    return False
+
+
+def _link_model_roots(self):
+    if not self._models_categories:
+        _api_models_categories(self)
+    roots = [c["path"] for c in self._models_categories]
+    lib = _library_path(self)
+    if lib:
+        roots.append(lib)
+    return roots
+
+
+def _link_file_resolver(self, q):
+    """/file 只给两类文件：输出索引里的（按 id），模型目录里的（按路径）"""
+    if q.get("oid"):
+        try:
+            path, _m = _outidx(self).path_of(int(q["oid"]))
+        except ValueError:
+            return None
+        return path
+    path = q.get("path") or ""
+    if not path:
+        return None
+    if not _link_under(path, _link_model_roots(self)):
+        raise PermissionError("只能下载主机模型目录里的文件")
+    return os.path.realpath(path)
+
+
+def _link_model_bundle(self, path):
+    """下载一个模型时顺带的文件：预览图、Civitai 信息"""
+    if not path or not _link_under(path, _link_model_roots(self)) or not os.path.isfile(path):
+        return {"ok": False, "error": "主机上没有这个模型文件"}
+    base = os.path.splitext(path)[0]
+    extra = [p for p in _preview_candidates(path) + [base + ".civitai.info", base + ".json"]
+             if os.path.isfile(p)]
+    return {"ok": True, "files": [{"path": p, "size": _safe_size(p)} for p in [path] + extra]}
+
+
+def _link_import_start(self, cat_index, staged):
+    """远程上传的模型已经在收件箱里：照常导入，导入线程结束后把收件箱里这一批删掉"""
+    staged = [p for p in (staged or []) if isinstance(p, str) and _link_under(p, [rl.INBOX_DIR])]
+    if not staged:
+        return {"ok": False, "error": "没有收到上传的文件"}
+    r = _api_models_import_start(self, cat_index, staged)
+    t = self._import_thread
+    if r.get("ok") and t:
+        dirs = {os.path.dirname(p) for p in staged}
+
+        def cleanup():
+            t.join()
+            for d in dirs:
+                shutil.rmtree(d, ignore_errors=True)
+        self._spawn(cleanup, "link-inbox-cleanup")
+    return r
+
+
+def _api_link_host_set(self, enabled=None, port=None):
+    _link_init(self)
+    h = self._link_state["host"]
+    if port not in (None, ""):
+        p = str(port).strip()
+        if not p.isdigit() or not 1024 <= int(p) <= 65535:
+            return {"ok": False, "error": "端口要在 1024 ~ 65535 之间"}
+        h["port"] = int(p)
+    if enabled is not None:
+        h["enabled"] = bool(enabled)
+    if h.get("enabled") and not h.get("key"):
+        h["key"] = rl.new_key()
+    _link_save(self)
+    if h.get("enabled"):
+        if not _link_host_start(self):
+            return {**_api_link_info(self), "ok": False, "error": self._link_host.error}
+    elif self._link_host:
+        self._link_host.stop()
+    return _api_link_info(self)
+
+
+def _api_link_host_regen(self):
+    """换一把新密钥：已经连上的远程全部失效，要重新输入"""
+    _link_init(self)
+    h = self._link_state["host"]
+    h["key"] = rl.new_key()
+    _link_save(self)
+    if h.get("enabled"):
+        _link_host_start(self)
+    return _api_link_info(self)
+
+
+def _api_link_firewall(self):
+    """弹 UAC 给 Windows 防火墙加两条入站规则（联动端口 TCP + 局域网发现 UDP）"""
+    if os.name != "nt":
+        return {"ok": False, "error": "只有 Windows 需要这一步"}
+    _link_init(self)
+    port = int(self._link_state["host"].get("port") or rl.DEFAULT_PORT)
+    cmds = [
+        'netsh advfirewall firewall delete rule name="WWY启动器联动"',
+        f'netsh advfirewall firewall add rule name="WWY启动器联动" dir=in action=allow protocol=TCP localport={port}',
+        f'netsh advfirewall firewall add rule name="WWY启动器联动" dir=in action=allow protocol=UDP localport={rl.DISCOVERY_PORT}',
+    ]
+    script = " & ".join(cmds)
+    ps = ("Start-Process -FilePath cmd.exe -Verb RunAs -WindowStyle Hidden -Wait "
+          f"-ArgumentList '/c {script.replace(chr(39), chr(39) * 2)}'")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps], capture_output=True,
+                           timeout=120, creationflags=_NO_WINDOW)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": str(e)}
+    if r.returncode != 0:
+        return {"ok": False, "error": "没有完成（可能在系统弹窗里点了「否」）"}
+    return {"ok": True}
+
+
+# ---------------------------------------------------------- 远程端 ----
+def _link_peer(self, pid):
+    for d in self._link_state["peers"]:
+        if d.get("id") == pid:
+            return rl.Peer.from_json(d)
+    return None
+
+
+def _link_mode(self):
+    cli = self._link_client
+    p = cli.peer
+    return {"remote": bool(p), "online": cli.online,
+            "peer": {"id": p.pid, "name": p.name, "addr": p.addr, "port": p.port} if p else None}
+
+
+def _api_link_info(self):
+    _link_init(self)
+    h = self._link_state["host"]
+    host = self._link_host
+    return {"ok": True,
+            "host": {"enabled": bool(h.get("enabled")), "running": bool(host and host.running),
+                     "key": rl.format_key(h["key"]) if h.get("key") else "",
+                     "port": int(h.get("port") or rl.DEFAULT_PORT),
+                     "ips": rl.lan_ipv4s(), "name": socket.gethostname(),
+                     "error": host.error if host else "",
+                     "discovery": bool(host and host._udp is not None),
+                     "clients": host.online_clients() if host else []},
+            "peers": [{"id": d["id"], "name": d.get("name") or d["addr"], "addr": d["addr"],
+                       "port": d.get("port") or rl.DEFAULT_PORT} for d in self._link_state["peers"]],
+            "mode": _link_mode(self)}
+
+
+def _api_link_mode(self):
+    _link_init(self)
+    return _link_mode(self)
+
+
+def _api_link_connect(self, key, addr=""):
+    """输入密钥（可选地址）连主机：没填地址就在局域网里广播找"""
+    _link_init(self)
+    k = rl.normalize_key(key)
+    if not k:
+        return {"ok": False, "error": f"密钥是 {rl.KEY_LEN} 位字母和数字（主机「启动器设置 → 联动」里显示的那串），请检查一下"}
+    if k == self._link_state["host"].get("key"):
+        return {"ok": False, "error": "这是本机自己的密钥：要在另一台电脑上输入"}
+    if (addr or "").strip():
+        hp = rl.parse_addr(addr)
+        if not hp:
+            return {"ok": False, "error": "地址格式不对，例：192.168.1.5 或 192.168.1.5:7899"}
+        cands = [(hp[0], hp[1], "")]
+    else:
+        cands = rl.discover(k)
+        if not cands:
+            return {"ok": False, "error": "局域网里没找到这台主机。确认主机已打开联动、两台在同一个网络；"
+                                          "不在同一个网络（广域网）请填上主机的地址和端口"}
+    last = ""
+    for host, port, name in cands:
+        peer = rl.Peer(host, port, k, name)
+        try:
+            hi = peer.hello()
+        except rl.LinkError as e:
+            last = str(e)
+            continue
+        peer.name = hi.get("name") or name or host
+        old = next((d for d in self._link_state["peers"] if d["key"] == k), None)
+        if old:
+            peer.pid = old["id"]
+            self._link_state["peers"].remove(old)
+        self._link_state["peers"].append(peer.to_json())
+        _link_save(self)
+        mine = updater.get_local_info(self.cfg)["version"]
+        warn = "" if hi.get("version") == mine else \
+            f"两边启动器版本不同（主机 {hi.get('version')}，本机 {mine}），建议都更新到最新"
+        return {**_api_link_info(self), "ok": True, "warn": warn,
+                "peer": {"id": peer.pid, "name": peer.name, "addr": host, "port": port}}
+    return {"ok": False, "error": last or "连不上主机"}
+
+
+def _api_link_peer_remove(self, pid):
+    _link_init(self)
+    if self._link_client.peer and self._link_client.peer.pid == pid:
+        self._link_client.leave()
+    self._link_client.drop_peer(pid)
+    self._link_state["peers"] = [d for d in self._link_state["peers"] if d.get("id") != pid]
+    _link_save(self)
+    return _api_link_info(self)
+
+
+def _api_link_peers_status(self):
+    """一键启动页的远程实例卡片：每台主机在不在线、有哪些实例、运行到哪了（并发问，最多等几秒）"""
+    _link_init(self)
+    peers = [rl.Peer.from_json(d) for d in self._link_state["peers"]]
+    out = {}
+
+    def ask(p):
+        try:
+            hi = p.hello(timeout=4)
+            out[p.pid] = {"online": True, **self._link_client.rewrite(hi, p)}
+        except rl.LinkError as e:
+            out[p.pid] = {"online": False, "error": str(e)}
+    ts = [threading.Thread(target=ask, args=(p,), daemon=True) for p in peers]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(6)
+    return {"ok": True, "status": out}
+
+
+def _api_link_enter(self, pid):
+    _link_init(self)
+    peer = _link_peer(self, pid)
+    if not peer:
+        return {"ok": False, "error": "没有这台远程主机"}
+    try:
+        peer.hello()
+    except rl.LinkError as e:
+        return {"ok": False, "error": str(e)}
+    self._link_client.enter(peer)
+    self._link_staged = {}
+    return {"ok": True, **_link_mode(self)}
+
+
+def _api_link_leave(self):
+    _link_init(self)
+    self._link_client.leave()
+    return {"ok": True}
+
+
+def _api_remote_call(self, method, args=None):
+    """远程模式下前端的接口调用都走这里"""
+    _link_init(self)
+    cli = self._link_client
+    args = list(args or [])
+    if not cli.active:
+        raise rl.LinkError("已经退出远程模式，请刷新界面")
+    fn = _LINK_INTERCEPT.get(method)
+    if fn:
+        return fn(self, cli, args)
+    if method in _LINK_DENY:
+        return {"ok": False, "error": _LINK_NO_LOCAL_FILES}
+    return cli.call(method, args)
+
+
+def _lk_get_state(self, cli, args):
+    st = cli.call("get_state", args)
+    for k in _LINK_LOCAL_CFG:
+        if k in self.cfg:
+            st.setdefault("config", {})[k] = self.cfg[k]
+    local_ver = updater.get_local_info(self.cfg)
+    st["launcher"] = {"version": local_ver["version"], "commit": local_ver["commit"]}
+    st["new_machine"] = False
+    st["remote"] = _link_mode(self)
+    return st
+
+
+def _lk_update_config(self, cli, args):
+    changes = args[0] if args and isinstance(args[0], dict) else {}
+    local = {k: v for k, v in changes.items() if k in _LINK_LOCAL_CFG}
+    rest = {k: v for k, v in changes.items() if k not in _LINK_LOCAL_CFG}
+    if local:
+        self.update_config(local)
+    if rest or not local:
+        return cli.call("update_config", [rest])
+    return {"ok": True, "cmd_args": ""}
+
+
+def _lk_trainer_open(self, cli, args):
+    st = cli.call("trainer_status", [])
+    url = ((st or {}).get("run") or {}).get("url")
+    if not url:
+        return {"ok": False, "error": "主机上的训练器还没有运行"}
+    return self.open_url(url)
+
+
+def _lk_outputs_open(self, cli, args):
+    """远程的出图：先下到本机缓存再用默认程序打开"""
+    d = cli.call("outputs_detail", args[:1])
+    if not d or not d.get("ok"):
+        return d or {"ok": False, "error": "记录不存在"}
+    cache = os.path.join(APP_DIR, "launcher_data", "remote_cache")
+    os.makedirs(cache, exist_ok=True)
+    dest = os.path.join(cache, f"{int(args[0])}_{os.path.basename(d['path'])}")
+    if not os.path.isfile(dest):
+        cli.peer.download({"oid": int(args[0])}, dest)
+    try:
+        os.startfile(dest)  # noqa: S606 - 用户自己的出图
+    except (OSError, AttributeError) as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
+def _link_upload_all(self, cli, paths):
+    """把本机文件传到主机收件箱，返回主机上的路径；传过的不重复传"""
+    batch = datetime.now().strftime("%Y%m%d%H%M%S") + "_" + os.urandom(3).hex()
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            for dp, _ds, fs in os.walk(p):
+                files += [os.path.join(dp, f) for f in fs]
+        elif os.path.isfile(p):
+            files.append(p)
+    todo = [f for f in files if f not in self._link_staged]
+    total = sum(_safe_size(f) for f in todo) or 1
+    sent = 0
+    self._link_xfer_cancel = False
+    for i, f in enumerate(todo):
+        name = os.path.basename(f)
+
+        def prog(done, _size, base=sent, name=name, i=i):
+            self._emit("link", "transfer", dir="up", name=name, i=i + 1, n=len(todo),
+                       pct=round((base + done) * 100 / total, 1))
+        self._link_staged[f] = cli.peer.upload(f, batch, prog, lambda: self._link_xfer_cancel)
+        sent += _safe_size(f)
+    if todo:
+        self._emit("link", "transfer_done", dir="up", ok=True, n=len(todo))
+    return [self._link_staged[f] for f in files if f in self._link_staged]
+
+
+def _lk_import_plan(self, cli, args):
+    cat, paths = args[0], args[1] if len(args) > 1 else []
+    try:
+        staged = _link_upload_all(self, cli, paths or [])
+    except rl.LinkError as e:
+        self._emit("link", "transfer_done", dir="up", ok=False, error=str(e))
+        return {"ok": False, "error": str(e)}
+    return cli.call("models_import_plan", [cat, staged])
+
+
+def _lk_import_start(self, cli, args):
+    cat, paths = args[0], args[1] if len(args) > 1 else []
+    try:
+        staged = _link_upload_all(self, cli, paths or [])
+    except rl.LinkError as e:
+        return {"ok": False, "error": str(e)}
+    return cli.call("link_import_start", [cat, staged])
+
+
+def _lk_set_preview(self, cli, args):
+    """换预览图：本机选的图片主机读不到，读出来按 base64 传过去"""
+    path, src = args[0], args[1] if len(args) > 1 else ""
+    b64 = args[2] if len(args) > 2 else ""
+    if src and os.path.isfile(src):
+        with open(src, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        src = ""
+    return cli.call("models_set_preview", [path, src, b64])
+
+
+_LINK_INTERCEPT = {
+    "get_state": _lk_get_state,
+    "update_config": _lk_update_config,
+    "trainer_open": _lk_trainer_open,
+    "outputs_open": _lk_outputs_open,
+    "models_import_plan": _lk_import_plan,
+    "models_import_start": _lk_import_start,
+    "models_set_preview": _lk_set_preview,
+}
+
+
+# ---------------------------------------------------------- 下载到本机 ----
+def _link_download_job(self, items, dest_dir):
+    """items: [(查询参数, 文件名)]，后台下载，进度走 link/transfer"""
+    peer = self._link_client.peer
+    if peer is None:
+        return {"ok": False, "error": "没有在控制远程主机"}
+    if self._link_xfer_thread and self._link_xfer_thread.is_alive():
+        return {"ok": False, "error": "上一批还在传，等它完成或先取消"}
+    self._link_xfer_cancel = False
+
+    def work():
+        ok, failed = 0, []
+        for i, (q, name) in enumerate(items):
+            dest = os.path.join(dest_dir, name)
+            if os.path.exists(dest):
+                stem, ext = os.path.splitext(name)
+                n = 2
+                while os.path.exists(os.path.join(dest_dir, f"{stem} ({n}){ext}")):
+                    n += 1
+                dest = os.path.join(dest_dir, f"{stem} ({n}){ext}")
+
+            def prog(done, total, i=i, name=name):
+                pct = round(done * 100 / total, 1) if total else 0
+                self._emit("link", "transfer", dir="down", name=name, i=i + 1, n=len(items), pct=pct)
+            try:
+                peer.download(q, dest, prog, lambda: self._link_xfer_cancel)
+                ok += 1
+            except rl.LinkError as e:
+                failed.append({"name": name, "error": str(e)})
+                if self._link_xfer_cancel:
+                    break
+        self._emit("link", "transfer_done", dir="down", ok=not failed, done=ok, failed=failed,
+                   dest=dest_dir, cancelled=self._link_xfer_cancel)
+    self._link_xfer_thread = self._spawn(work, "link-download")
+    return {"ok": True, "n": len(items), "dest": dest_dir}
+
+
+def _api_link_download_outputs(self, oids):
+    _link_init(self)
+    cli = self._link_client
+    if not cli.active:
+        return {"ok": False, "error": "没有在控制远程主机"}
+    oids = [int(o) for o in (oids or [])][:2000]
+    if not oids:
+        return {"ok": False, "error": "先选中要下载的图"}
+    d = self.choose_directory("把主机的输出下载到…", "")
+    if not d.get("path"):
+        return {"ok": False, "cancelled": True}
+    items = []
+    for oid in oids:
+        try:
+            det = cli.call("outputs_detail", [oid])
+        except rl.LinkError as e:
+            return {"ok": False, "error": str(e)}
+        if det and det.get("ok") and det.get("path"):
+            items.append(({"oid": oid}, os.path.basename(det["path"])))
+    if not items:
+        return {"ok": False, "error": "选中的文件在主机上已经不存在了"}
+    return _link_download_job(self, items, d["path"])
+
+
+def _api_link_download_model(self, path):
+    _link_init(self)
+    cli = self._link_client
+    if not cli.active:
+        return {"ok": False, "error": "没有在控制远程主机"}
+    try:
+        b = cli.call("link_model_bundle", [path])
+    except rl.LinkError as e:
+        return {"ok": False, "error": str(e)}
+    if not b or not b.get("ok"):
+        return b or {"ok": False, "error": "主机上没有这个模型"}
+    try:   # 下载 LoRA 时默认打开本机当前实例的 LoRA 目录
+        start = _lora_root(self) if "lora" in path.lower() else ""
+    except Exception:
+        start = ""
+    d = self.choose_directory("把模型下载到这台电脑的…", start if start and os.path.isdir(start) else "")
+    if not d.get("path"):
+        return {"ok": False, "cancelled": True}
+    items = [({"path": f["path"]}, os.path.basename(f["path"])) for f in b["files"]]
+    return _link_download_job(self, items, d["path"])
+
+
+def _api_link_transfer_cancel(self):
+    self._link_xfer_cancel = True
+    return {"ok": True}
+
+
 for _name, _fn in {
+    "link_info": _api_link_info,
+    "link_mode": _api_link_mode,
+    "link_host_set": _api_link_host_set,
+    "link_host_regen": _api_link_host_regen,
+    "link_firewall": _api_link_firewall,
+    "link_connect": _api_link_connect,
+    "link_peer_remove": _api_link_peer_remove,
+    "link_peers_status": _api_link_peers_status,
+    "link_enter": _api_link_enter,
+    "link_leave": _api_link_leave,
+    "link_download_outputs": _api_link_download_outputs,
+    "link_download_model": _api_link_download_model,
+    "link_transfer_cancel": _api_link_transfer_cancel,
+    "remote_call": _api_remote_call,
     "_mirror_status_text": _api_mirror_status_text,
     "redetect_network": _api_redetect_network,
     "proxy_get": _api_proxy_get,
