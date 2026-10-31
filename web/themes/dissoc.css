@@ -695,11 +695,17 @@
    八、模型管理 / 输出管理：不限最大宽度，中间的文件列表加宽，大小 / 基础模型 / 时间不换行
    ============================================================ */
 :root[data-ui-theme="dissoc"] :is(#page-models, #page-outputs) { max-width: none; }
-:root[data-ui-theme="dissoc"] .models-layout { grid-template-columns: 170px minmax(0, 2.4fr) minmax(280px, 1fr); gap: 18px; }
+:root[data-ui-theme="dissoc"] .models-layout { grid-template-columns: 170px minmax(0, 3fr) minmax(260px, 1fr); gap: 18px; }
 :root[data-ui-theme="dissoc"] #md-files { font-size: 13px; }
 :root[data-ui-theme="dissoc"] #md-files :is(td, th):not(:first-child) { white-space: nowrap; }
-:root[data-ui-theme="dissoc"] #md-files td:first-child { word-break: break-all; }
+/* 文件名列保底 300px（再窄就横向滚动），长名字只在 _ - . / 这类地方换行，不再一个字一个字地折 */
+:root[data-ui-theme="dissoc"] #md-files th:first-child { min-width: 300px; }
+:root[data-ui-theme="dissoc"] #md-files td:first-child { word-break: normal; overflow-wrap: anywhere; }
 :root[data-ui-theme="dissoc"] #md-files td { padding: 9px 12px; }
+:root[data-ui-theme="dissoc"] #md-files :is(td, th):is(:nth-child(2), :nth-child(3), :nth-child(4)) { padding-left: 8px; padding-right: 8px; }
+/* 选中行是墨色底：灰字跟着翻成浅色，否则看不清 */
+:root[data-ui-theme="dissoc"] .data-table tbody tr.selected td { color: var(--dx-on); }
+:root[data-ui-theme="dissoc"] .data-table tbody tr.selected td.dim { color: var(--dx-on); opacity: .72; }
 @media (max-width: 1100px) {   /* 和基础样式一致：窄窗口收起右侧详情 */
   :root[data-ui-theme="dissoc"] .models-layout { grid-template-columns: 150px minmax(0, 1fr); }
 }
