@@ -127,6 +127,24 @@ DEFAULT_CONFIG = {
     "wd14_save_txt": True,
     "wd14_auto_run": True,        # 加进图片后自动开始反推（模型已下载时）
     "wd14_view": "tags",          # 结果显示成 tags（标签块）/ text（一段文本）
+    # 「图片反推」页的自然语言反推（和 LoRA 训练器的自然语言打标同一套）
+    "caption_mode": "tags",               # tags（WD14 标签）/ text（自然语言）/ hybrid（标签 + 自然语言）
+    "caption_source": "local",            # local（本地模型）/ api（云端 API）
+    "caption_model": "toriigate",         # 本地模型，见 vlm_caption_core.VLM_MODELS
+    "caption_quant": "auto",              # auto / bf16 / 8bit / 4bit
+    "caption_preset": "detailed",         # 提示词模板，custom = 用 caption_prompt
+    "caption_prompt": "",
+    "caption_torii_format": "long",       # ToriiGate 的描述格式 long / short
+    "caption_use_names": True,            # ToriiGate 识别并写出角色名
+    "caption_feed_tags": True,            # 「标签 + 自然语言」时把 WD14 标签交给模型参考
+    "caption_keep_tags": True,            # 「标签 + 自然语言」时结果里保留 WD14 标签
+    "caption_max_tokens": 512,
+    "caption_api_preset": "Google Gemini",
+    "caption_api_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "caption_api_model": "gemini-2.5-flash",
+    "caption_api_key": "",
+    "caption_api_concurrency": 4,
+    "caption_api_fallback": True,         # API 拒答时用已经下好的本地模型补上
 }
 
 CONFIG_VERSION = 3
@@ -472,7 +490,7 @@ def load_config():
 # 配置就把这些「本机专属」的东西清掉，界面偏好（主题、镜像模式等）保留。
 
 # 顶层里属于「这台电脑」或「这个人」的键（实例里的路径另外处理）
-_MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "diag_llm_api_key",
+_MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "diag_llm_api_key", "caption_api_key",
                  "mirror_detected", "github_mirror_detected")
 _PATH_SUFFIXES = ("_dir", "_path", "_root", "_dirs")
 

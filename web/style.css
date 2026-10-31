@@ -280,7 +280,8 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--ink);
   box-shadow: inset 3px 0 0 var(--ink), 0 0 0 3px rgba(255, 242, 0, .45);
 }
-input:disabled, select:disabled, textarea:disabled { background: var(--panel-2); color: var(--text-faint); }
+/* 只改底色：用 background 简写会把下拉框箭头的 background-size 也重置掉，主题再画箭头时两条渐变铺满整个框（灰底大三角） */
+input:disabled, select:disabled, textarea:disabled { background-color: var(--panel-2); color: var(--text-faint); }
 input::placeholder, textarea::placeholder { color: #75777c; }
 textarea { min-height: 90px; resize: vertical; line-height: 1.55; }
 textarea.ta-sm { min-height: 64px; }
@@ -664,6 +665,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .wd-view { flex: none; }
 .wd-view .chip { padding: 4px 12px; }
 .wd-more { text-align: center; font-size: 12px; color: var(--text-faint); padding: 6px 0; }
+.wd-opts { flex-wrap: wrap; gap: 4px 22px; margin-bottom: 8px; }
+.wd-opts .chk-row { margin: 0; }
+/* 自然语言反推 */
+.cap-modebar { align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.cap-mode .chip { padding: 6px 16px; font-size: 13px; }
+.cap-modebar .hint { margin: 0; }
+.cap-src-row { margin-bottom: 10px; }
+.cap-form { grid-template-columns: 96px 1fr; margin-top: 10px; }
+.wd-desc { font-family: inherit; font-size: 12.5px; }
 
 /* 底部操作条：列表长了也一直看得到 */
 .wd-actions {

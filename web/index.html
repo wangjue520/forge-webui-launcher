@@ -121,7 +121,7 @@
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
       <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
-      <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>WD14 反推</span></button>
+      <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>图片反推</span></button>
       <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
     </nav>
     <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
@@ -734,11 +734,17 @@
         </div>
       </section>
 
-      <!-- ======== WD14 反推 ======== -->
+      <!-- ======== 图片反推（WD14 标签 / 自然语言） ======== -->
       <section class="page" id="page-wd14">
+        <div class="row cap-modebar">
+          <span class="chips cap-mode" id="cap-mode">
+            <button class="chip" data-mode="tags">标签（WD14）</button><button class="chip" data-mode="text">自然语言</button><button class="chip" data-mode="hybrid">标签 + 自然语言</button>
+          </span>
+          <span class="hint" id="cap-mode-hint"></span>
+        </div>
         <div class="wd-top">
-          <div class="card">
-            <div class="card-title">模型<span class="card-title-hint" id="wd-model-status">尚未加载</span></div>
+          <div class="card" data-modes="tags hybrid">
+            <div class="card-title">WD14 模型<span class="card-title-hint" id="wd-model-status">尚未加载</span></div>
             <div class="row">
               <select id="wd-model"></select>
               <button class="btn btn-accent" id="wd-load">加载模型</button>
@@ -754,8 +760,8 @@
             </details>
           </div>
 
-          <div class="card">
-            <div class="card-title">参数</div>
+          <div class="card" data-modes="tags hybrid">
+            <div class="card-title">WD14 参数</div>
             <div class="wd-sliders">
               <label for="wd-general">常规标签阈值</label>
               <input type="range" id="wd-general" min="1" max="99" value="35">
@@ -764,9 +770,78 @@
               <input type="range" id="wd-character" min="1" max="99" value="85">
               <output id="wd-character-val">0.85</output>
             </div>
-            <label class="chk-row"><input type="checkbox" id="wd-auto-run" checked><i></i><span>加入图片后自动开始反推</span></label>
-            <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>批量（2 张及以上）时保存同名 .txt 到图片旁边（LoRA 打标格式）</span></label>
             <label class="chk-row"><input type="checkbox" id="wd-include-rating"><i></i><span>包含评分标签（safe / questionable / explicit）</span></label>
+          </div>
+
+          <div class="card" data-modes="text hybrid">
+            <div class="card-title">自然语言模型<span class="card-title-hint" id="cap-status"></span></div>
+            <div class="row cap-src-row">
+              <span class="chips" id="cap-source"><button class="chip" data-src="local">本地模型</button><button class="chip" data-src="api">云端 API</button></span>
+            </div>
+            <div id="cap-local">
+              <div class="row">
+                <select id="cap-model"></select>
+                <button class="btn btn-accent" id="cap-load">加载模型</button>
+                <button class="btn" id="cap-release" disabled>释放显存</button>
+              </div>
+              <div class="form-grid cap-form">
+                <label for="cap-quant">精度</label>
+                <select id="cap-quant">
+                  <option value="auto">自动（按剩余显存选，推荐）</option>
+                  <option value="bf16">bf16（质量最好，显存够就选它）</option>
+                  <option value="8bit">8bit（显存减半，较慢）</option>
+                  <option value="4bit">4bit（显存最小，略降质量）</option>
+                </select>
+              </div>
+              <div class="progress" id="cap-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+              <div class="row wd-model-links">
+                <button class="btn btn-xs" id="cap-open-repo">打开模型下载页面</button>
+              </div>
+              <details class="wd-about">
+                <summary>说明</summary>
+                <div class="hint" id="cap-local-about"></div>
+              </details>
+            </div>
+            <div id="cap-api" hidden>
+              <div class="form-grid cap-form">
+                <label for="cap-api-preset">服务商</label>
+                <select id="cap-api-preset"></select>
+                <label for="cap-api-url">接口地址</label>
+                <input type="text" id="cap-api-url" placeholder="https://…/v1（OpenAI 兼容格式）">
+                <label for="cap-api-model">模型名</label>
+                <input type="text" id="cap-api-model" placeholder="必须是支持图片输入的模型">
+                <label for="cap-api-key">API Key</label>
+                <input type="password" id="cap-api-key" placeholder="填你自己的 Key（只保存在本机配置里）">
+                <label for="cap-api-conc">同时请求数</label>
+                <input type="number" id="cap-api-conc" min="1" max="16" step="1">
+              </div>
+              <div class="row" style="align-items:center">
+                <button class="btn btn-xs" id="cap-api-test">测试连接</button>
+                <span class="hint" id="cap-api-test-msg" style="margin:0"></span>
+              </div>
+              <label class="chk-row"><input type="checkbox" id="cap-api-fallback"><i></i><span>API 拒答时用已下载的本地模型补上（没下载本地模型时，拒答的图标为失败）</span></label>
+            </div>
+          </div>
+
+          <div class="card" data-modes="text hybrid">
+            <div class="card-title">描述要求</div>
+            <div class="form-grid cap-form" id="cap-prompt-generic">
+              <label for="cap-preset">提示词模板</label>
+              <select id="cap-preset"></select>
+              <label for="cap-prompt">给模型的指令</label>
+              <textarea id="cap-prompt" class="ta-sm" rows="4"></textarea>
+            </div>
+            <div class="form-grid cap-form" id="cap-prompt-torii" hidden>
+              <label for="cap-torii-format">描述格式</label>
+              <select id="cap-torii-format"><option value="long">详细（2–5 段）</option><option value="short">简短</option></select>
+            </div>
+            <div class="form-grid cap-form">
+              <label for="cap-max-tokens">最长输出</label>
+              <input type="number" id="cap-max-tokens" min="64" max="4096" step="32">
+            </div>
+            <label class="chk-row" id="cap-use-names-row" hidden><input type="checkbox" id="cap-use-names"><i></i><span>识别并写出角色名（ToriiGate）</span></label>
+            <label class="chk-row" data-modes="hybrid"><input type="checkbox" id="cap-feed-tags"><i></i><span>把 WD14 标签交给模型参考（描述更准）</span></label>
+            <label class="chk-row" data-modes="hybrid"><input type="checkbox" id="cap-keep-tags"><i></i><span>结果里保留 WD14 标签（关掉只留句子）</span></label>
           </div>
         </div>
 
@@ -781,6 +856,10 @@
             </span>
             <button class="btn" id="wd-copy-all" disabled>复制全部结果</button>
             <button class="btn" id="wd-clear" disabled>清空列表</button>
+          </div>
+          <div class="row wd-opts">
+            <label class="chk-row"><input type="checkbox" id="wd-auto-run" checked><i></i><span>加入图片后自动开始反推</span></label>
+            <label class="chk-row"><input type="checkbox" id="wd-save-txt" checked><i></i><span>批量（2 张及以上）时保存同名 .txt 到图片旁边（LoRA 打标格式）</span></label>
           </div>
           <div class="drop-list wd-list" id="wd-images"></div>
           <div class="action-row wd-actions">

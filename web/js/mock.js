@@ -311,6 +311,57 @@
                  "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/tree/main"] },
       ] }),
       wd14_import_model: () => ok({ ok: true }),
+      // 图片反推（演示数据）：拖进来的路径展开成 3 张演示图；WD14 / 自然语言都按事件一张张回报
+      wd14_expand: () => ok({ ok: true, items: ["D:\\demo\\miku_01.png", "D:\\demo\\miku_02.png", "D:\\demo\\street.jpg"].map((path) => ({ path, url: "" })) }),
+      wd14_load_model: () => { setTimeout(() => window.App.onEvent({ scope: "wd14", type: "model_ready" }), 300); return ok({ ok: true }); },
+      wd14_tag: (images) => {
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "wd14", type, ...data }), ms);
+        images.forEach((p, i) => {
+          send("tag_progress", { done: i + 1, total: images.length }, 300 * (i + 1));
+          send("tag_item", { path: p, tags: "1girl, solo, long hair, twintails, aqua hair, looking at viewer, smile", txt: false }, 300 * (i + 1));
+        });
+        send("tag_done", {}, 300 * images.length + 100);
+        return ok({ ok: true });
+      },
+      caption_info: () => ok({ ok: true, default_model: "toriigate", idle_minutes: 10, loaded: null, preparing: false, running: false,
+        env: { trainer_env: "D:\\AI\\WWY-LoRA-Trainer\\env\\Scripts\\python.exe", launcher_env: "", source: "trainer" },
+        trainer_models_dir: "D:\\AI\\WWY-LoRA-Trainer\\models\\taggers", launcher_models_dir: "D:\\AI\\WWY启动器\\vlm_models",
+        models: [
+          { key: "toriigate", label: "ToriiGate 0.5（二次元专精，可参考 WD14 标签）", repo: "Minthy/ToriiGate-0.5", size_gb: 10, downloaded: true, where: "trainer",
+            dir: "D:\\AI\\WWY-LoRA-Trainer\\models\\taggers\\Minthy__ToriiGate-0.5", urls: ["https://hf-mirror.com/Minthy/ToriiGate-0.5/tree/main"] },
+          { key: "joycaption", label: "JoyCaption Beta One（通用，描述细致）", repo: "fancyfeast/llama-joycaption-beta-one-hf-llava", size_gb: 17, downloaded: false, where: "", dir: "", urls: [] },
+          { key: "qwen3vl8b", label: "Qwen3-VL-8B abliterated（无审查，写实友好）", repo: "huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated", size_gb: 17.5, downloaded: false, where: "", dir: "", urls: [] },
+          { key: "qwen3vl4b", label: "Qwen3-VL-4B abliterated（显存小）", repo: "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated", size_gb: 9, downloaded: true, where: "launcher",
+            dir: "D:\\AI\\WWY启动器\\vlm_models\\huihui-ai__Huihui-Qwen3-VL-4B-Instruct-abliterated", urls: [] }],
+        prompts: { detailed: "Write a detailed description of this image for training an image generation model. …", short: "Write a short one or two sentence description …",
+          moss: "Write a detailed description of this image for training a text-to-image model. …", moss_style: "…", style: "…", character: "…" },
+        prompt_labels: [["detailed", "详细描述（通用）"], ["short", "简短描述"], ["moss", "MOSS 官方风格（通用 / 练人物，保留图中文字）"],
+          ["moss_style", "MOSS · 练画风（不描述画风）"], ["style", "练画风（不描述画风）"], ["character", "练人物（不描述人物固有特征）"], ["custom", "自定义"]],
+        api_presets: [{ name: "OpenAI", base_url: "https://api.openai.com/v1", model: "gpt-4.1-mini" },
+          { name: "Google Gemini", base_url: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash" },
+          { name: "硅基流动 SiliconFlow", base_url: "https://api.siliconflow.cn/v1", model: "Qwen/Qwen3-VL-32B-Instruct" }] }),
+      caption_prepare: (key) => {
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "caption", type, ...data }), ms);
+        send("prep_log", { text: "使用训练器里已下载的模型：D:\\AI\\WWY-LoRA-Trainer\\models\\taggers\\Minthy__ToriiGate-0.5" }, 200);
+        send("prep_log", { text: "精度自动选择：可用显存 21.3 GB，模型 bf16 约 10 GB → 用 bf16" }, 600);
+        send("ready", { key, quant: "bf16", bs: 8, source: "trainer", dir: "", label: "" }, 1000);
+        return ok({ ok: true });
+      },
+      caption_run: (images, opts) => {
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "caption", type, ...data }), ms);
+        const text = "A cheerful anime girl with long aqua twintails smiles at the viewer, wearing a grey sleeveless top with a teal tie, " +
+          "standing against a soft gradient background with gentle studio lighting.";
+        images.forEach((p, i) => {
+          const tags = (opts.tags || {})[p] || "";
+          send("progress", { done: i + 1, total: images.length }, 500 * (i + 1));
+          if (opts.source === "api" && i === 2) send("item", { path: p, error: "API 拒答：模型拒答：I'm sorry, I can't help with that（本地模型还没下载，切到「本地模型」可以补上）", refused: true }, 500 * (i + 1));
+          else send("item", { path: p, text, tags, caption: (tags && opts.keep_tags ? tags + ". " : "") + text, txt: false }, 500 * (i + 1));
+        });
+        send("done", { cancelled: false, failed: 0, total: images.length }, 500 * images.length + 100);
+        return ok({ ok: true });
+      },
+      caption_release: () => { setTimeout(() => window.App.onEvent({ scope: "caption", type: "released", reason: "已释放显存" }), 100); return ok({ ok: true }); },
+      caption_test_api: () => ok({ ok: false, message: "（预览模式）不联网" }),
       trainer_status: () => ok({ ok: true, root: "D:\\AI\\WWY-LoRA-Trainer", deploying: false,
         info: { root: "D:\\AI\\WWY-LoRA-Trainer", exists: true, installed: true, python: "x", env: true, engines: true,
                 torch: "2.8.0", cuda: "12.8", version: "0.1.0", deployable: true, reason: "", ready: true },

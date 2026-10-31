@@ -329,11 +329,16 @@
 [data-ui-theme^="neu"] .chk-row input:disabled + i { opacity: .5; }
 [data-ui-theme^="neu"] .chk-row .tag { border-radius: 999px; }
 
-/* 滑块：凹槽 + 凸起圆钮 */
-[data-ui-theme^="neu"] input[type="range"] { height: 8px; border-radius: 999px; background: var(--nm-bg); box-shadow: var(--nm-inset-sm); }
+/* 滑块：凹槽 + 凸起圆钮。基础样式给滑块加了 box-shadow: none !important，凹槽阴影出不来，
+   轨道和卡片同色就看不见了：轨道用深一点的槽色，拖过的部分（页面脚本给 --fill）亮成点缀色，圆钮中心带点缀色圆点 */
+[data-ui-theme^="neu"] input[type="range"] {
+  height: 6px; border-radius: 999px;
+  background: linear-gradient(90deg, var(--m-accent) 0 var(--fill, 0%), var(--nm-lo) var(--fill, 0%) 100%);
+}
 [data-ui-theme^="neu"] input[type="range"]::-webkit-slider-thumb {
   width: 20px; height: 20px; border: 0; border-radius: 50%;
-  background: var(--nm-convex); box-shadow: 3px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi);
+  background: radial-gradient(circle, var(--m-accent) 0 4px, transparent 4.5px), var(--nm-convex);
+  box-shadow: 3px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi), 0 0 0 1px var(--m-accent-soft-2);
 }
 [data-ui-theme^="neu"] input[type="range"]:focus::-webkit-slider-thumb {
   box-shadow: 3px 3px 6px var(--nm-lo), -2px -2px 5px var(--nm-hi), 0 0 0 3px var(--m-accent-soft-2);
