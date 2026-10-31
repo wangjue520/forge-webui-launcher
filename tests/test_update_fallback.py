@@ -49,7 +49,14 @@ class UpdateFallbackTest(unittest.TestCase):
     def test_newer_remote_has_update(self):
         result = self._check(103)
         self.assertTrue(result["has_update"])
-        self.assertEqual(result["remote"]["version"], "3.0.110")
+        self.assertEqual(result["remote"]["version"], updater.version_of(110))
+
+    def test_version_numbering(self):
+        # 3.1 从 BASE_COUNT 那个提交起算，三位补零；更早的提交不会算出负数
+        self.assertEqual(updater.version_of(updater.BASE_COUNT), "3.1.000")
+        self.assertEqual(updater.version_of(updater.BASE_COUNT + 7), "3.1.007")
+        self.assertEqual(updater.version_of(updater.BASE_COUNT + 123), "3.1.123")
+        self.assertEqual(updater.version_of(110), "3.1.000")
 
     def test_same_release_no_update(self):
         # git 用户本地多一个 bump 提交：111 对 version.json 的 110，不算有更新
