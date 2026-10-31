@@ -664,6 +664,15 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .wd-view { flex: none; }
 .wd-view .chip { padding: 4px 12px; }
 .wd-more { text-align: center; font-size: 12px; color: var(--text-faint); padding: 6px 0; }
+.wd-opts { flex-wrap: wrap; gap: 4px 22px; margin-bottom: 8px; }
+.wd-opts .chk-row { margin: 0; }
+/* 自然语言反推 */
+.cap-modebar { align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+.cap-mode .chip { padding: 6px 16px; font-size: 13px; }
+.cap-modebar .hint { margin: 0; }
+.cap-src-row { margin-bottom: 10px; }
+.cap-form { grid-template-columns: 96px 1fr; margin-top: 10px; }
+.wd-desc { font-family: inherit; font-size: 12.5px; }
 
 /* 底部操作条：列表长了也一直看得到 */
 .wd-actions {

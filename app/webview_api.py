@@ -44,6 +44,8 @@ import image_meta_core as imc
 import meta_engine as me
 import wd14_tagger_core as wt
 import wd14_venv_manager as venv
+import vlm_caption_core as vc
+import vlm_caption_service as vcs
 import updater
 import model_library as ml
 import output_index as oi
@@ -599,6 +601,7 @@ class LauncherApi:
         self._wd14_tag_thread = None
         self._wd14_tag_cancel = False
         self._wd14_proc = None
+        self._caption = None             # 自然语言反推（vlm_caption_service.CaptionService，用到时才建）
 
         # 图片信息
         self._meta_current = None        # 最近一次解析结果（展示层结构）
@@ -6706,13 +6709,27 @@ def _api_trainer_remove(self):
 # WD14 反推
 # ============================================================
 
+def _wd14_trainer_model(self, model_key):
+    """LoRA 训练器里已经下好的同一个 WD 模型（<训练器>/models/taggers/SmilingWolf__<名字>），没有返回 ""。
+    训练器知道启动器在哪时会直接下到启动器的 wd_tagger_models；这里补另一个方向：训练器先下了，启动器也不重复下。"""
+    repo = wt.MODEL_CATALOG.get(model_key, {}).get("repo")
+    t = vc.trainer_models_dir(_trainer_root(self)) if repo else ""
+    d = os.path.join(t, vc.model_dirname(repo)) if t else ""
+    onnx = os.path.join(d, "model.onnx") if d else ""
+    if (onnx and os.path.isfile(onnx) and os.path.isfile(os.path.join(d, "selected_tags.csv"))
+            and os.path.getsize(onnx) > 10 * 1024 * 1024):
+        return d
+    return ""
+
+
 def _api_wd14_models(self):
-    return {"ok": True, "models": [
-        {"key": key, "label": info["label"],
-         "cached": wt.is_model_cached(APP_DIR, key),
-         "urls": wt.model_repo_urls(key)}
-        for key, info in wt.MODEL_CATALOG.items()
-    ], "model_ready": bool(self._wd14_model_dir)}
+    models = []
+    for key, info in wt.MODEL_CATALOG.items():
+        own = wt.is_model_cached(APP_DIR, key)
+        tr = "" if own else _wd14_trainer_model(self, key)
+        models.append({"key": key, "label": info["label"], "cached": own or bool(tr), "where": "trainer" if tr else "",
+                       "urls": wt.model_repo_urls(key)})
+    return {"ok": True, "models": models, "model_ready": bool(self._wd14_model_dir)}
 
 
 def _api_wd14_import_model(self, model_key, src_dir):
@@ -6763,7 +6780,10 @@ def _api_wd14_load_model(self, model_key):
     def work():
         log = lambda t: self._emit("wd14", "model_log", text=t)
         try:
-            if not wt.is_model_cached(APP_DIR, model_key):
+            tr = "" if wt.is_model_cached(APP_DIR, model_key) else _wd14_trainer_model(self, model_key)
+            if tr:
+                log(f"使用 LoRA 训练器里已下载的模型：{tr}")
+            elif not wt.is_model_cached(APP_DIR, model_key):
                 log(f"模型未缓存，开始下载 {model_key} ...")
                 wt.download_model(
                     APP_DIR, model_key,
@@ -6775,7 +6795,7 @@ def _api_wd14_load_model(self, model_key):
                 )
             else:
                 log("模型已缓存")
-            model_dir = wt.model_cache_dir(APP_DIR, model_key)
+            model_dir = tr or wt.model_cache_dir(APP_DIR, model_key)
 
             if self._wd14_load_cancel:
                 raise wt.WD14TaggerError("已取消")
@@ -6978,7 +6998,53 @@ def _api_wd14_cancel(self):
     self._wd14_load_cancel = True
     if self._wd14_proc and self._wd14_proc.poll() is None:
         kill_process_tree(self._wd14_proc.pid)
+    if self._caption:
+        self._caption.cancel_all()
     return {"ok": True}
+
+
+# ============================================================
+# 自然语言反推（「图片反推」页；本地模型 / 云端 API，和 LoRA 训练器同一套）
+# ============================================================
+
+def _caption_svc(self):
+    if self._caption is None:
+        def torch_tag():
+            try:
+                return _trainer_gpu_torch(self)
+            except Exception:
+                return "cu128"
+        self._caption = vcs.CaptionService(
+            self._emit, lambda: self.cfg, lambda: _trainer_root(self), torch_tag=torch_tag,
+            spawn=lambda fn, name: self._spawn(fn, name=name))
+    return self._caption
+
+
+def _api_caption_info(self):
+    try:
+        return {"ok": True, **_caption_svc(self).info()}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def _api_caption_prepare(self, model_key, quant="auto"):
+    return _caption_svc(self).prepare(model_key, quant or "auto")
+
+
+def _api_caption_run(self, images, opts):
+    return _caption_svc(self).run(images, opts or {})
+
+
+def _api_caption_release(self):
+    return _caption_svc(self).release("已释放显存")
+
+
+def _api_caption_cancel(self):
+    return _caption_svc(self).cancel_all()
+
+
+def _api_caption_test_api(self, api):
+    return vc.test_api(dict(api or {}))
 
 
 # ============================================================
@@ -8927,6 +8993,12 @@ for _name, _fn in {
     "wd14_expand": _api_wd14_expand,
     "wd14_tag": _api_wd14_tag,
     "wd14_cancel": _api_wd14_cancel,
+    "caption_info": _api_caption_info,
+    "caption_prepare": _api_caption_prepare,
+    "caption_run": _api_caption_run,
+    "caption_release": _api_caption_release,
+    "caption_cancel": _api_caption_cancel,
+    "caption_test_api": _api_caption_test_api,
     "meta_load": _api_meta_load,
     "meta_parse": _api_meta_parse,
     "meta_deep": _api_meta_deep,

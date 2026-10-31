@@ -51,7 +51,7 @@ VERSION_FILE = os.path.join(APP_DIR, "version.json")
 # 覆盖更新时要跳过的顶层名字：用户私有配置、自动下载的运行环境、缓存。
 # 这些都是启动器运行期生成/下载的，覆盖掉等于把用户环境重置了。
 PRESERVE_TOP = {
-    ".git", ".venv", "python", "git", "venv", "wd14_venv", "wd_tagger_models", "tmp",
+    ".git", ".venv", "python", "git", "venv", "wd14_venv", "wd_tagger_models", "vlm_venv", "vlm_models", "tmp",
     "clipboard_inbox",
     "launcher_config.json", "model_hash_cache.json", "version.json",
     "launcher_data", "launcher_config.json.v2.bak",

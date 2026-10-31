@@ -323,7 +323,7 @@
     models: "模型管理",
     outputs: "输出管理",
     extensions: "常用插件",
-    wd14: "WD14 标签反推",
+    wd14: "图片反推",
     meta: "图片信息",
   };
 

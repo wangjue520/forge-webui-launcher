@@ -17,6 +17,10 @@ tmp/
 wd14_venv/
 wd_tagger_models/
 
+# 自然语言反推（没装 LoRA 训练器时启动器自建的环境和下载的模型）
+vlm_venv/
+vlm_models/
+
 # 编辑器与系统
 .vscode/
 .idea/
