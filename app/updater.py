@@ -11,7 +11,7 @@
    解压后覆盖到启动器目录——但跳过用户私有/运行期生成的内容
    （launcher_config.json、便携 python/、wd14_venv/ 等，见 PRESERVE_TOP）。
 
-版本号规则：BASE_VERSION + 提交数（如 3.0.42），每次更新自动累加、
+版本号规则：BASE_VERSION + 从 BASE_COUNT 起算的三位提交序号（如 3.1.007），每次更新自动累加、
 写进项目根目录的 version.json。有 .git 时直接按 git 提交数实时算，
 永远准确；纯 ZIP 用户以 version.json 为准（每次更新时重写）。
 提交数从 GitHub API 分页响应的 Link 头里取（per_page=1 时最后一页
@@ -45,7 +45,14 @@ COMMITS_API = f"https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_pag
 # 查不到时改读仓库里的 version.json，raw 文件不走 API 配额
 VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/version.json"
 
-BASE_VERSION = "3.0"
+BASE_VERSION = "3.1"
+# 3.1.000 = main 上第 BASE_COUNT 个提交（发 3.1 的那个 bump 提交），之后每个提交 +1。
+# 3.0.x 时代直接用总提交数（最后一版 3.0.175）；有没有更新始终按总提交数比，跟版本号写法无关
+BASE_COUNT = 178
+
+
+def version_of(count):
+    return f"{BASE_VERSION}.{max(0, int(count) - BASE_COUNT):03d}"
 VERSION_FILE = os.path.join(APP_DIR, "version.json")
 
 # 覆盖更新时要跳过的顶层名字：用户私有配置、自动下载的运行环境、缓存。
@@ -99,7 +106,7 @@ def _git_local_info(git_exe):
     count = int(_git(git_exe, "rev-list", "--count", "HEAD"))
     sha = _git(git_exe, "rev-parse", "HEAD")
     return {
-        "version": f"{BASE_VERSION}.{count}",
+        "version": version_of(count),
         "commit": sha[:7],
         "sha": sha,
         "count": count,
@@ -262,7 +269,7 @@ def check_update(cfg=None, log_cb=None):
     """对比本地与远端，返回给前端展示用的完整结果。"""
     local = get_local_info(cfg)
     remote = get_remote_info(cfg, log_cb)
-    remote_version = (f"{BASE_VERSION}.{remote['count']}" if remote.get("count")
+    remote_version = (version_of(remote["count"]) if remote.get("count")
                       else f"{BASE_VERSION}+{remote['short']}")
     has_update = True
     if remote.get("source") == "version.json" and local.get("count"):
@@ -497,7 +504,7 @@ def _perform_update_locked(cfg, log_cb, progress_cb, cancel_flag):
         remote = _update_via_zip(cfg, log_cb, progress_cb, cancel_flag)
         count = remote.get("count") or (local["count"] + 1)
         new_info = {
-            "version": f"{BASE_VERSION}.{count}",
+            "version": version_of(count),
             "commit": remote["short"],
             "sha": remote["sha"],
             "count": count,

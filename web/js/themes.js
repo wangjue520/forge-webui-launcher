@@ -35,8 +35,12 @@
     // 莱茵 · 分析终端：结构沿用终末地（不设 base），暖灰研究纸 + 墨色 + 黄铜；三维档案库背景见 js/rhine-field.js，
     // 界面编排 js/rhine.js，开屏 js/rhine-splash.js，音效 js/rhine-sfx.js
     { id: "rhine", label: "莱茵 · 分析终端（研究档案）", css: "themes/rhine.css", splash: "rhine" },
+    // 离解 · 黑白构成：结构沿用终末地（不设 base），白纸细网格 + 黑白大渐变 + 荧光黄绿点缀；
+    // 背景装饰和动效见 js/dissoc.js，开屏 js/dissoc-splash.js（样式在 splash.css 末尾）
+    { id: "dissoc", label: "离解 · 黑白构成", css: "themes/dissoc.css", splash: "dissoc" },
   ];
   var KEY = "ui-theme";
+  var applied = "";   // 这次打开以后实际应用的风格（切换风格后开屏重播要按它选变体，不能再读启动时的文件）
   // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名
   var ALIAS = { minimal: "neu-light", "minimal-light": "neu-light", "minimal-dark": "neu-dark", blueprint: "bauform" };
 
@@ -58,6 +62,7 @@
 
   function apply(id, save) {
     var t = find(id);
+    applied = t.id;
     var root = document.documentElement;
     root.dataset.uiTheme = t.id;
     // base：结构共用的那一套（极简 / 液态玻璃都用 minimal 的结构规则，
@@ -84,7 +89,7 @@
 
   window.WWYThemes = {
     list: function () { return THEMES.slice(); },
-    current: function () { return find(currentId()); },
+    current: function () { return find(applied || currentId()); },
     find: find,   // 旧 id / 别名 → 实际的风格条目（设置页下拉框回填用）
     apply: apply,
   };
