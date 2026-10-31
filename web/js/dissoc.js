@@ -248,6 +248,7 @@
     if (t[1]) el("small", null, t.slice(1).join(" · "), tn);
     built.bignum.textContent = num;
     placeMarker();
+    syncCompact();
     if (animate) {
       [m, built.bignum].forEach(function (n) { n.classList.remove("dx-in"); void n.offsetWidth; n.classList.add("dx-in"); });
       scanPage();
@@ -296,6 +297,20 @@
     built.tcv.textContent = pad(Math.floor(s / 3600)) + ":" + pad(Math.floor(s / 60) % 60) + ":" + pad(s % 60) + ":" + pad(Math.floor(ms / 1000 * 12) % 12);
     if (++n % 18 === 0) built.tags.forEach(function (t) { t.node.textContent = t.f(); });
   }
+
+  /* ---------------- 页头折叠：内容滚上去了就收成窄栏；占满一屏的页面一直收着 ---------------- */
+  var FULL_PAGES = { "page-models": 1, "page-outputs": 1 };
+  function syncCompact() {
+    if (!built) return;
+    var page = document.querySelector(".page.active"), content = $("content");
+    var full = page && FULL_PAGES[page.id];
+    var y = content ? content.scrollTop : 0;
+    var on = root.classList.contains("dx-compact");
+    // 回滞：滚过 48px 才收，回到 8px 以内才展开（收起时页头变矮、内容区变高，不会来回抖）
+    var want = full || (on ? y > 8 : y > 48);
+    if (want !== on) root.classList.toggle("dx-compact", !!want);
+  }
+  function onScroll() { syncCompact(); }   // 只读一个 scrollTop、最多切一个类，滚动事件里直接做
 
   /* ---------------- 实例状态：没启动 / 启动中 / 运行中，整套界面跟着变 ---------------- */
   // 跟侧栏底部那个运行状态按钮（#global-status）的 data-state 走：idle / stopped / starting / ready / running
@@ -401,6 +416,8 @@
     built.navObs = new MutationObserver(placeMarker);
     built.navObs.observe($("nav"), { attributes: true, subtree: true, attributeFilter: ["class", "hidden"] });
     if (window.ResizeObserver) { ro = new ResizeObserver(placeMarker); ro.observe(built.axis); }
+    var ct = $("content");
+    if (ct) ct.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("mousemove", onMove, { passive: true });
     document.addEventListener("mouseleave", onLeave);
     window.addEventListener("mousedown", onClick, true);
@@ -415,7 +432,9 @@
     built.navObs.disconnect();
     built.stateObs.disconnect();
     shiftTimers.forEach(clearTimeout);
-    root.classList.remove("dx-live", "dx-boot", "dx-shifting");
+    root.classList.remove("dx-live", "dx-boot", "dx-shifting", "dx-compact");
+    var ct = $("content");
+    if (ct) ct.removeEventListener("scroll", onScroll);
     if (ro) { ro.disconnect(); ro = null; }
     clearInterval(decodeTimer); clearInterval(tick); clearInterval(sweepTimer); clearTimeout(scanTimer);
     window.removeEventListener("mousemove", onMove);

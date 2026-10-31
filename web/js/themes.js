@@ -40,6 +40,7 @@
     { id: "dissoc", label: "离解 · 黑白构成", css: "themes/dissoc.css", splash: "dissoc" },
   ];
   var KEY = "ui-theme";
+  var applied = "";   // 这次打开以后实际应用的风格（切换风格后开屏重播要按它选变体，不能再读启动时的文件）
   // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名
   var ALIAS = { minimal: "neu-light", "minimal-light": "neu-light", "minimal-dark": "neu-dark", blueprint: "bauform" };
 
@@ -61,6 +62,7 @@
 
   function apply(id, save) {
     var t = find(id);
+    applied = t.id;
     var root = document.documentElement;
     root.dataset.uiTheme = t.id;
     // base：结构共用的那一套（极简 / 液态玻璃都用 minimal 的结构规则，
@@ -87,7 +89,7 @@
 
   window.WWYThemes = {
     list: function () { return THEMES.slice(); },
-    current: function () { return find(currentId()); },
+    current: function () { return find(applied || currentId()); },
     find: find,   // 旧 id / 别名 → 实际的风格条目（设置页下拉框回填用）
     apply: apply,
   };

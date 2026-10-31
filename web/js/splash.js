@@ -13,11 +13,25 @@
  * 其它变体：liquidSplash（液态玻璃）、vectorSplash（矢量突破），都在本文件末尾。
  */
 (function () {
+  // 开屏的原始结构（终末地那套直接写在 index.html 里）：切换界面风格时用它重建一份，再播一遍新风格的开屏
+  var ORIG = (document.getElementById("splash") || {}).outerHTML || "";
+  window.WWYSplashReplay = function () {
+    if (!ORIG || document.getElementById("splash")) return;   // 正在播就不叠一层
+    var box = document.createElement("div");
+    box.innerHTML = ORIG;
+    document.body.insertBefore(box.firstElementChild, document.body.firstChild);
+    run(true);
+    // 主界面早就就绪了：直接告诉开屏「可以收」，它播完最短时长就撤
+    setTimeout(function () { if (window.Splash) window.Splash.ready(); }, 0);
+  };
+  run(false);
+
+  function run(replay) {
   var el = document.getElementById("splash");
   if (!el) return;
   // 切换实例导致的重载不再播开屏动画
   var skip = false;
-  try { skip = sessionStorage.getItem("skip-splash") === "1"; sessionStorage.removeItem("skip-splash"); } catch (e) {}
+  if (!replay) { try { skip = sessionStorage.getItem("skip-splash") === "1"; sessionStorage.removeItem("skip-splash"); } catch (e) {} }
   if (skip) {
     el.remove();
     window.Splash = { ready: function () {} };
@@ -768,5 +782,6 @@
       },
     };
     setTimeout(function () { if (!ready) window.Splash.ready(); leave(true); }, MAX);
+  }
   }
 })();

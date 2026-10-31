@@ -387,7 +387,11 @@
         });
         // 配置里可能是已下线风格的旧 id（如 minimal-light），按别名换成实际条目再回填
         themeSel.value = window.WWYThemes.find(App.cfg.ui_theme || "terminal").id;
-        themeSel.addEventListener("change", () => window.WWYThemes.apply(themeSel.value, true));
+        themeSel.addEventListener("change", () => {
+          window.WWYThemes.apply(themeSel.value, true);
+          // 新风格有开屏动画就播一遍（没有的风格开屏会直接移除自己）
+          if (window.WWYSplashReplay) window.WWYSplashReplay();
+        });
       }
 
       Updater.init(state);
