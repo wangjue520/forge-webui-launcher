@@ -280,7 +280,8 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--ink);
   box-shadow: inset 3px 0 0 var(--ink), 0 0 0 3px rgba(255, 242, 0, .45);
 }
-input:disabled, select:disabled, textarea:disabled { background: var(--panel-2); color: var(--text-faint); }
+/* 只改底色：用 background 简写会把下拉框箭头的 background-size 也重置掉，主题再画箭头时两条渐变铺满整个框（灰底大三角） */
+input:disabled, select:disabled, textarea:disabled { background-color: var(--panel-2); color: var(--text-faint); }
 input::placeholder, textarea::placeholder { color: #75777c; }
 textarea { min-height: 90px; resize: vertical; line-height: 1.55; }
 textarea.ta-sm { min-height: 64px; }

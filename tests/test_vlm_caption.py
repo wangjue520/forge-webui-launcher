@@ -360,6 +360,38 @@ class EnvTest(Tmp):
 
 
 # ============================================================
+# 真的模型进程：启动器没了要跟着退出（不加载模型，不需要 torch）
+# ============================================================
+class WorkerExitTest(unittest.TestCase):
+    WORKER = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "app", "vlm_caption_worker.py")
+
+    def spawn(self, parent_pid):
+        import subprocess
+        env = dict(os.environ, WWY_PARENT_PID=str(parent_pid))
+        p = subprocess.Popen([sys.executable, "-u", self.WORKER], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, env=env)
+        self.addCleanup(lambda: (p.poll() is None and p.kill(), p.stdin.close(), p.stdout.close()))
+        self.assertIn(b'"hello"', p.stdout.readline())
+        return p
+
+    def test_exits_when_launcher_process_ends(self):
+        import subprocess
+        fake_launcher = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
+        p = self.spawn(fake_launcher.pid)
+        fake_launcher.wait()
+        p.wait(10)   # stdin 还开着，没读到命令也要退出
+
+    def test_quit_and_eof(self):
+        p = self.spawn(os.getpid())
+        p.stdin.write(b'{"cmd": "quit"}\n')
+        p.stdin.flush()
+        self.assertEqual(p.wait(10), 0)
+        p2 = self.spawn(os.getpid())
+        p2.stdin.close()   # 管道断了：跟着退出
+        p2.wait(10)
+
+
+# ============================================================
 # 服务：假的模型进程
 # ============================================================
 FAKE_WORKER = r'''

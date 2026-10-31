@@ -38,14 +38,49 @@ MAX_PIXELS = 1024 * 1024
 _out_lock = threading.Lock()
 
 
-def emit(**kw):
+def _out(*a):
+    """往启动器写一行。写不出去 = 启动器已经没了：直接结束进程。
+    不能走正常退出——加载过模型后 torch / CUDA 收尾会卡住，进程一直挂着占显存（实测关掉启动器后残留了一个多小时）。"""
     with _out_lock:
-        print("@@" + json.dumps(kw, ensure_ascii=False), flush=True)
+        try:
+            print(*a, flush=True)
+        except (OSError, ValueError):
+            os._exit(0)
+
+
+def emit(**kw):
+    _out("@@" + json.dumps(kw, ensure_ascii=False))
 
 
 def log(*a):
-    with _out_lock:
-        print(*a, flush=True)
+    _out(*a)
+
+
+def watch_parent(pid):
+    """启动器进程一结束（关窗、崩溃、被强杀）就跟着退出，不用等到下次读命令——加载模型、生成时都不读 stdin。"""
+    try:
+        pid = int(pid or 0)
+    except ValueError:
+        pid = 0
+    if not pid:
+        return
+
+    def wait_windows():
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        h = k32.OpenProcess(0x00100000, False, pid)   # SYNCHRONIZE
+        if not h:
+            os._exit(0)   # 已经没了
+        k32.WaitForSingleObject(h, 0xFFFFFFFF)
+        os._exit(0)
+
+    def poll_posix():
+        import time
+        while os.path.exists(f"/proc/{pid}"):
+            time.sleep(2)
+        os._exit(0)
+
+    threading.Thread(target=wait_windows if os.name == "nt" else poll_posix, daemon=True).start()
 
 
 def vram_free_gb():
@@ -241,6 +276,7 @@ class Worker:
         emit(ev="done", cancelled=self.cancelled())
 
     def main(self):
+        watch_parent(os.environ.get("WWY_PARENT_PID"))
         emit(ev="hello", pid=os.getpid())
         while True:
             c = self.next_cmd()
@@ -264,9 +300,15 @@ if __name__ == "__main__":
     try:
         Worker().main()
     except Exception:
-        traceback.print_exc()
-        sys.stdout.flush()
+        try:
+            traceback.print_exc()
+            sys.stdout.flush()
+        except Exception:
+            pass
         os._exit(1)
     # 直接结束：正常退出要等 torch / CUDA 慢慢收尾（实测加载过模型后要几十秒），显存要尽快还回去
-    sys.stdout.flush()
+    try:
+        sys.stdout.flush()
+    except Exception:
+        pass
     os._exit(0)

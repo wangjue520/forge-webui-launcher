@@ -691,7 +691,10 @@
       sliders.forEach(([id, key]) => {
         const el = $(id), out = $(id + "-val");
         if (typeof cfg[key] === "number") el.value = Math.round(cfg[key] * 100);
-        const show = () => { out.textContent = (el.value / 100).toFixed(2); };
+        const show = () => {
+          out.textContent = (el.value / 100).toFixed(2);
+          el.style.setProperty("--fill", ((el.value - el.min) / (el.max - el.min) * 100) + "%");   // 主题给拖过的部分上色
+        };
         show();
         el.addEventListener("input", show);
         el.addEventListener("change", () => saveCfg(key, el.value / 100));

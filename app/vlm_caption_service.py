@@ -91,7 +91,8 @@ class CaptionService:
     # ---------------- 模型进程 ----------------
     def _start_proc(self, py):
         env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONUNBUFFERED="1",
-                   HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")   # 模型都下好了，别让 transformers 去联网检查
+                   HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",   # 模型都下好了，别让 transformers 去联网检查
+                   WWY_PARENT_PID=str(os.getpid()))                # 启动器一退出，模型进程马上跟着退出
         for k in ("PYTHONHOME", "PYTHONPATH"):
             env.pop(k, None)
         p = subprocess.Popen(self.worker_cmd(py), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
