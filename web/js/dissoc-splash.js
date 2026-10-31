@@ -22,8 +22,68 @@
   var GLYPHS = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789/#+-";
   var MSG = "Dissociation complete. Recombining…";
 
+  // WebGL 粒子版（js/dissoc-gl.js 渲染粒子，这里只管叠在上面的清晰文字、闪光和收尾）；跑不起来返回 false
+  function glSplash(host) {
+    if (!window.DissocGL) return false;
+    var MAX = 9000, ready = false, minDone = false, out = false, tms = [];
+    host.className = "sp-dissoc sp-dissoc-gl";
+    host.style.background = "#050506";
+    var ctl = window.DissocGL(host);
+    if (!ctl) { host.className = ""; host.innerHTML = ""; return false; }
+    host.dxgl = ctl;   // 调试时在控制台定格画面用（host.dxgl.freeze(秒)）
+    var ui = document.createElement("div");
+    ui.className = "dxg-ui";
+    ui.innerHTML =
+      '<div class="dxg-scan"></div>' +
+      '<div class="dxg-tl"><span>Dissociation</span><b class="dxg-pct">000</b><span>Recombination</span></div>' +
+      '<div class="dxg-brk"><i></i><i></i><i></i><i></i></div>' +
+      '<div class="dxg-sub">AI IMAGE GENERATION LAUNCHER — SYSTEM 3.1</div>' +
+      '<div class="dxg-tc"><span>Time axis</span><b>00:00:00:00</b></div>' +
+      '<div class="dxg-bar"><i></i></div>' +
+      '<div class="dxg-flash"></div><div class="dxg-reveal"></div>' +
+      '<button class="dxs-skip dxg-skip" type="button">SKIP ›</button>';
+    host.appendChild(ui);
+    // 副标题贴在粒子大字下面（按最终镜头算出来的屏幕位置）
+    var sub = ui.querySelector(".dxg-sub");
+    sub.style.left = ctl.text.left + "px";
+    sub.style.top = (ctl.text.bottom + 18) + "px";
+    var rv = ui.querySelector(".dxg-reveal");
+    rv.style.setProperty("--cx", ctl.core[0] + "px");
+    rv.style.setProperty("--cy", ctl.core[1] + "px");
+    var pct = ui.querySelector(".dxg-pct"), tc = ui.querySelector(".dxg-tc b"), bar = ui.querySelector(".dxg-bar i");
+    function pad(n, w) { return String(n).padStart(w || 2, "0"); }
+    var t0 = performance.now(), iv = setInterval(function () {
+      var ms = performance.now() - t0, s = ms / 1000;
+      var p = Math.min(100, Math.round(s / 2.9 * 100));
+      pct.textContent = pad(p, 3);
+      bar.style.transform = "scaleX(" + (p / 100) + ")";
+      tc.textContent = "00:00:" + pad(Math.floor(s) % 60) + ":" + pad(Math.floor(s * 12) % 12);
+    }, 50);
+    function at(ms, fn) { tms.push(setTimeout(fn, ms)); }
+    function add(c) { host.classList.add(c); }
+    at(60, function () { add("g-on"); });
+    at(1350, function () { add("g-flash"); });
+    at(2250, function () { add("g-info"); });
+    at(2950, function () { minDone = true; if (ready) leave(); else add("g-hold"); });
+    function leave() {
+      if (out) return;
+      out = true;
+      tms.forEach(clearTimeout);
+      add("g-out");                 // 粒子冲向镜头，白光从 X 核心扩散
+      ctl.exit();
+      setTimeout(function () { if (window.DissocUI) window.DissocUI.intro("soft"); }, 420);
+      setTimeout(function () { clearInterval(iv); ctl.destroy(); host.remove(); }, 820);
+    }
+    ui.querySelector(".dxg-skip").addEventListener("click", function (e) { e.stopPropagation(); if (ready) leave(); });
+    host.addEventListener("click", function () { if (ready) leave(); });
+    window.Splash = { ready: function () { ready = true; add("r-ready"); if (minDone) leave(); } };
+    setTimeout(function () { ready = true; if (minDone) leave(); }, MAX);
+    return true;
+  }
+
   window.DissocSplash = function (host) {
     var reduce = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduce && glSplash(host)) return;
     var K = reduce ? .3 : 1;
     var MAX = 9000;
     var ready = false, minDone = false, out = false, done = false, tms = [], ivs = [];

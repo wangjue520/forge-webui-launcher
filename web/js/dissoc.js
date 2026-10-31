@@ -455,8 +455,9 @@
 
   // 开屏结束时调：主界面从一条横线里展开，随后扫一遍当前页
   window.DissocUI = {
-    intro: function () {
+    intro: function (mode) {
       if (!isMine()) return;
+      if (mode === "soft") { syncMast(true); return; }   // 粒子开屏用白光收尾，界面不用再从横线里展开
       root.classList.add("dx-intro");
       setTimeout(function () { root.classList.remove("dx-intro"); syncMast(true); }, 800);
     },
