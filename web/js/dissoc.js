@@ -297,6 +297,76 @@
     if (++n % 18 === 0) built.tags.forEach(function (t) { t.node.textContent = t.f(); });
   }
 
+  /* ---------------- 实例状态：没启动 / 启动中 / 运行中，整套界面跟着变 ---------------- */
+  // 跟侧栏底部那个运行状态按钮（#global-status）的 data-state 走：idle / stopped / starting / ready / running
+  function stateOf() {
+    var s = ($("global-status") || {}).dataset ? $("global-status").dataset.state : "";
+    return s === "ready" || s === "running" ? "live" : s === "starting" ? "boot" : "off";
+  }
+  function buildShift() {
+    var s = el("div");
+    s.id = "dx-shift";
+    s.setAttribute("aria-hidden", "true");
+    el("div", "dxs-curtain", null, s);
+    el("i", "dxs-beam", null, s);
+    var c = el("div", "dxs-c", null, s);
+    el("div", "dxs-cx", null, c).innerHTML = X_SVG;
+    el("div", "dxs-big", null, c);
+    el("div", "dxs-small", null, c);
+    el("div", "dxs-tag", null, c);
+    document.body.appendChild(s);
+    return s;
+  }
+  var COPY = {
+    live: { big: "RECOMBINED", small: "Instance online", tag: "实例已启动", bg: "#08080a", fg: "#ededea" },
+    off: { big: "DISSOCIATED", small: "Instance offline", tag: "实例已停止", bg: "#f4f4f2", fg: "#0d0d0e" },
+  };
+  var shiftTimers = [];
+  function applyState(st) {
+    root.classList.toggle("dx-live", st === "live");
+    root.classList.toggle("dx-boot", st === "boot");
+    var lab = built && built.mast.querySelector(".dxm-box > .dx-lab");
+    if (lab) lab.textContent = st === "live" ? "Instance online" : st === "boot" ? "Booting…" : "Message";
+  }
+  // 运行中 ↔ 没运行：先放转场，幕布完全盖住画面（1.5 秒的 38%）时才换皮
+  function shiftTo(st) {
+    var c = COPY[st === "live" ? "live" : "off"];
+    if (reduce) { applyState(st); return; }
+    shiftTimers.forEach(clearTimeout);
+    var sh = built.shift;
+    sh.style.setProperty("--sh-bg", c.bg);
+    sh.style.setProperty("--sh-fg", c.fg);
+    sh.querySelector(".dxs-small").textContent = c.small;
+    sh.querySelector(".dxs-tag").textContent = c.tag;
+    var big = sh.querySelector(".dxs-big"), t = 0;
+    var iv = setInterval(function () {
+      t++;
+      big.textContent = c.big.split("").map(function (ch, i) {
+        return t > 8 + i * 1.2 ? ch : GLYPHS[(Math.random() * GLYPHS.length) | 0];
+      }).join("");
+      if (t > 10 + c.big.length * 1.2) clearInterval(iv);
+    }, 34);
+    sh.classList.remove("run");
+    void sh.offsetWidth;
+    sh.classList.add("run");
+    root.classList.add("dx-shifting");
+    shiftTimers = [
+      setTimeout(function () { applyState(st); }, 570),
+      setTimeout(function () { sh.classList.remove("run"); root.classList.remove("dx-shifting"); clearInterval(iv); }, 1600),
+    ];
+  }
+  var lastState = "";
+  function onState() {
+    if (!built) return;
+    var st = stateOf();
+    if (st === lastState) return;
+    var prev = lastState;
+    lastState = st;
+    // 第一次 / 启动中进出（还没真正跑起来）不放转场，直接换；运行中进出放一段转场
+    if (!prev || (prev !== "live" && st !== "live")) applyState(st);
+    else shiftTo(st);
+  }
+
   /* ---------------- 装 / 拆 ---------------- */
   var sweepTimer = null, ro = null;
   function build() {
@@ -309,7 +379,13 @@
     built.rail = buildRail(sidebar);
     built.mast = buildMast(topbar);
     built.extra = buildExtra();
+    built.shift = buildShift();
     syncMast(true);
+    lastState = "";
+    onState();
+    var gs = $("global-status");
+    built.stateObs = new MutationObserver(onState);
+    if (gs) built.stateObs.observe(gs, { attributes: true, attributeFilter: ["data-state"] });
     var last = "";
     built.obs = new MutationObserver(function () {
       var key = ($("page-code") || {}).textContent + "|" + ($("page-title") || {}).textContent;
@@ -337,6 +413,9 @@
     if (!built) return;
     built.obs.disconnect();
     built.navObs.disconnect();
+    built.stateObs.disconnect();
+    shiftTimers.forEach(clearTimeout);
+    root.classList.remove("dx-live", "dx-boot", "dx-shifting");
     if (ro) { ro.disconnect(); ro = null; }
     clearInterval(decodeTimer); clearInterval(tick); clearInterval(sweepTimer); clearTimeout(scanTimer);
     window.removeEventListener("mousemove", onMove);
@@ -344,7 +423,7 @@
     window.removeEventListener("mousedown", onClick, true);
     document.querySelectorAll(".dx-scan").forEach(unscan);
     restoreMoved();
-    [built.deco, built.front, built.burst, built.axis, built.rail, built.mast, built.extra].forEach(function (nd) {
+    [built.deco, built.front, built.burst, built.axis, built.rail, built.mast, built.extra, built.shift].forEach(function (nd) {
       if (nd && nd.parentNode) nd.remove();
     });
     built = null;
