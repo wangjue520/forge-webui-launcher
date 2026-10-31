@@ -331,7 +331,7 @@
   const PAGE_CODES = {
     launch: "LAUNCH", instances: "INSTANCES", settings: "SETTINGS", launcher: "LAUNCHER", deploy: "DEPLOY", versions: "VERSIONS",
     civitai: "DOWNLOAD", models: "MODELS", outputs: "OUTPUTS", extensions: "EXTENSIONS",
-    wd14: "WD14 TAGGER", meta: "IMAGE META",
+    wd14: "IMAGE CAPTION", meta: "IMAGE META",
   };
 
   App.showPage = function (name) {

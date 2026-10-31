@@ -40,6 +40,10 @@
     if (live) vectorSplash(el); else vectorVideoSplash(el);
     return;
   }
+  if (variant === "dissoc" && window.DissocSplash) {
+    window.DissocSplash(el);
+    return;
+  }
   if (variant === "rhine" && window.RhineSplash) {
     window.RhineSplash(el);
     return;

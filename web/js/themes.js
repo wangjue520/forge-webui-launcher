@@ -35,6 +35,9 @@
     // 莱茵 · 分析终端：结构沿用终末地（不设 base），暖灰研究纸 + 墨色 + 黄铜；三维档案库背景见 js/rhine-field.js，
     // 界面编排 js/rhine.js，开屏 js/rhine-splash.js，音效 js/rhine-sfx.js
     { id: "rhine", label: "莱茵 · 分析终端（研究档案）", css: "themes/rhine.css", splash: "rhine" },
+    // 离解 · 黑白构成：结构沿用终末地（不设 base），白纸细网格 + 黑白大渐变 + 荧光黄绿点缀；
+    // 背景装饰和动效见 js/dissoc.js，开屏 js/dissoc-splash.js（样式在 splash.css 末尾）
+    { id: "dissoc", label: "离解 · 黑白构成", css: "themes/dissoc.css", splash: "dissoc" },
   ];
   var KEY = "ui-theme";
   // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名

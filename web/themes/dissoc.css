@@ -1,0 +1,478 @@
+/* ============================================================
+   离解 · 黑白构成（dissoc）
+   参考：明日方舟「离解复合」PV 的风格化平面（只借视觉语言：白纸 + 细网格、左侧黑→白的大渐变、
+   超大几何无衬线字、四叶「X」标记、细斜线和小号数据标注、一点荧光黄绿；徽记与文字都是自己的）
+
+   一、版面：主区域是带细网格的白纸（每 4 格一条粗线），侧栏是从左往右由黑褪白的渐变块；
+            背景有一个缓慢自转的大号四叶 X、几道斜向细线、几组会跳数的小标注（js/dissoc.js）
+   二、排版：页头是两行超大英文（页名 + 编号）压一行中文，字重很重、字距收紧；其余文字安静
+   三、构件：卡片白底发丝边 + 四角取景框；按钮发丝边，悬停时黑色从左往右扫满；
+            主按钮实心黑 + 荧光黄绿箭头；黄绿只用在「当前 / 就绪 / 焦点」这几处
+   四、动效：开屏（splash.css 末尾 + js/dissoc-splash.js）；翻页时大字解码、卡片被扫描线逐个「扫」出来；
+            鼠标在主区域时有跟随的十字准线和坐标读数；每隔一阵一道扫描线从上往下扫过；
+            点击处爆开一个小 X。系统开了「减少动态效果」时全部关掉
+   ============================================================ */
+:root[data-ui-theme="dissoc"] {
+  --dx-lime: #c8f53c;
+  --dx-lime-deep: #5d7a00;          /* 白底上要读的黄绿小字 */
+  --dx-ink: #0d0d0e;
+  --dx-grey: #8a8b8d;
+  --dx-hair: rgba(13, 13, 14, .14);
+  --dx-hair-2: rgba(13, 13, 14, .07);
+  --dx-ease: cubic-bezier(.16, 1, .3, 1);
+  --dx-snap: cubic-bezier(.7, 0, .2, 1);
+  --dx-disp: "WWY Grotesk", "Helvetica Neue", Helvetica, Arial, "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
+  --dx-cond: "WWY Barlow", "WWY Grotesk", "WWY Sans SC", sans-serif;
+
+  --paper: #f3f3f1;
+  --paper-2: #e9e9e6;
+  --panel: #ffffff;
+  --panel-2: #f1f1ef;
+  --ink: var(--dx-ink);
+  --ink-2: #1c1c1e;
+  --ink-3: #2b2b2e;
+  --yel: var(--dx-lime);
+  --yel-soft: rgba(200, 245, 60, .5);
+  --line: var(--dx-hair);
+  --line-2: var(--dx-hair-2);
+  --line-strong: rgba(13, 13, 14, .32);
+  --input-bg: #fff;
+  --text-dim: #3a3a3d;
+  --text-faint: #6e6f72;
+  --shadow: 0 18px 40px -26px rgba(0, 0, 0, .35);
+  --disp: "WWY Grotesk", "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
+  --radius-sm: 0; --radius: 0; --radius-lg: 0;
+}
+
+:root[data-ui-theme="dissoc"] body { background: var(--paper); letter-spacing: .005em; }
+:root[data-ui-theme="dissoc"] #layout { position: relative; z-index: 1; }
+:root[data-ui-theme="dissoc"] ::selection { background: var(--dx-lime); color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] ::-webkit-scrollbar-thumb { background: rgba(13, 13, 14, .22); }
+:root[data-ui-theme="dissoc"] ::-webkit-scrollbar-thumb:hover { background: var(--dx-ink); background-clip: padding-box; }
+
+/* 小号数据标注（全局复用） */
+:root[data-ui-theme="dissoc"] .dx-lab {
+  font: 500 9px/1.2 var(--dx-cond); letter-spacing: .12em; text-transform: uppercase; color: var(--dx-grey); white-space: nowrap;
+}
+
+/* ============ 侧栏：由黑褪白的渐变块 ============ */
+:root[data-ui-theme="dissoc"] #sidebar {
+  background:
+    linear-gradient(90deg, #050506 0%, #0d0d0e 62%, rgba(13, 13, 14, .92) 78%, rgba(13, 13, 14, 0) 100%);
+  width: 236px; padding-right: 16px; color: #e9e9e6;
+}
+:root[data-ui-theme="dissoc"] #sidebar::before {   /* 顶部刻度：两档 */
+  left: 16px; right: 34px; top: 8px; height: 6px;
+  background:
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, .55) 0 1px, transparent 1px 40px) top / 100% 6px no-repeat,
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, .2) 0 1px, transparent 1px 8px) top / 100% 3px no-repeat;
+}
+:root[data-ui-theme="dissoc"] #sidebar::after {    /* 右上：一小截黄绿 */
+  right: 16px; width: 2px; height: 46px; background: var(--dx-lime); box-shadow: 0 0 10px rgba(200, 245, 60, .6);
+}
+:root[data-ui-theme="dissoc"] .brand { border-bottom-color: rgba(255, 255, 255, .1); padding-right: 6px; }
+:root[data-ui-theme="dissoc"] .brand-logo {   /* 四叶 X 徽记 */
+  background: none; clip-path: none; color: transparent; font-size: 0; width: 38px; height: 38px;
+}
+:root[data-ui-theme="dissoc"] .brand-logo::before {
+  content: ""; position: absolute; inset: 0;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-50 -50 100 100'%3E%3Cg fill='%23f3f3f1'%3E%3Cpath d='M0 0C6-14 20-30 40-40C30-20 14-6 0 0Z'/%3E%3Cpath d='M0 0C14 6 30 20 40 40C20 30 6 14 0 0Z'/%3E%3Cpath d='M0 0C-6 14-20 30-40 40C-30 20-14 6 0 0Z'/%3E%3Cpath d='M0 0C-14-6-30-20-40-40C-20-30-6-14 0 0Z'/%3E%3C/g%3E%3Ccircle r='4' fill='%23c8f53c'/%3E%3C/svg%3E") center / contain no-repeat;
+  transition: transform 1.2s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] .brand:hover .brand-logo::before { transform: rotate(90deg); }
+:root[data-ui-theme="dissoc"] .brand-name { font: 700 19px/1 var(--dx-disp); letter-spacing: -.03em; color: #fff; }
+:root[data-ui-theme="dissoc"] .brand-name .dx-cn { font: 700 12px "WWY Sans SC", sans-serif; letter-spacing: .1em; color: #b9bab6; margin-left: 6px; vertical-align: 2px; }
+:root[data-ui-theme="dissoc"] .brand-sub { font: 500 9px var(--dx-cond); letter-spacing: .2em; text-transform: uppercase; color: #8d8e8a; margin-top: 4px; }
+:root[data-ui-theme="dissoc"] .brand-ver { color: var(--dx-ink); background: var(--dx-lime); padding: 1px 5px; display: inline-block; letter-spacing: .08em; opacity: 1; }
+
+:root[data-ui-theme="dissoc"] #nav { gap: 2px; padding-right: 4px; }
+:root[data-ui-theme="dissoc"] .nav-item {
+  color: #a7a8a4; padding: 9px 12px; overflow: hidden;
+  transition: color .2s, padding .35s var(--dx-ease), background .2s;
+}
+:root[data-ui-theme="dissoc"] .nav-item::after { font: 500 10px var(--dx-cond); letter-spacing: .14em; color: #6d6e6a; transition: color .2s; }
+:root[data-ui-theme="dissoc"] .nav-item svg { stroke-width: 1.5; }
+/* 悬停：一条细线从左边划进来，文字往右让一点 */
+:root[data-ui-theme="dissoc"] .nav-item:hover { background: rgba(255, 255, 255, .06); color: #fff; padding-left: 16px; }
+:root[data-ui-theme="dissoc"] .nav-item:hover::after { color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .nav-item.active {
+  background: #f3f3f1; color: var(--dx-ink); clip-path: none; padding-left: 16px;
+  animation: dxNavIn .5s var(--dx-ease);
+}
+@keyframes dxNavIn {
+  0% { clip-path: inset(0 100% 0 0); }
+  55% { clip-path: inset(0 0 0 0); background: var(--dx-lime); }
+  100% { clip-path: inset(0 0 0 0); }
+}
+:root[data-ui-theme="dissoc"] .nav-item.active::before {   /* 左边黄绿竖条 */
+  left: 0; top: 0; bottom: 0; transform: none; width: 4px; border: 0; background: var(--dx-lime);
+}
+:root[data-ui-theme="dissoc"] .nav-item.active::after { color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .nav-tag { border-color: currentColor; font-family: var(--dx-cond); letter-spacing: .06em; }
+:root[data-ui-theme="dissoc"] .nav-item:focus-visible { outline: 1px solid var(--dx-lime); outline-offset: -1px; }
+
+:root[data-ui-theme="dissoc"] .sidebar-footer { border-top-color: rgba(255, 255, 255, .1); }
+:root[data-ui-theme="dissoc"] .sidebar-footer::before { content: "STATUS / 运行状态"; font: 500 9px var(--dx-cond); letter-spacing: .22em; color: #8d8e8a; }
+:root[data-ui-theme="dissoc"] #sidebar .status-pill { background: rgba(255, 255, 255, .05); border-color: rgba(255, 255, 255, .16); color: #c7c8c4; }
+:root[data-ui-theme="dissoc"] #sidebar .status-pill[data-state="starting"] { color: var(--dx-lime); border-color: rgba(200, 245, 60, .5); }
+:root[data-ui-theme="dissoc"] #sidebar .status-pill[data-state="ready"],
+:root[data-ui-theme="dissoc"] #sidebar .status-pill[data-state="running"] { background: var(--dx-lime); color: var(--dx-ink); border-color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .inst-switch { background: rgba(255, 255, 255, .05); border-color: rgba(255, 255, 255, .14); }
+:root[data-ui-theme="dissoc"] .is-label { font-family: var(--dx-cond); letter-spacing: .16em; color: #8d8e8a; }
+:root[data-ui-theme="dissoc"] .is-dot[data-state="ready"],
+:root[data-ui-theme="dissoc"] .is-dot[data-state="running"] { background: var(--dx-lime); box-shadow: 0 0 6px rgba(200, 245, 60, .8); }
+
+/* ============ 主区域：带细网格的白纸 ============ */
+:root[data-ui-theme="dissoc"] #bg-topo { display: none; }
+:root[data-ui-theme="dissoc"] #main::before {
+  background-image:
+    linear-gradient(rgba(13, 13, 14, .085) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(13, 13, 14, .085) 1px, transparent 1px),
+    linear-gradient(rgba(13, 13, 14, .04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(13, 13, 14, .04) 1px, transparent 1px);
+  background-size: 192px 192px, 192px 192px, 48px 48px, 48px 48px;
+  background-position: var(--dx-gx, 0) var(--dx-gy, 0);
+  -webkit-mask-image: linear-gradient(90deg, rgba(0, 0, 0, .55), #000 30%);
+          mask-image: linear-gradient(90deg, rgba(0, 0, 0, .55), #000 30%);
+}
+
+/* ============ 页头：超大英文 + 中文 ============ */
+:root[data-ui-theme="dissoc"] #topbar {
+  min-height: 112px; padding: 16px 28px 12px; align-items: flex-end;
+  border-bottom: 1px solid var(--dx-ink);
+  background: linear-gradient(180deg, rgba(243, 243, 241, .9), rgba(243, 243, 241, .7));
+}
+:root[data-ui-theme="dissoc"] #topbar > .page-mark,
+:root[data-ui-theme="dissoc"] #topbar > .page-head { display: none; }
+:root[data-ui-theme="dissoc"] #topbar::before {
+  top: 6px; background:
+    repeating-linear-gradient(90deg, rgba(13, 13, 14, .55) 0 1px, transparent 1px 96px) top / 100% 6px no-repeat,
+    repeating-linear-gradient(90deg, rgba(13, 13, 14, .2) 0 1px, transparent 1px 12px) top / 100% 3px no-repeat;
+}
+:root[data-ui-theme="dissoc"] #topbar::after { left: 28px; bottom: -3px; width: 120px; height: 5px; background: var(--dx-ink); }
+
+#dx-mast { display: none; }
+:root[data-ui-theme="dissoc"] #dx-mast {
+  display: flex; align-items: flex-end; gap: 26px; flex: 1; min-width: 0; position: relative; z-index: 1;
+}
+:root[data-ui-theme="dissoc"] .dxm-x { width: 54px; height: 54px; flex: none; margin-bottom: 4px; color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .dxm-x svg { width: 100%; height: 100%; display: block; animation: dxSpin 24s linear infinite; }
+:root[data-ui-theme="dissoc"] .dxm-en { display: flex; flex-direction: column; min-width: 0; flex: none; }
+:root[data-ui-theme="dissoc"] .dxm-labs { display: flex; gap: 14px; margin-bottom: 4px; }
+:root[data-ui-theme="dissoc"] .dxm-labs b { color: var(--dx-ink); font-weight: 600; }
+:root[data-ui-theme="dissoc"] .dxm-big {
+  font: 700 46px/.86 var(--dx-disp); letter-spacing: -.055em; color: var(--dx-ink); white-space: nowrap;
+}
+:root[data-ui-theme="dissoc"] .dxm-big i { font-style: normal; }
+:root[data-ui-theme="dissoc"] .dxm-big .dxm-num { font-weight: 400; color: var(--dx-grey); margin-left: .18em; letter-spacing: -.04em; }
+:root[data-ui-theme="dissoc"] .dxm-big .dxm-num::before { content: "/"; margin-right: .06em; color: var(--dx-lime-deep); }
+:root[data-ui-theme="dissoc"] .dxm-cn { display: flex; flex-direction: column; gap: 5px; min-width: 0; padding-bottom: 3px; }
+:root[data-ui-theme="dissoc"] .dxm-title {
+  font: 900 22px/1 "WWY Sans SC", "Microsoft YaHei UI", sans-serif; letter-spacing: .06em; color: var(--dx-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+:root[data-ui-theme="dissoc"] .dxm-title small { font: 500 12px var(--dx-cond); letter-spacing: .08em; color: var(--text-faint); margin-left: 8px; }
+:root[data-ui-theme="dissoc"] .dxm-quote { font: 400 10px/1.35 var(--dx-disp); color: var(--text-faint); letter-spacing: .01em; white-space: nowrap; }
+:root[data-ui-theme="dissoc"] .dxm-quote::before { content: "\2726"; color: var(--dx-ink); margin-right: 6px; }
+:root[data-ui-theme="dissoc"] #topbar-extra { align-self: stretch; flex-direction: column; align-items: flex-end; justify-content: space-between; }
+:root[data-ui-theme="dissoc"] .dx-tc { font: 500 9px var(--dx-cond); letter-spacing: .18em; color: var(--dx-grey); text-align: right; }
+:root[data-ui-theme="dissoc"] .dx-tc b { display: block; font: 600 15px var(--dx-cond); letter-spacing: .12em; color: var(--dx-ink); font-variant-numeric: tabular-nums; }
+:root[data-ui-theme="dissoc"] .topbar-clock { font: 500 9px/1.5 var(--dx-cond); letter-spacing: .22em; color: var(--dx-grey); text-transform: uppercase; }
+:root[data-ui-theme="dissoc"] .topbar-clock b { font: 600 20px/1 var(--dx-cond); letter-spacing: .06em; color: var(--dx-ink); }
+
+/* 翻页：大字逐字从下面顶上来（字由 dissoc.js 拆成 span，带解码乱码），中文和标注随后 */
+:root[data-ui-theme="dissoc"] #dx-mast.dx-in .dxm-big > span > i {
+  display: inline-block; animation: dxGlyph .55s var(--dx-ease) both; animation-delay: calc(var(--i) * 26ms);
+}
+:root[data-ui-theme="dissoc"] #dx-mast.dx-in .dxm-cn,
+:root[data-ui-theme="dissoc"] #dx-mast.dx-in .dxm-labs { animation: dxWipe .6s .12s var(--dx-snap) both; }
+:root[data-ui-theme="dissoc"] #dx-mast.dx-in .dxm-x svg { animation: dxXIn .9s var(--dx-ease) both, dxSpin 24s .9s linear infinite; }
+@keyframes dxGlyph { from { transform: translateY(70%); opacity: 0; clip-path: inset(0 0 100% 0); } to { transform: none; opacity: 1; clip-path: inset(-10% -10% -10% -10%); } }
+@keyframes dxWipe { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 -10% 0 0); } }
+@keyframes dxXIn { from { transform: rotate(-180deg) scale(.3); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes dxSpin { to { transform: rotate(360deg); } }
+
+:root[data-ui-theme="dissoc"] #content { padding-top: 24px; }
+:root[data-ui-theme="dissoc"] .models-layout { height: calc(100vh - 314px); }
+:root[data-ui-theme="dissoc"] .out-layout { height: calc(100vh - 190px); }
+
+/* ============ 卡片：白底发丝边 + 四角取景框 ============ */
+:root[data-ui-theme="dissoc"] .page { counter-reset: dxcard; }
+:root[data-ui-theme="dissoc"] :is(.card, .card-flat, .out-filters, .inst-card, .ext-item, .drop-banner, .hint-block) {
+  background: rgba(255, 255, 255, .94); border: 1px solid var(--dx-hair); border-radius: 0; box-shadow: none;
+}
+:root[data-ui-theme="dissoc"] .card {
+  padding: 18px 22px; margin-bottom: 16px;
+  background:
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 0 0 / 12px 1px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 0 0 / 1px 12px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 100% 0 / 12px 1px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 100% 0 / 1px 12px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 0 100% / 12px 1px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 0 100% / 1px 12px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 100% 100% / 12px 1px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) 100% 100% / 1px 12px no-repeat,
+    rgba(255, 255, 255, .94);
+  transition: border-color .3s, box-shadow .4s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] .card:hover { border-color: rgba(13, 13, 14, .3); box-shadow: 0 20px 40px -30px rgba(0, 0, 0, .45); }
+/* 顶边：悬停时一道黑线从左往右扫过 */
+:root[data-ui-theme="dissoc"] .card::before {
+  left: -1px; top: -1px; width: 0; height: 2px; background: var(--dx-ink); transition: width .6s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] .card:hover::before { width: calc(100% + 2px); }
+:root[data-ui-theme="dissoc"] .card::after {   /* 右上角的小「+」 */
+  right: 10px; top: 9px; bottom: auto; width: 9px; height: 9px; border: 0; filter: none;
+  background:
+    linear-gradient(var(--dx-ink), var(--dx-ink)) center / 100% 1px no-repeat,
+    linear-gradient(var(--dx-ink), var(--dx-ink)) center / 1px 100% no-repeat;
+  transition: transform .6s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] .card:hover::after { transform: rotate(90deg); }
+:root[data-ui-theme="dissoc"] .card-title { font-size: 14px; font-weight: 800; letter-spacing: .04em; margin-bottom: 13px; align-items: baseline; }
+:root[data-ui-theme="dissoc"] .card-title::before {   /* §01 §02 … */
+  counter-increment: dxcard; content: counter(dxcard, decimal-leading-zero);
+  width: auto; height: auto; outline: 0; align-self: baseline;
+  background: var(--dx-ink); color: #fff; padding: 2px 5px 1px;
+  font: 600 10px/1.2 var(--dx-cond); letter-spacing: .1em;
+}
+:root[data-ui-theme="dissoc"] .card:hover .card-title::before { background: var(--dx-lime); color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .card-title-hint { font-weight: 400; color: var(--text-faint); letter-spacing: .02em; }
+:root[data-ui-theme="dissoc"] .sub-title { font-weight: 800; letter-spacing: .04em; }
+:root[data-ui-theme="dissoc"] .sub-title::before { content: "\2726"; font-size: 10px; margin-right: 7px; color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .sub-title::after { border-bottom: 1px solid var(--dx-hair); }
+:root[data-ui-theme="dissoc"] :is(.card-flat, .out-filters, .inst-card)::before { width: 22px; height: 2px; background: var(--dx-ink); }
+
+/* 翻页：内容先整体出现，卡片再被一道扫描线依次「扫」出来（js 给 .dx-scan 并设 --k 序号） */
+:root[data-ui-theme="dissoc"] .page { animation: dxPageIn .35s var(--dx-ease); }
+@keyframes dxPageIn { from { opacity: 0; } }
+:root[data-ui-theme="dissoc"] .page.active > .dx-scan { position: relative; animation: dxReveal .7s var(--dx-snap) both; animation-delay: calc(var(--k, 0) * 70ms + 60ms); }
+:root[data-ui-theme="dissoc"] .page.active > .dx-scan > .dx-beam {
+  position: absolute; top: -1px; bottom: -1px; left: 0; width: 3px; z-index: 5; pointer-events: none;
+  background: var(--dx-ink); box-shadow: 0 0 0 1px var(--dx-lime), 6px 0 18px rgba(200, 245, 60, .55);
+  animation: dxBeam .7s var(--dx-snap) both; animation-delay: calc(var(--k, 0) * 70ms + 60ms);
+}
+@keyframes dxReveal { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(-20px -20px -20px -20px); } }
+@keyframes dxBeam { from { left: 0; opacity: 1; } 92% { opacity: 1; } to { left: 100%; opacity: 0; } }
+
+/* ============ 表单 ============ */
+:root[data-ui-theme="dissoc"] :is(input[type="text"], input[type="password"], input[type="number"], select, textarea) {
+  background-color: #fff; border: 1px solid rgba(13, 13, 14, .2); border-radius: 0;
+  transition: border-color .2s, box-shadow .3s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] :is(input[type="text"], input[type="password"], input[type="number"], select, textarea):hover:not(:focus):not(:disabled) { border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] :is(input[type="text"], input[type="password"], input[type="number"], select, textarea):focus {
+  border-color: var(--dx-ink); box-shadow: inset 3px 0 0 var(--dx-ink), 0 0 0 3px rgba(200, 245, 60, .55);
+}
+:root[data-ui-theme="dissoc"] :is(input, select, textarea):disabled { background-color: var(--panel-2); color: var(--text-faint); }
+:root[data-ui-theme="dissoc"] select {
+  background-image: linear-gradient(45deg, transparent 50%, var(--dx-ink) 50%), linear-gradient(135deg, var(--dx-ink) 50%, transparent 50%);
+}
+:root[data-ui-theme="dissoc"] .chk-row i { border: 1px solid var(--dx-ink); background: #fff; transition: background .2s, box-shadow .3s var(--dx-ease); }
+:root[data-ui-theme="dissoc"] .chk-row input:checked + i { background: var(--dx-ink); box-shadow: 2px 2px 0 var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .chk-row input:checked + i::after { border-color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .chk-row .tag { background: var(--dx-lime); color: var(--dx-ink); font-family: var(--dx-cond); }
+:root[data-ui-theme="dissoc"] input[type="range"] {
+  height: 2px; background: linear-gradient(90deg, var(--dx-ink) 0 var(--fill, 0%), rgba(13, 13, 14, .2) var(--fill, 0%) 100%);
+}
+:root[data-ui-theme="dissoc"] input[type="range"]::-webkit-slider-thumb {
+  width: 14px; height: 14px; transform: rotate(45deg); background: #fff; border: 2px solid var(--dx-ink);
+  transition: background .2s, transform .3s var(--dx-ease);
+}
+:root[data-ui-theme="dissoc"] input[type="range"]:hover::-webkit-slider-thumb { background: var(--dx-lime); transform: rotate(135deg) scale(1.15); }
+:root[data-ui-theme="dissoc"] input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(200, 245, 60, .6); }
+:root[data-ui-theme="dissoc"] .radio-row { transition: background .2s, border-color .2s; }
+:root[data-ui-theme="dissoc"] .radio-row.checked { background: #fff; border-color: var(--dx-ink); box-shadow: inset 4px 0 0 var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .radio-row.checked .radio-dot::after { background: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .radio-row .primary-tag { background: var(--dx-lime); color: var(--dx-ink); font-family: var(--dx-cond); }
+
+/* ============ 按钮：发丝边，悬停时黑色从左往右扫满 ============ */
+:root[data-ui-theme="dissoc"] .btn {
+  border: 1px solid var(--dx-ink); border-radius: 0; color: var(--dx-ink);
+  background: linear-gradient(var(--dx-ink), var(--dx-ink)) left / 0 100% no-repeat, #fff;
+  transition: background-size .38s var(--dx-snap), color .25s .05s, border-color .2s, transform .15s;
+}
+:root[data-ui-theme="dissoc"] .btn:hover { background-size: 100% 100%; color: #fff; }
+:root[data-ui-theme="dissoc"] .btn:active { transform: translateY(1px); }
+:root[data-ui-theme="dissoc"] .btn:disabled,
+:root[data-ui-theme="dissoc"] .btn:disabled:hover { background: #fff; color: var(--dx-ink); opacity: .38; transform: none; }
+/* 主按钮：实心黑，悬停时黄绿从左扫过、箭头往前推 */
+:root[data-ui-theme="dissoc"] .btn-primary {
+  clip-path: none; color: #fff; border-color: var(--dx-ink);
+  background: linear-gradient(var(--dx-lime), var(--dx-lime)) left / 0 100% no-repeat, var(--dx-ink);
+}
+:root[data-ui-theme="dissoc"] .btn-primary::after {
+  content: "\2192"; display: inline-block; margin-left: 12px; color: var(--dx-lime); transition: transform .35s var(--dx-ease), color .2s;
+}
+:root[data-ui-theme="dissoc"] .btn-primary:hover { background-size: 100% 100%; color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .btn-primary:hover::after { transform: translateX(5px); color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .btn-primary:disabled,
+:root[data-ui-theme="dissoc"] .btn-primary:disabled:hover { background: #3a3a3d; color: #bdbdbd; opacity: .55; }
+:root[data-ui-theme="dissoc"] :is(.btn-accent, .btn-success) {
+  color: var(--dx-ink); border-color: var(--dx-ink);
+  background: linear-gradient(var(--dx-ink), var(--dx-ink)) left / 0 100% no-repeat, var(--dx-lime);
+}
+:root[data-ui-theme="dissoc"] :is(.btn-accent, .btn-success):hover { background-size: 100% 100%; color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] :is(.btn-accent, .btn-success):disabled,
+:root[data-ui-theme="dissoc"] :is(.btn-accent, .btn-success):disabled:hover { background: var(--dx-lime); color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .btn-lg { font: 800 15px "WWY Sans SC", sans-serif; letter-spacing: .14em; padding: 12px 30px; }
+:root[data-ui-theme="dissoc"] .btn-danger-text:hover { color: #fff; background: #c8321e; border-color: #c8321e; }
+:root[data-ui-theme="dissoc"] :is(.btn, .chip, .choice-item, .cat-item):focus-visible { outline: 2px solid var(--dx-ink); outline-offset: 2px; box-shadow: 0 0 0 5px var(--dx-lime); }
+
+/* ============ 状态 / 提示 / 日志 / 进度 ============ */
+:root[data-ui-theme="dissoc"] .status-pill { border-radius: 0; background: #fff; border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .status-pill[data-state="starting"] .dot { background: var(--dx-lime); outline-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .status-pill[data-state="ready"],
+:root[data-ui-theme="dissoc"] .status-pill[data-state="running"] { background: var(--dx-ink); color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .status-pill[data-state="ready"] .dot,
+:root[data-ui-theme="dissoc"] .status-pill[data-state="running"] .dot { background: var(--dx-lime); box-shadow: 0 0 8px var(--dx-lime); animation: dxBlink 1.4s steps(2) infinite; }
+@keyframes dxBlink { 50% { opacity: .25; } }
+:root[data-ui-theme="dissoc"] .hint-block { border-left: 3px solid var(--dx-ink); background: rgba(255, 255, 255, .9); }
+:root[data-ui-theme="dissoc"] .code-box { background: var(--dx-ink); border-radius: 0; }
+:root[data-ui-theme="dissoc"] .code-box::before { color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .console-wrap { border: 1px solid var(--dx-ink); background: #0b0b0c; box-shadow: 6px 6px 0 rgba(13, 13, 14, .12); }
+:root[data-ui-theme="dissoc"] .console-head { font: 600 11px var(--dx-cond); letter-spacing: .16em; border-bottom-color: rgba(255, 255, 255, .12); }
+:root[data-ui-theme="dissoc"] .console-head > span:first-child::before { content: "\2715"; background: none; color: var(--dx-lime); padding: 0; margin-right: 8px; }
+:root[data-ui-theme="dissoc"] .console-head .btn { background: transparent; color: #d8d8d5; border-color: rgba(255, 255, 255, .25); }
+:root[data-ui-theme="dissoc"] .console-head .btn:hover { background: var(--dx-lime); color: var(--dx-ink); border-color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .progress { background: rgba(13, 13, 14, .08); border-radius: 0; border: 1px solid rgba(13, 13, 14, .25); }
+:root[data-ui-theme="dissoc"] .progress-bar {
+  background: repeating-linear-gradient(-45deg, var(--dx-ink) 0 6px, #2c2c2e 6px 12px);
+  background-size: 17px 17px; animation: dxStripe .6s linear infinite;
+}
+@keyframes dxStripe { to { background-position: 17px 0; } }
+:root[data-ui-theme="dissoc"] .progress-bar::after { width: 3px; background: var(--dx-lime); clip-path: none; box-shadow: 0 0 8px var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .progress-text { font: 600 11px var(--dx-cond); letter-spacing: .06em; mix-blend-mode: difference; color: #fff; }
+:root[data-ui-theme="dissoc"] .topbar-fill { background: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .topbar-glow { background: var(--dx-lime); box-shadow: 0 0 12px var(--dx-lime); }
+
+/* ============ 表格 / 列表 / 标签 ============ */
+:root[data-ui-theme="dissoc"] .table-wrap { border-radius: 0; border-color: var(--dx-ink); background: #fff; }
+:root[data-ui-theme="dissoc"] .data-table th { font: 600 10.5px var(--dx-cond); letter-spacing: .14em; text-transform: uppercase; border-bottom: 1px solid var(--dx-ink); background: #fff; }
+:root[data-ui-theme="dissoc"] .data-table tbody tr { transition: background .15s; }
+:root[data-ui-theme="dissoc"] .data-table tbody tr:hover { background: rgba(13, 13, 14, .04); }
+:root[data-ui-theme="dissoc"] .data-table tbody tr.selected { background: var(--dx-ink); color: #fff; box-shadow: inset 4px 0 0 var(--dx-lime); }
+:root[data-ui-theme="dissoc"] :is(.cat-item, .col-item, .facet) { border-radius: 0; transition: background .15s, color .15s; }
+:root[data-ui-theme="dissoc"] :is(.cat-item, .col-item, .facet):hover { background: rgba(13, 13, 14, .06); }
+:root[data-ui-theme="dissoc"] :is(.cat-item.active, .col-item.on, .facet.on) { background: var(--dx-ink); color: #fff; box-shadow: inset 3px 0 0 var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .chip { border-radius: 0; background: #fff; border-color: var(--dx-ink); transition: background .2s, color .2s; }
+:root[data-ui-theme="dissoc"] .chip:hover { background: rgba(200, 245, 60, .35); color: var(--dx-ink); border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .chip.on { background: var(--dx-ink); color: var(--dx-lime); border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .ext-item { transition: transform .3s var(--dx-ease), box-shadow .3s var(--dx-ease); }
+:root[data-ui-theme="dissoc"] .ext-item:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .ext-status { background: var(--dx-lime); color: var(--dx-ink); font-family: var(--dx-cond); }
+:root[data-ui-theme="dissoc"] .ext-group { font: 700 20px/1 var(--dx-disp); letter-spacing: -.04em; color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .ic-kind[data-kind="comfyui"] { background: var(--dx-lime); outline-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .inst-card { transition: box-shadow .3s var(--dx-ease), transform .3s var(--dx-ease); }
+:root[data-ui-theme="dissoc"] .inst-card:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .inst-card.active { border-color: var(--dx-ink); box-shadow: 4px 4px 0 var(--dx-lime), 4px 4px 0 1px var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .oc { transition: transform .3s var(--dx-ease), box-shadow .3s var(--dx-ease); }
+:root[data-ui-theme="dissoc"] .oc:hover { transform: translate(-2px, -2px); box-shadow: 4px 4px 0 var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .oc.sel { outline-color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] :is(.preview-box, .detail-view) { border-radius: 0; background-color: #fff; border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .detail-view .sect::before { background: var(--dx-ink); outline: 0; }
+:root[data-ui-theme="dissoc"] :is(.drop-area, .drop-list) {
+  border: 1px dashed rgba(13, 13, 14, .4); border-radius: 0; background: rgba(255, 255, 255, .7);
+  transition: background .25s, border-color .25s;
+}
+:root[data-ui-theme="dissoc"] .drop-area::before,
+:root[data-ui-theme="dissoc"] .drop-area::after { border-color: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] :is(.drop-area, .drop-list).dragover { background: rgba(200, 245, 60, .25); border-color: var(--dx-ink); border-style: solid; }
+:root[data-ui-theme="dissoc"] .wd-item { background: #fff; border-color: var(--dx-hair); }
+:root[data-ui-theme="dissoc"] .wd-item.s-running { border-color: var(--dx-ink); box-shadow: inset 3px 0 0 var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .wd-tag:hover { background: var(--dx-lime); border-color: var(--dx-ink); }
+
+/* ============ 模态框 / Toast ============ */
+:root[data-ui-theme="dissoc"] #modal-mask { background: rgba(243, 243, 241, .6); -webkit-backdrop-filter: grayscale(1) blur(2px); backdrop-filter: grayscale(1) blur(2px); }
+:root[data-ui-theme="dissoc"] #modal {
+  border: 1px solid var(--dx-ink); clip-path: none; background: #fff; box-shadow: 10px 10px 0 rgba(13, 13, 14, .9);
+  animation: dxModalIn .45s var(--dx-snap);
+}
+@keyframes dxModalIn { from { clip-path: inset(0 0 100% 0); transform: translateY(-6px); } to { clip-path: inset(-20px -20px -20px -20px); } }
+:root[data-ui-theme="dissoc"] #modal::before { width: 100%; height: 4px; left: 0; background: var(--dx-ink); }
+:root[data-ui-theme="dissoc"] #modal-title { font: 900 16px "WWY Sans SC", sans-serif; letter-spacing: .06em; padding-top: 22px; }
+:root[data-ui-theme="dissoc"] #modal-title::before { background: var(--dx-lime); color: var(--dx-ink); outline: 1px solid var(--dx-ink); }
+:root[data-ui-theme="dissoc"] .choice-item { border-radius: 0; transition: background .2s, transform .25s var(--dx-ease); }
+:root[data-ui-theme="dissoc"] .choice-item:hover { background: var(--dx-ink); color: #fff; transform: translateX(3px); }
+:root[data-ui-theme="dissoc"] .toast {
+  border-radius: 0; border: 1px solid var(--dx-ink); border-left: 4px solid var(--dx-ink);
+  background: #fff; color: var(--dx-ink); box-shadow: 5px 5px 0 rgba(13, 13, 14, .85);
+  animation: dxToastIn .4s var(--dx-snap);
+}
+:root[data-ui-theme="dissoc"] .toast.ok { border-left-color: var(--dx-lime); }
+:root[data-ui-theme="dissoc"] .toast.error { border-left-color: #d23a24; }
+@keyframes dxToastIn { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(-10px -10px -10px -10px); } }
+:root[data-ui-theme="dissoc"] #boot-mask { background: var(--paper); }
+:root[data-ui-theme="dissoc"] #boot-mask .spin { border-radius: 0; border-top-color: var(--dx-ink); }
+
+/* ============ 背景装饰 / 前景动效（js/dissoc.js 生成） ============ */
+#dx-deco, #dx-front { display: none; }
+:root[data-ui-theme="dissoc"] #dx-deco { display: block; position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+:root[data-ui-theme="dissoc"] #dx-front { display: block; position: fixed; inset: 0; z-index: 50; pointer-events: none; overflow: hidden; }
+/* 大号四叶 X：右下，缓慢自转 + 随鼠标轻微视差 */
+#dx-deco .dx-bigx {
+  position: absolute; right: -150px; bottom: -190px; width: 620px; height: 620px; opacity: .07;
+  transform: translate3d(var(--mx, 0), var(--my, 0), 0); transition: transform 1.2s var(--dx-ease);
+}
+#dx-deco .dx-bigx svg { width: 100%; height: 100%; animation: dxSpin 90s linear infinite; }
+/* 斜向细线：从左上的黑区往右下穿过去 */
+#dx-deco .dx-diag { position: absolute; inset: 0; width: 100%; height: 100%; }
+#dx-deco .dx-diag line { stroke: rgba(13, 13, 14, .22); stroke-width: 1; stroke-dasharray: 2400; stroke-dashoffset: 2400; animation: dxDraw 2.4s var(--dx-ease) forwards; }
+#dx-deco .dx-diag line:nth-child(2) { animation-delay: .25s; stroke: rgba(13, 13, 14, .12); }
+#dx-deco .dx-diag line:nth-child(3) { animation-delay: .5s; stroke-dasharray: 4 6; animation: dxFade 1.5s .6s both; }
+@keyframes dxDraw { to { stroke-dashoffset: 0; } }
+@keyframes dxFade { from { opacity: 0; } }
+/* 散落的标注：小 ✦ / + 号和会跳数的读数 */
+#dx-deco .dx-tag { position: absolute; display: flex; flex-direction: column; gap: 2px; animation: dxFade 1.2s .4s both; }
+#dx-deco .dx-tag .v { font: 600 11px var(--dx-cond); letter-spacing: .1em; color: rgba(13, 13, 14, .6); font-variant-numeric: tabular-nums; }
+#dx-deco .dx-star { position: absolute; width: 18px; height: 18px; color: var(--dx-ink); opacity: .55; animation: dxTwinkle 4.6s ease-in-out infinite; }
+#dx-deco .dx-star svg { width: 100%; height: 100%; }
+@keyframes dxTwinkle { 0%, 100% { transform: scale(.7) rotate(0); opacity: .25; } 50% { transform: scale(1.1) rotate(45deg); opacity: .7; } }
+#dx-deco .dx-plus { position: absolute; width: 11px; height: 11px; opacity: .45;
+  background: linear-gradient(var(--dx-ink), var(--dx-ink)) center / 100% 1px no-repeat, linear-gradient(var(--dx-ink), var(--dx-ink)) center / 1px 100% no-repeat; }
+/* 周期扫描线：一条黑线带黄绿余辉，从上往下扫过主区域 */
+#dx-front .dx-sweep {
+  position: absolute; left: var(--sl, 236px); right: 0; top: 0; height: 2px; opacity: 0;
+  background: var(--dx-ink); box-shadow: 0 0 0 1px rgba(200, 245, 60, .55), 0 -24px 40px -8px rgba(200, 245, 60, .28);
+}
+#dx-front .dx-sweep.go { animation: dxSweep 1.6s var(--dx-snap) forwards; }
+@keyframes dxSweep { 0% { top: 0; opacity: 0; } 8% { opacity: 1; } 90% { opacity: .9; } 100% { top: 100%; opacity: 0; } }
+#dx-front .dx-sweep::after {
+  content: attr(data-t); position: absolute; right: 18px; top: 6px;
+  font: 600 9px var(--dx-cond); letter-spacing: .2em; color: var(--dx-ink); background: var(--dx-lime); padding: 1px 5px;
+}
+/* 跟随鼠标的十字准线 + 坐标读数（只在主区域，离开就收起） */
+#dx-front .dx-hx, #dx-front .dx-vx { position: absolute; background: rgba(13, 13, 14, .38); opacity: 0; transition: opacity .25s; will-change: transform; }
+#dx-front .dx-hx { left: 0; right: 0; top: 0; height: 1px; }
+#dx-front .dx-vx { top: 0; bottom: 0; left: 0; width: 1px; }
+#dx-front .dx-read {
+  position: absolute; left: 0; top: 0; opacity: 0; transition: opacity .25s; will-change: transform;
+  font: 600 9px/1.3 var(--dx-cond); letter-spacing: .14em; color: var(--dx-ink); white-space: nowrap;
+  background: rgba(255, 255, 255, .85); border: 1px solid var(--dx-ink); padding: 2px 5px;
+}
+#dx-front.on .dx-hx, #dx-front.on .dx-vx { opacity: 1; }
+#dx-front.on .dx-read { opacity: 1; }
+/* 点击处爆开一个小 X */
+#dx-front .dx-burst { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; color: var(--dx-ink); animation: dxBurst .55s var(--dx-ease) forwards; }
+#dx-front .dx-burst svg { width: 100%; height: 100%; }
+#dx-front .dx-burst::after { content: ""; position: absolute; inset: 6px; border: 1px solid var(--dx-lime); animation: dxRing .55s var(--dx-ease) forwards; }
+@keyframes dxBurst { from { transform: rotate(-90deg) scale(.2); opacity: 1; } to { transform: rotate(0) scale(1); opacity: 0; } }
+@keyframes dxRing { from { transform: scale(.3) rotate(45deg); } to { transform: scale(1.6) rotate(45deg); opacity: 0; } }
+/* 开屏收尾时主界面从一条横线里展开（js 在 <html> 上加 dx-intro） */
+:root.dx-intro[data-ui-theme="dissoc"] #layout { animation: dxIntro .75s var(--dx-snap) both; }
+@keyframes dxIntro { from { clip-path: inset(49.5% 0 49.5% 0); } 40% { clip-path: inset(49.5% 0 49.5% 0); } to { clip-path: inset(0 0 0 0); } }
+
+@media (prefers-reduced-motion: reduce) {
+  #dx-front, #dx-deco .dx-bigx svg, #dx-deco .dx-star,
+  :root[data-ui-theme="dissoc"] .page, :root[data-ui-theme="dissoc"] .page.active > *,
+  :root[data-ui-theme="dissoc"] #dx-mast *, :root[data-ui-theme="dissoc"] .nav-item.active,
+  :root[data-ui-theme="dissoc"] .progress-bar { animation: none !important; }
+  #dx-front { display: none !important; }
+}
+
+@media (max-width: 1240px) { :root[data-ui-theme="dissoc"] .dxm-quote { display: none; } }
+@media (max-width: 1100px) {
+  :root[data-ui-theme="dissoc"] .dxm-big { font-size: 36px; }
+  :root[data-ui-theme="dissoc"] .dxm-x { display: none; }
+  :root[data-ui-theme="dissoc"] .dxm-title small { display: none; }
+}
