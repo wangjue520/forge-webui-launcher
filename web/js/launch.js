@@ -8,10 +8,14 @@
   let log = null;
   let launchUrl = null;
 
+  let lastStatus = { state: "idle", text: "尚未启动" };
   function setStatus(state, text) {
+    lastStatus = { state, text };
     const pill = $("#launch-status");
-    pill.dataset.state = state;
-    $("#launch-status-text").textContent = text;
+    // 正在部署、当前实例又没在跑：状态显示「正在部署 …」（样式同启动中）
+    const deploying = App.deploy && App.deploy.running && !["ready", "running", "starting"].includes(state);
+    pill.dataset.state = deploying ? "starting" : state;
+    $("#launch-status-text").textContent = deploying ? App.deployText() : text;
     // 多实例时全局状态由 instances.js 汇总显示
     if (!(App.instances && App.instances.multi)) {
       App.setGlobalStatus(state, state === "idle" ? `${App.kindName ? App.kindName() : "WebUI"} 未启动` : text);
@@ -187,6 +191,7 @@
   // 侧栏底部状态标签的快捷开关：有实例在跑/在启动就全部停止，否则启动当前实例
   async function onQuickToggle() {
     const pill = $("#global-status");
+    if (pill.dataset.deploying) { App.showPage("deploy"); return; }   // 部署中：去部署页看进度
     const st = pill.dataset.state;
     const busy = st === "ready" || st === "running" || st === "starting";
     pill.disabled = true;
@@ -288,6 +293,11 @@
       launchUrl = ls.url || null;
       setStatus(ls.state || "idle", ls.text || "尚未启动");
       setRunningUI(!!ls.running);
+      // 正在部署：状态显示「正在部署 …」，实例卡片跟着重画（deploy.js 收到部署状态后调 App.setDeploy）
+      App.deployHooks.push(() => {
+        setStatus(lastStatus.state, lastStatus.text);
+        if (App.renderInstanceCards && App.instances && App.instances.instances) App.renderInstanceCards();
+      });
       if (App.cfg.webui_root) { refreshEnvHint(); refreshOutputButtons(); }
       renderInstalls(false);
 

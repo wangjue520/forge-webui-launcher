@@ -301,14 +301,35 @@
   })();
 
   /* ---------- 全局状态 pill ---------- */
+  // 正在部署（部署实例 / 训练器、切换显卡环境）时，没有实例在跑就显示「正在部署 …」，
+  // 部署结束恢复成原来的状态。App.deploy 由 deploy 的 state 事件更新（deploy.js 调 App.setDeploy）；
+  // App.on 每个事件只认一个处理函数，别的页面要跟着变就往 App.deployHooks 里加回调
+  App.deploy = { running: false };
+  App.deployText = function () {
+    const d = App.deploy;
+    if (!d.running) return "";
+    return d.action === "gpu" ? "正在切换显卡环境" : `正在部署 ${d.label || ""}`.trim();
+  };
+  let lastGlobal = { state: "idle", text: "未启动" };
+  const isBusy = (state) => state === "ready" || state === "running" || state === "starting";
   App.setGlobalStatus = function (state, text) {
+    lastGlobal = { state, text };
     const pill = $("#global-status");
-    pill.dataset.state = state;
-    $("#global-status-text").textContent = text;
-    // 侧栏状态标签兼做快捷开关：运行中/启动中点一下停止，否则点一下启动
-    const busy = state === "ready" || state === "running" || state === "starting";
-    $("#global-status-act").textContent = busy ? "停止 ■" : "启动 ▶";
-    pill.title = busy ? "点击停止" : "点击启动";
+    const deploying = App.deploy.running && !isBusy(state);
+    // 部署中借用「启动中」的样式（各个界面风格都认这几个状态），文字和按钮单独换掉
+    pill.dataset.state = deploying ? "starting" : state;
+    pill.dataset.deploying = deploying ? "1" : "";
+    $("#global-status-text").textContent = deploying ? App.deployText() : text;
+    // 侧栏状态标签兼做快捷开关：运行中/启动中点一下停止，否则点一下启动；部署中点一下去看进度
+    const busy = isBusy(state);
+    $("#global-status-act").textContent = deploying ? "查看 ▶" : busy ? "停止 ■" : "启动 ▶";
+    pill.title = deploying ? "点击查看部署进度" : busy ? "点击停止" : "点击启动";
+  };
+  App.deployHooks = [];
+  App.setDeploy = function (e) {
+    App.deploy = e && e.running ? { running: true, action: e.action || "deploy", label: e.label || "", target: e.target || "" } : { running: false };
+    App.setGlobalStatus(lastGlobal.state, lastGlobal.text);
+    App.deployHooks.forEach((f) => { try { f(); } catch (err) { console.error("部署状态回调出错", err); } });
   };
 
   /* ---------- 页面导航 ---------- */
