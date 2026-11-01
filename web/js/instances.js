@@ -72,6 +72,7 @@
     renderList();
     applyMulti();
     updateGlobalStatus();
+    scheduleMissingCheck();
   }
 
   async function refresh() {
@@ -148,10 +149,36 @@
   }
 
   /* ---------- 启动页：所有实例的状态卡片 ---------- */
+  // 正在部署到这个实例的目录（重新部署已有实例时）
+  const normPath = (p) => (p || "").replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const samePath = (a, b) => !!a && !!b && normPath(a) === normPath(b);
+  const deployingInto = (i) => App.deploy && App.deploy.running && App.deploy.action !== "trainer" && samePath(i.root, App.deploy.target);
+
   function statusPill(i) {
+    if (i.missing && !isRunning(i)) {
+      return `<span class="status-pill" data-state="stopped" title="${App.esc(i.root)} 不存在或是空文件夹"><span class="dot"></span><span>目录已删除</span></span>`;
+    }
+    if (deployingInto(i) && !isRunning(i)) {
+      return `<span class="status-pill" data-state="starting"><span class="dot"></span><span>${App.esc(App.deployText())}</span></span>`;
+    }
     const st = (i.status && i.status.state) || "idle";
     const port = i.status && i.status.port ? ` :${i.status.port}` : "";
     return `<span class="status-pill" data-state="${st}"><span class="dot"></span><span>${STATE_TEXT[st] || st}${port}</span></span>`;
+  }
+
+  // 正在部署一个新实例（目录还不属于任何实例）：先放一张「正在部署」的卡片，部署完会换成真正的实例
+  function deployCard(cls) {
+    const d = App.deploy;
+    if (!d || !d.running || d.action !== "deploy" || App.instances.instances.some((i) => samePath(i.root, d.target))) return "";
+    return `
+      <div class="${cls} inst-deploying">
+        <div class="ic-head"><span class="ic-kind">${App.esc(d.label || "WebUI")}</span><b class="ic-name">新实例</b></div>
+        <div class="ic-root" title="${App.esc(d.target)}">${App.esc(d.target)}</div>
+        <div class="ic-foot">
+          <span class="status-pill" data-state="starting"><span class="dot"></span><span>${App.esc(App.deployText())}</span></span>
+          <span class="ic-btns"><button class="btn btn-xs" data-deploy-view>查看进度</button></span>
+        </div>
+      </div>`;
   }
 
   function renderLaunchCards() {
@@ -169,19 +196,22 @@
           <span class="ic-btns">
             ${isRunning(i)
               ? `<button class="btn btn-xs" data-act="open"${i.status.url ? "" : " disabled"}>打开</button><button class="btn btn-xs" data-act="stop">停止</button>`
+              : i.missing ? '<button class="btn btn-xs" data-act="forget" title="目录已经不在了：从启动器里去掉这个实例（不删除任何文件）">移除</button>'
               : `<button class="btn btn-xs btn-primary" data-act="start"${i.root ? "" : " disabled"}>启动</button>`}
             ${i.active ? "" : '<button class="btn btn-xs" data-act="switch">设为当前</button>'}
           </span>
         </div>
-      </div>`).join("");
+      </div>`).join("") + deployCard("inst-card");
     box.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () =>
       cardAction(b.dataset.act, b.closest("[data-id]").dataset.id)));
+    box.querySelectorAll("[data-deploy-view]").forEach((b) => b.addEventListener("click", () => App.showPage("deploy")));
   }
 
   async function cardAction(act, id) {
     const i = inst(id);
     if (!i) return;
     if (act === "switch") return switchTo(id);
+    if (act === "forget") return forgetMissing([id]);
     if (act === "open" && i.status.url) return App.api.open_url(i.status.url);
     if (act === "stop") {
       try { await App.api.launch_stop(id); } catch (e) { App.toast("停止失败：" + e.message, "error"); }
@@ -206,6 +236,55 @@
     }
   }
 
+  // 部署开始 / 结束时重画卡片（launch.js 收到 deploy 的 state 事件后调用）
+  App.renderInstanceCards = function () { renderLaunchCards(); renderList(); };
+
+  /* ---------- 实例目录被删掉了 ---------- */
+  // 后端在实例列表里标 missing（目录不存在或只剩空文件夹）。开机、刷新实例列表、切回启动器窗口时检查，
+  // 同一个目录每次打开启动器只问一次；选「先保留」的，卡片上一直显示「目录已删除」和「移除」按钮
+  const askedMissing = new Set();
+  try { JSON.parse(sessionStorage.getItem("missing-asked") || "[]").forEach((r) => askedMissing.add(r)); } catch (e) { /* 忽略 */ }
+  let missingTimer = null;
+  let askingMissing = false;
+  function scheduleMissingCheck() {
+    clearTimeout(missingTimer);
+    // 单实例时后端开机会自动改指到找到的安装（_auto_pick_install），多等一会儿再看
+    missingTimer = setTimeout(checkMissing, App.instances && App.instances.multi ? 1200 : 4000);
+  }
+  async function checkMissing() {
+    if (askingMissing || !App.instances || !Array.isArray(App.instances.instances)) return;
+    const list = App.instances.instances.filter((i) => i.missing && !isRunning(i) && !askedMissing.has(i.root));
+    if (!list.length) return;
+    list.forEach((i) => askedMissing.add(i.root));
+    try { sessionStorage.setItem("missing-asked", JSON.stringify([...askedMissing])); } catch (e) { /* 忽略 */ }
+    askingMissing = true;
+    let v;
+    try {
+      const rows = list.map((i) => `<li><b>${App.esc(i.name)}</b>　<code>${App.esc(i.root)}</code></li>`).join("");
+      v = await App.modal("实例的目录已经不在了",
+        `<p>下面${list.length > 1 ? "这些" : "这个"}实例找不到安装目录（被删除、移走，或者所在的硬盘没接上）：</p><ul>${rows}</ul>` +
+        "<p>要从启动器里移除吗？只是去掉启动器里的记录，不会删除任何文件。</p>",
+        [{ id: "remove", label: "从启动器移除", kind: "primary" }, { id: "keep", label: "先保留" }]);
+    } finally { askingMissing = false; }
+    if (v === "remove") await forgetMissing(list.map((i) => i.id));
+  }
+  // 从启动器里去掉：还有别的实例就移除；只剩这一个实例时不能移除，就把它的目录清空
+  async function forgetMissing(ids) {
+    const wasActive = ids.includes(App.instances.active);
+    for (const id of ids) {
+      try {
+        const r = App.instances.instances.length > 1
+          ? await App.api.instance_remove(id)
+          : await App.api.instance_update(id, { webui_root: "" });
+        if (r && r.ok === false) { App.toast(r.error || "移除失败", "error"); continue; }
+        if (r && Array.isArray(r.instances)) App.instances = Object.assign({}, App.instances, r);
+      } catch (e) { App.toast("移除失败：" + e.message, "error"); }
+    }
+    App.toast(ids.length > 1 ? `已移除 ${ids.length} 个实例` : "已从启动器移除", "ok");
+    if (wasActive) { reloadKeepPage(); return; }   // 当前实例变了：各页面要换成新实例的配置
+    refresh();
+  }
+
   /* ---------- 实例管理页 ---------- */
   function renderList() {
     const box = $("#inst-list");
@@ -227,14 +306,17 @@
         <div class="action-row">
           ${isRunning(i)
             ? '<button class="btn btn-sm" data-act="stop">停止</button>'
-            : `<button class="btn btn-sm btn-primary" data-act="start"${i.root ? "" : " disabled"}>启动</button>`}
+            : `<button class="btn btn-sm btn-primary" data-act="start"${i.root && !i.missing ? "" : " disabled"}>启动</button>`}
           <button class="btn btn-sm" data-act="versions"${i.root ? "" : " disabled"} title="更新 / 切换 / 回滚这个实例的 WebUI 或 ComfyUI 版本">版本管理…</button>
-          <button class="btn btn-sm btn-danger-text" data-act="remove"${App.instances.instances.length <= 1 ? " disabled" : ""}>移除实例</button>
+          ${i.missing && App.instances.instances.length <= 1
+            ? '<button class="btn btn-sm btn-danger-text" data-act="forget" title="只剩这一个实例：清空它的目录">清空目录</button>'
+            : `<button class="btn btn-sm btn-danger-text" data-act="remove"${App.instances.instances.length <= 1 ? " disabled" : ""}>移除实例</button>`}
           <span class="hint">移除只是从启动器里去掉，不会删除任何文件</span>
         </div>
-      </div>`).join("");
+      </div>`).join("") + deployCard("card inst-row");
+    box.querySelectorAll("[data-deploy-view]").forEach((b) => b.addEventListener("click", () => App.showPage("deploy")));
 
-    box.querySelectorAll(".inst-row").forEach((row) => {
+    box.querySelectorAll(".inst-row[data-id]").forEach((row) => {
       const id = row.dataset.id;
       row.querySelector(".ir-name").addEventListener("change", (e) => update(id, { name: e.target.value }));
       row.querySelector(".ir-port").addEventListener("change", (e) => update(id, { port: e.target.value }));
@@ -255,7 +337,7 @@
     const i = inst(id);
     if (!i) return;
     if (act === "switch") return switchTo(id);
-    if (act === "start" || act === "stop") return cardAction(act, id);
+    if (act === "start" || act === "stop" || act === "forget") return cardAction(act, id);
     if (act === "versions") { if (App.openVersions) App.openVersions(id); return; }
     if (act === "root") {
       const r = await App.api.choose_directory("选择实例根目录", i.root || "");
@@ -385,6 +467,13 @@
       $("#inst-add").addEventListener("click", addInstance);
       $("#inst-deploy").addEventListener("click", () => App.showPage("deploy"));
       $("#inst-versions").addEventListener("click", () => App.openVersions(""));
+      // 在资源管理器里删掉实例文件夹再切回来：刷新一下实例列表，马上能看到「目录已删除」
+      let lastFocus = 0;
+      window.addEventListener("focus", () => {
+        if (Date.now() - lastFocus < 5000) return;
+        lastFocus = Date.now();
+        refresh();
+      });
 
       $("#lib-enabled").addEventListener("change", async (e) => {
         let path = $("#lib-path").value.trim();

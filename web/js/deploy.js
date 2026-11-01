@@ -337,7 +337,12 @@
       App.on("deploy", "state", (e) => {
         setRunning(!!e.running);
         if (e.running) { prog.hide(); prog.set(0, ""); }
+        App.setDeploy(e);   // 侧栏、一键启动页、实例卡片显示「正在部署 …」
       });
+      // 重载页面时部署还在跑：按钮保持「部署中」，各处继续显示「正在部署 …」
+      if (App.api.deploy_status) {
+        App.api.deploy_status().then((d) => { if (d && d.running) { setRunning(true); App.setDeploy(d); } }).catch(() => {});
+      }
       App.on("deploy", "ask", async (e) => {
         const v = await App.modal(e.title, App.esc(e.body), e.buttons || [{ id: "ok", label: "确定", kind: "primary" }]);
         try { await App.api.answer(e.ask_id, v); } catch (err) { console.error(err); }

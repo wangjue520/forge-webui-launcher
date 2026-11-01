@@ -555,6 +555,8 @@ class LauncherApi:
         self._deploy_cancel = threading.Event()
         self._deploy_proc = None
         self._deploy_running = False
+        # 正在部署什么（界面上显示「正在部署 Forge Neo H3」用）：action / label / target
+        self._deploy_info = {}
         # 双击「开始部署」会在前端连发两次请求，检查和置位必须原子，
         # 否则两个部署线程并发跑，日志/配置互相踩
         self._deploy_lock = threading.Lock()
@@ -1299,7 +1301,8 @@ def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None,
 
         self._deploy_cancel.clear()
         self._deploy_running = True
-    self._emit("deploy", "state", running=True)
+        self._deploy_info = {"action": "deploy", "label": cm.kind_label(branch, variant), "target": target}
+    self._emit("deploy", "state", running=True, **self._deploy_info)
     try:
         self._spawn(lambda: self._deploy_flow(target, branch, use_portable, variant), name="deploy")
     except Exception:
@@ -1309,6 +1312,11 @@ def _api_deploy_start(self, target, branch, use_portable, comfy_nodes_sel=None,
         self._emit("deploy", "state", running=False)
         return {"ok": False, "error": "无法启动部署线程：\n" + traceback.format_exc()[-500:]}
     return {"ok": True}
+
+
+def _api_deploy_status(self):
+    """界面刷新 / 重开后恢复「正在部署」的显示"""
+    return dict(self._deploy_info, running=True) if self._deploy_running else {"running": False}
 
 
 def _api_deploy_cancel(self):
@@ -2248,6 +2256,10 @@ def _auto_pick_install(self):
     root = (self.cfg.get("webui_root") or "").strip()
     if root and cm.detect_kind(root):
         return
+    if root and cm.multi_enabled(self.cfg):
+        # 多实例时当前实例的目录没了：交给前端的「目录已被删除」提示让用户决定，
+        # 别悄悄把这个实例改指到别的安装上
+        return
     res = _api_detect_installs(self, refresh=True)
     found = res["installs"]
     if not found:
@@ -2269,6 +2281,20 @@ def _auto_pick_install(self):
                count=len(found), new_machine=bool(self.cfg.get("_new_machine")))
 
 
+def _root_missing(self, root):
+    """实例目录被删掉了：文件夹不存在，或者只剩一个空文件夹（也可能是移走了 / 所在的硬盘没接上）。
+    正在往这个目录部署时不算（部署刚开始时目录是空的）"""
+    if not root:
+        return False
+    target = (getattr(self, "_deploy_info", None) or {}).get("target")
+    if getattr(self, "_deploy_running", False) and target and _same_install(root, target):
+        return False
+    try:
+        return not os.path.isdir(root) or not os.listdir(root)
+    except OSError:   # 没权限之类：说不准，就当还在
+        return False
+
+
 def _instances_payload(self):
     cm.absorb_active(self.cfg)
     out = []
@@ -2287,6 +2313,7 @@ def _instances_payload(self):
             "port": inst.get("port", ""),
             "active": iid == self.cfg.get("active_instance"),
             "status": st,
+            "missing": _root_missing(self, inst.get("webui_root", "")),
         })
     return {"instances": out, "active": self.cfg.get("active_instance"),
             "multi": cm.multi_enabled(self.cfg),
@@ -3394,7 +3421,8 @@ def _api_gpu_switch(self, target, backend, gfx=None):
         self._deploy_cancel.clear()
         self._deploy_running = True
         self._deploy_cfg = cfg
-    self._emit("deploy", "state", running=True)
+        self._deploy_info = {"action": "gpu", "label": "显卡环境", "target": target}
+    self._emit("deploy", "state", running=True, **self._deploy_info)
     try:
         self._spawn(lambda: _gpu_switch_flow(self, target, kind, cfg, iid), name="gpu-switch")
     except Exception:
@@ -6661,10 +6689,11 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
         self._deploy_cancel.clear()
         self._deploy_running = True
         self._trainer_deploying = True
+        self._deploy_info = {"action": "trainer", "label": "WWY LoRA 训练器", "target": root}
     _trainer_save(self, lora_trainer_root=root, lora_trainer_hidden=False)
     # 「自动」：新装按显卡推荐；已经装好的训练环境沿用它原来的版本，不重装 PyTorch
     variant = torch if torch in lt.TORCH_VARIANTS else ("" if info["env"] else _trainer_gpu_torch(self))
-    self._emit("deploy", "state", running=True)
+    self._emit("deploy", "state", running=True, **self._deploy_info)
     for it in issues:   # 中文 / 空格路径：sd-scripts 等训练引擎在这种路径下容易出怪问题
         self._emit("deploy", "log", text="[提示] " + re.sub(r"\s*\n+\s*", " ", it["text"]) + "\n")
     try:
@@ -9516,6 +9545,7 @@ for _name, _fn in {
     "deploy_precheck": _api_deploy_precheck,
     "deploy_start": _api_deploy_start,
     "deploy_cancel": _api_deploy_cancel,
+    "deploy_status": _api_deploy_status,
     "deploy_gpu_detect": _api_deploy_gpu_detect,
     "gpu_switch": _api_gpu_switch,
     "deploy_venv_check": _api_deploy_venv_check,
