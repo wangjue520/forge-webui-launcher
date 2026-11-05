@@ -332,6 +332,14 @@ def _pick_changes(entries, local_count, has_update):
     return newer[:CHANGELOG_LIMIT]
 
 
+def _remote_title(message, entries):
+    """「最新版本」后面那句话：发版后 main 的最新提交总是 bump 提交（chore: bump version.json ...），
+    读 version.json 兜底时干脆没有提交信息——这两种情况换成 changelog 最新一条的标题。"""
+    if entries and (not message or message.lower().startswith("chore: bump")):
+        return entries[0]["title"] or message
+    return message
+
+
 def check_update(cfg=None, log_cb=None):
     """对比本地与远端，返回给前端展示用的完整结果。"""
     local = get_local_info(cfg)
@@ -351,7 +359,7 @@ def check_update(cfg=None, log_cb=None):
         "has_update": has_update,
         "current": {"version": local["version"], "commit": local["commit"]},
         "remote": {"version": remote_version, "commit": remote["short"],
-                   "message": remote["message"], "date": remote["date"]},
+                   "message": _remote_title(remote["message"], entries), "date": remote["date"]},
         "changes": _pick_changes(entries, local.get("count") or 0, has_update),
     }
 

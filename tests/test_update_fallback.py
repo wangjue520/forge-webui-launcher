@@ -113,6 +113,14 @@ class ChangelogTest(unittest.TestCase):
         self.assertFalse(result["has_update"])
         self.assertEqual([c["title"] for c in result["changes"]], ["最新"])
 
+    def test_remote_title_replaces_bump_message(self):
+        entries = updater._parse_changelog(CHANGELOG)
+        self.assertEqual(updater._remote_title("chore: bump version.json to 3.1.003", entries), "最新")
+        self.assertEqual(updater._remote_title("", entries), "最新")           # version.json 兜底没有提交信息
+        self.assertEqual(updater._remote_title("修了个 bug", entries), "修了个 bug")
+        self.assertEqual(updater._remote_title("chore: bump x", []), "chore: bump x")
+        self.assertEqual(self._check(107, _Resp(200, CHANGELOG))["remote"]["message"], "最新")
+
     def test_remote_changelog_missing_uses_local(self):
         result = self._check(111, _Resp(404))
         self.assertEqual(result["changes"], [{"title": "本地"}])
