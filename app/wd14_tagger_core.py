@@ -37,6 +37,13 @@ MODEL_CATALOG = {
         "label": "wd-eva02-large-tagger-v3（精度更高，体积更大，速度更慢）",
         "repo": "SmilingWolf/wd-eva02-large-tagger-v3",
     },
+    # PixAI 官方仓库要登录同意协议才能下，这里用 deepghs 转好的 ONNX 版（Apache-2.0，匿名可下），
+    # 文件名同样是 model.onnx + selected_tags.csv，下载/导入流程完全复用。
+    # 跟 WD 系列的区别（预处理、输出、没有评分类、多一列 ips 作品名）在 WD14Tagger 里按模型自动识别。
+    "pixai-tagger-v0.9": {
+        "label": "pixai-tagger-v0.9（PixAI，角色更全更新、附带作品名，~1.3GB，速度较慢）",
+        "repo": "deepghs/pixai-tagger-v0.9-onnx",
+    },
 }
 
 # 这几个标签本身就带下划线含义（颜文字等），替换下划线为空格时要跳过，
@@ -290,6 +297,49 @@ def load_labels(model_dir):
     return tag_names, rating_indexes, general_indexes, character_indexes
 
 
+def load_ips(model_dir):
+    """
+    PixAI 的 selected_tags.csv 多一列 ips：角色所属作品，JSON 数组，比如
+    hu_tao_(genshin_impact) -> ["genshin_impact"]。返回 {行号: [作品,...]}，
+    WD 系列没有这一列，返回空字典。
+    """
+    import json
+    csv_path = os.path.join(model_dir, "selected_tags.csv")
+    ips = {}
+    with open(csv_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        if "ips" not in (reader.fieldnames or []):
+            return ips
+        for i, row in enumerate(reader):
+            raw = (row.get("ips") or "").strip()
+            if raw and raw != "[]":
+                try:
+                    ips[i] = [x for x in json.loads(raw) if x]
+                except ValueError:
+                    pass
+    return ips
+
+
+def prepare_image_pixai(pil_image, target_size):
+    """
+    PixAI 的预处理（照 deepghs 那份 ONNX 附带的 preprocess.json）：
+    贴白底转 RGB -> 直接拉伸到正方形（双线性，不补边）-> 0~1 -> (x-0.5)/0.5 -> NCHW。
+    跟 WD 系列的 BGR / 0~255 / 补白边 / NHWC 正好全反，混用会全是乱标签。
+    """
+    import numpy as np
+    from PIL import Image
+
+    image = pil_image.convert("RGBA")
+    canvas = Image.new("RGBA", image.size, (255, 255, 255))
+    canvas.paste(image, mask=image)
+    image = canvas.convert("RGB").resize((target_size, target_size), Image.BILINEAR)
+
+    arr = np.asarray(image).astype(np.float32) / 255.0
+    arr = (arr - 0.5) / 0.5
+    arr = arr.transpose(2, 0, 1)  # HWC -> CHW
+    return np.expand_dims(arr, 0)
+
+
 def prepare_image(pil_image, target_size):
     """
     标准 WD14 系列预处理：转 RGB 贴白底 -> BGR -> 填充成正方形(白边) -> 缩放 -> float32
@@ -328,15 +378,30 @@ class WD14Tagger:
         import onnxruntime as ort
         self.session = ort.InferenceSession(model_dir_onnx_path(model_dir), providers=["CPUExecutionProvider"])
         self.input_name = self.session.get_inputs()[0].name
-        self.output_name = self.session.get_outputs()[0].name
+        outputs = [o.name for o in self.session.get_outputs()]
+        # PixAI 的 ONNX 有 embedding / logits / prediction 三个输出，要的是 sigmoid 过的 prediction；
+        # WD 系列只有一个输出
+        self.output_name = "prediction" if "prediction" in outputs else outputs[0]
         shape = self.session.get_inputs()[0].shape
-        # shape 通常是 [None, H, W, 3] 或固定值；找不到就退回常见默认值 448
-        dims = [d for d in shape if isinstance(d, int) and d > 1]
-        self.target_size = dims[0] if dims else 448
         self.tag_names, self.rating_idx, self.general_idx, self.character_idx = load_labels(model_dir)
+        self.ips = load_ips(model_dir)
+        # 输入布局：WD 系列是 [N, H, W, 3]，PixAI 是 [N, 3, H, W]；形状全是动态的认不出来时，
+        # 带 ips 列的就是 PixAI
+        if len(shape) == 4 and shape[1] == 3:
+            self.nchw = True
+        elif len(shape) == 4 and shape[3] == 3:
+            self.nchw = False
+        else:
+            self.nchw = bool(self.ips)
+        # 取空间维度；找不到就退回常见默认值 448
+        spatial = shape[2] if self.nchw else (shape[1] if len(shape) == 4 else None)
+        self.target_size = spatial if isinstance(spatial, int) and spatial > 1 else 448
 
     def tag_image(self, pil_image, general_thresh=0.35, character_thresh=0.85, include_rating=False):
-        batch = prepare_image(pil_image, self.target_size)
+        if self.nchw:
+            batch = prepare_image_pixai(pil_image, self.target_size)
+        else:
+            batch = prepare_image(pil_image, self.target_size)
         probs = self.session.run([self.output_name], {self.input_name: batch})[0][0]
 
         result = {}
@@ -353,8 +418,18 @@ class WD14Tagger:
         def _clean(name):
             return name if name in _KAOMOJI_TAGS else name.replace("_", " ")
 
-        ordered_tags = [_clean(n) for n, _ in character] + [_clean(n) for n, _ in general]
+        # PixAI 会给出角色所属作品，按 danbooru 习惯「角色, 作品, 常规」排；同一作品只出一次
+        name_to_idx = {self.tag_names[i]: i for i in self.character_idx} if self.ips else {}
+        copyright_tags = []
+        for n, _ in character:
+            for ip in self.ips.get(name_to_idx.get(n), []):
+                if ip not in copyright_tags:
+                    copyright_tags.append(ip)
+
+        ordered_tags = ([_clean(n) for n, _ in character] + [_clean(n) for n in copyright_tags]
+                        + [_clean(n) for n, _ in general])
         result["tags"] = ordered_tags
+        result["copyright"] = copyright_tags
         result["tag_string"] = ", ".join(ordered_tags)
         result["general"] = general
         result["character"] = character

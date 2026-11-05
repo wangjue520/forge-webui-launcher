@@ -20,6 +20,11 @@
 
 维护者打包前可执行 `python app/updater.py --write-version` 把当前 git
 版本写进 version.json，让 ZIP 用户拿到的就是最新版本号。
+
+更新内容：仓库根目录的 changelog.json，每次发版在 entries 最前面加一条
+{"version", "count", "date", "title", "items"}，count 填发版后（bump 提交之后）
+main 的总提交数——跟用户检查更新时看到的版本号对得上。检查更新时读远端这份
+（raw 地址，不占 API 配额），把比本地新的条目交给「启动器更新」卡片展示。
 """
 import filecmp
 import json
@@ -44,6 +49,7 @@ COMMITS_API = f"https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_pag
 # API 未登录每个 IP 每小时只有 60 次（共用出口 IP 的网络很容易用完，报 403 rate limit exceeded）；
 # 查不到时改读仓库里的 version.json，raw 文件不走 API 配额
 VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/version.json"
+CHANGELOG_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/changelog.json"
 
 BASE_VERSION = "3.1"
 # 3.1.000 = main 上第 BASE_COUNT 个提交（发 3.1 的那个 bump 提交），之后每个提交 +1。
@@ -54,6 +60,9 @@ BASE_COUNT = 178
 def version_of(count):
     return f"{BASE_VERSION}.{max(0, int(count) - BASE_COUNT):03d}"
 VERSION_FILE = os.path.join(APP_DIR, "version.json")
+CHANGELOG_FILE = os.path.join(APP_DIR, "changelog.json")
+# 一次最多给界面几条更新内容（隔了很多版才更新的用户也不至于刷一屏）
+CHANGELOG_LIMIT = 8
 
 # 覆盖更新时要跳过的顶层名字：用户私有配置、自动下载的运行环境、缓存。
 # 这些都是启动器运行期生成/下载的，覆盖掉等于把用户环境重置了。
@@ -265,10 +274,71 @@ def _remote_commits_api(cfg, log_cb):
     raise UpdateError(f"查询最新版本失败（已尝试 {len(urls)} 个地址）: {last_error}")
 
 
+# ============================================================
+# 更新内容（changelog.json）
+# ============================================================
+
+def _parse_changelog(data):
+    """整理成 [{"version","count","date","title","items"}]，按 count 从新到旧；格式不对的条目直接丢掉。"""
+    entries = []
+    for e in (data or {}).get("entries") or []:
+        try:
+            title = str(e.get("title") or "").strip()
+            items = [str(x).strip() for x in (e.get("items") or []) if str(x).strip()]
+            if not title and not items:
+                continue
+            entries.append({
+                "version": str(e.get("version") or "").strip(),
+                "count": int(e.get("count") or 0),
+                "date": str(e.get("date") or "")[:10],
+                "title": title,
+                "items": items,
+            })
+        except (AttributeError, TypeError, ValueError):
+            continue
+    entries.sort(key=lambda x: x["count"], reverse=True)
+    return entries
+
+
+def local_changelog():
+    try:
+        with open(CHANGELOG_FILE, "r", encoding="utf-8") as f:
+            return _parse_changelog(json.load(f))
+    except Exception:
+        return []
+
+
+def _remote_changelog(cfg, log_cb):
+    """读远端 changelog.json。只是锦上添花：哪个地址都读不到就返回 None，不影响检查更新本身。"""
+    for u in _candidate_urls(CHANGELOG_RAW, cfg, log_cb):
+        try:
+            resp = requests.get(u, headers={"User-Agent": _GH_HEADERS["User-Agent"]}, timeout=10)
+            resp.raise_for_status()
+            return _parse_changelog(resp.json())
+        except Exception:
+            continue
+    if log_cb:
+        log_cb("[网络] 读取更新内容 changelog.json 失败，只显示版本号")
+    return None
+
+
+def _pick_changes(entries, local_count, has_update):
+    """有更新：比本地新的条目；已是最新：最新那一条（就是当前版本的更新内容）。"""
+    if not entries:
+        return []
+    if not has_update:
+        return entries[:1]
+    newer = [e for e in entries if e["count"] > local_count] if local_count else entries
+    return newer[:CHANGELOG_LIMIT]
+
+
 def check_update(cfg=None, log_cb=None):
     """对比本地与远端，返回给前端展示用的完整结果。"""
     local = get_local_info(cfg)
     remote = get_remote_info(cfg, log_cb)
+    entries = _remote_changelog(cfg, log_cb)
+    if entries is None:
+        entries = local_changelog()
     remote_version = (version_of(remote["count"]) if remote.get("count")
                       else f"{BASE_VERSION}+{remote['short']}")
     has_update = True
@@ -282,6 +352,7 @@ def check_update(cfg=None, log_cb=None):
         "current": {"version": local["version"], "commit": local["commit"]},
         "remote": {"version": remote_version, "commit": remote["short"],
                    "message": remote["message"], "date": remote["date"]},
+        "changes": _pick_changes(entries, local.get("count") or 0, has_update),
     }
 
 

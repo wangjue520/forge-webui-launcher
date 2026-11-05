@@ -874,7 +874,9 @@ class LauncherApi:
             "launch": self.launch_status(),
             "instances": _instances_payload(self),
             "hidden_pages": self.cfg.get("hidden_pages") or [],
-            "launcher": {"version": local_ver["version"], "commit": local_ver["commit"]},
+            # changes：本地 changelog.json 最新一条，检查更新还没回来（或没网）时卡片上先显示当前版本的更新内容
+            "launcher": {"version": local_ver["version"], "commit": local_ver["commit"],
+                         "changes": updater.local_changelog()[:1]},
             "mirror_status": self._mirror_status_text(),
             "settings_schema": self._settings_schema(),
             "deploy_branches": deploy_branches,

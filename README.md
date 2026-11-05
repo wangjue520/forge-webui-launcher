@@ -207,6 +207,8 @@ Forge 目录整个剪切搬家也没问题——启动前会自动修正 venv �
 
 图片自动打标签（LoRA 训练打标用），内置独立工具，不依赖 WebUI。首次使用点「加载模型」自动下载（约 380MB，走 HF 镜像、断点续传）并部署隔离环境 `wd14_venv`。图片拖进列表 / Ctrl+V 粘贴截图都行；默认批量时保存同名 .txt。阈值默认 0.35 / 0.85；要更准换 `wd-eva02-large`。
 
+模型下拉里还有 `pixai-tagger-v0.9`（PixAI 出的打标模型，用 [deepghs 转的 ONNX 版](https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx)，约 1.3GB）：角色库更全更新（3700+ 角色），认出角色时会顺带补上作品名（如 `hu tao (genshin impact), genshin impact, ...`）。官方推荐阈值 0.30 / 0.85；它没有评分类，「包含评分标签」对它不起作用。手动下载时同样只需要 `model.onnx` + `selected_tags.csv`。
+
 ### LoRA 训练器（在「环境部署」部署，在「一键启动」启动）
 
 [WWY LoRA 训练器](https://github.com/wangjue520/wwy-lora-trainer)：训练 Anima / SDXL / Krea 2 / MOSS-Image 的 LoRA，自带爬图、反推、标签编辑。它是独立的程序和训练环境，不影响 WebUI / ComfyUI，也不占侧栏。

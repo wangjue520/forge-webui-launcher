@@ -69,5 +69,66 @@ class UpdateFallbackTest(unittest.TestCase):
         self.assertIn("version.json", str(ctx.exception))
 
 
+CHANGELOG = {"entries": [
+    {"version": "3.0.108", "count": 108, "date": "2026-10-16", "title": "旧版", "items": ["a"]},
+    {"version": "3.0.110", "count": 110, "date": "2026-10-17T18:00", "title": "最新", "items": ["b", " ", "c"]},
+    {"version": "3.0.105", "count": 105, "title": "更旧", "items": []},
+    {"count": "坏的", "title": "格式不对"},
+    {"version": "3.0.109", "count": 109},
+]}
+
+
+class ChangelogTest(unittest.TestCase):
+    """「启动器更新」卡片的更新内容：远端 changelog.json，读不到就用本地那份"""
+
+    def _check(self, local_count, changelog_resp):
+        local = {"version": f"3.0.{local_count}", "commit": "abc1234", "sha": "abc1234" + "0" * 33,
+                 "count": local_count, "source": "git"}
+
+        def fake_get(url, **kwargs):
+            if "api.github.com" in url:
+                return _Resp(403)
+            if url.endswith("changelog.json"):
+                return changelog_resp
+            return _Resp(200, REMOTE)
+
+        with mock.patch.object(updater.requests, "get", side_effect=fake_get), \
+                mock.patch.object(updater, "get_local_info", return_value=local), \
+                mock.patch.object(updater, "local_changelog", return_value=[{"title": "本地"}]):
+            return updater.check_update({})
+
+    def test_parse_sorts_and_drops_bad_entries(self):
+        entries = updater._parse_changelog(CHANGELOG)
+        self.assertEqual([e["count"] for e in entries], [110, 108, 105])
+        self.assertEqual(entries[0]["items"], ["b", "c"])
+        self.assertEqual(entries[0]["date"], "2026-10-17")
+
+    def test_update_lists_newer_entries(self):
+        result = self._check(107, _Resp(200, CHANGELOG))
+        self.assertTrue(result["has_update"])
+        self.assertEqual([c["title"] for c in result["changes"]], ["最新", "旧版"])
+
+    def test_up_to_date_shows_current_entry(self):
+        result = self._check(111, _Resp(200, CHANGELOG))
+        self.assertFalse(result["has_update"])
+        self.assertEqual([c["title"] for c in result["changes"]], ["最新"])
+
+    def test_remote_changelog_missing_uses_local(self):
+        result = self._check(111, _Resp(404))
+        self.assertEqual(result["changes"], [{"title": "本地"}])
+
+    def test_unknown_local_version_lists_latest(self):
+        result = self._check(0, _Resp(200, CHANGELOG))
+        self.assertEqual(len(result["changes"]), 3)
+
+    def test_repo_changelog_is_valid(self):
+        with open(updater.CHANGELOG_FILE, encoding="utf-8") as f:
+            import json
+            raw = json.load(f)["entries"]
+        entries = updater._parse_changelog({"entries": raw})
+        self.assertEqual(len(entries), len(raw))   # 每条都合格
+        self.assertTrue(all(e["version"] and e["count"] and e["title"] for e in entries))
+
+
 if __name__ == "__main__":
     unittest.main()

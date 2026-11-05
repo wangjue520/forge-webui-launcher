@@ -207,6 +207,23 @@
       if (side && ver) side.textContent = "V" + ver;
     },
 
+    // 更新内容：有更新时是比当前新的那几版，已是最新时是当前版本这一版
+    renderChanges(changes, isNew) {
+      const box = $("#up-changes");
+      if (!box) return;
+      const list = Array.isArray(changes) ? changes : [];
+      box.hidden = !list.length;
+      if (!list.length) { box.innerHTML = ""; return; }
+      box.innerHTML =
+        `<div class="up-changes-head">${isNew ? "新版本更新内容" : "当前版本更新内容"}</div>` +
+        list.map((c) =>
+          `<div class="up-change"><div class="up-change-title">` +
+          (c.version ? `<b>V${App.esc(c.version)}</b> ` : "") + App.esc(c.title || "") +
+          (c.date ? `<span class="up-change-meta">${App.esc(c.date)}</span>` : "") + `</div>` +
+          ((c.items || []).length ? `<ul>${c.items.map((it) => `<li>${App.esc(it)}</li>`).join("")}</ul>` : "") +
+          `</div>`).join("");
+    },
+
     renderInfo(e) {
       this.lastInfo = e;
       this._doneSeq = this._checkSeq;  // 喂狗：结果到了，超时看门狗不再触发
@@ -221,6 +238,7 @@
       $("#up-remote").textContent =
         "V" + (r.version || "?") + (r.date ? " · " + r.date : "") + (r.message ? " · " + r.message : "");
       $("#up-do").disabled = !e.has_update;
+      if (e.changes) this.renderChanges(e.changes, e.has_update);
       this.setStatus(e.has_update ? "发现新版本，点「立即更新」一键升级（配置和已下载的环境都会保留）"
                                   : "已经是最新版本");
     },
@@ -276,6 +294,7 @@
     init(state) {
       const lv = state.launcher || {};
       this.fillCurrent(lv.version, lv.commit);
+      this.renderChanges(lv.changes, false);
 
       $("#up-check").addEventListener("click", () => this.check(false));
       $("#up-do").addEventListener("click", () => this.run());

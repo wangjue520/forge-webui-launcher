@@ -388,6 +388,13 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
   border-left: 4px solid var(--yel);
   padding: 10px 14px 10px 14px; margin-bottom: 14px; color: var(--text-dim);
 }
+/* 「启动器更新」卡片里的更新内容（changelog.json） */
+.up-changes { margin: 4px 0 12px; padding: 10px 14px; border: 1px solid var(--line-2, var(--border)); border-left: 3px solid var(--text); max-height: 280px; overflow-y: auto; user-select: text; }
+.up-changes-head { font-size: 12px; color: var(--text-faint); margin-bottom: 6px; }
+.up-change + .up-change { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line-2, var(--border)); }
+.up-change-title { font-size: 13px; color: var(--text); }
+.up-change-title .up-change-meta { color: var(--text-faint); font-size: 12px; margin-left: 6px; }
+.up-change ul { margin: 4px 0 0; padding-left: 18px; color: var(--text-dim); font-size: 12.5px; line-height: 1.7; }
 .hint[data-status="ok"] { color: var(--ok); }
 .hint[data-status="warn"] { color: var(--warn); }
 .hint[data-status="bad"] { color: var(--bad); }

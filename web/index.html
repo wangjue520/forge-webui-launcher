@@ -328,6 +328,7 @@
             <label>当前版本</label><span class="hint" id="up-current">—</span>
             <label>最新版本</label><span class="hint" id="up-remote">尚未检查</span>
           </div>
+          <div class="up-changes" id="up-changes" hidden></div>
           <div class="row" style="align-items:center">
             <button class="btn" id="up-check">检查更新</button>
             <button class="btn btn-accent" id="up-do" disabled>立即更新</button>
@@ -803,7 +804,7 @@
             </div>
             <details class="wd-about">
               <summary>说明</summary>
-              <div class="hint">内置的独立反推工具，不依赖 WebUI 扩展。模型缓存在 wd_tagger_models 文件夹，推理跑在独立的 wd14_venv 环境里（首次使用会下载约几十 MB），跟其它 Python 环境互不干扰。<br>在线下载走不通时：点「打开模型下载页面」下载 <b>model.onnx</b> 和 <b>selected_tags.csv</b>，再点「从本地导入…」，按住 Ctrl 同时选中这两个文件。</div>
+              <div class="hint">内置的独立反推工具，不依赖 WebUI 扩展。模型缓存在 wd_tagger_models 文件夹，推理跑在独立的 wd14_venv 环境里（首次使用会下载约几十 MB），跟其它 Python 环境互不干扰。<br>可选 PixAI 打标模型（pixai-tagger-v0.9）：角色更全，会附带作品名，没有评分标签。<br>在线下载走不通时：点「打开模型下载页面」下载 <b>model.onnx</b> 和 <b>selected_tags.csv</b>，再点「从本地导入…」，按住 Ctrl 同时选中这两个文件。</div>
             </details>
           </div>
 

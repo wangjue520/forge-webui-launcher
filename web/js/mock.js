@@ -152,7 +152,9 @@
         cmd_args: "",
         is_windows: true,
         launch: { state: "stopped", text: "尚未启动", url: null },
-        launcher: { version: "0.0.0", commit: "preview" },
+        launcher: { version: "0.0.0", commit: "preview", changes: [
+          { version: "0.0.0", date: "2026-11-05", title: "（演示）当前版本更新内容", items: ["演示条目一", "演示条目二"] },
+        ] },
         mirror_status: "（预览模式，无真实检测结果）",
         settings_schema: schema,
         deploy_branches: [
@@ -309,6 +311,9 @@
         { key: "wd-eva02-large-tagger-v3", label: "wd-eva02-large-tagger-v3（精度更高）", cached: false,
           urls: ["https://hf-mirror.com/SmilingWolf/wd-eva02-large-tagger-v3/tree/main",
                  "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/tree/main"] },
+        { key: "pixai-tagger-v0.9", label: "pixai-tagger-v0.9（PixAI，角色更全更新）", cached: false,
+          urls: ["https://hf-mirror.com/deepghs/pixai-tagger-v0.9-onnx/tree/main",
+                 "https://huggingface.co/deepghs/pixai-tagger-v0.9-onnx/tree/main"] },
       ] }),
       wd14_import_model: () => ok({ ok: true }),
       // 图片反推（演示数据）：拖进来的路径展开成 3 张演示图；WD14 / 自然语言都按事件一张张回报
