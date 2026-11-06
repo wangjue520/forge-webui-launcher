@@ -29,6 +29,7 @@ import re
 import subprocess
 import tarfile
 import tempfile
+import time
 
 import requests
 
@@ -58,6 +59,25 @@ PYTHON_VERSION_BY_BRANCH = {
     "comfyui": "3.13",
     "lora_trainer": "3.13",   # WWY LoRA 训练器（和它自己的 bat 引导的版本一致）
 }
+
+
+# 查不到版本信息时用的固定版本（GitHub API / raw 在国内常被墙或限流）。哈希照样校验。
+# 另外 Python 3.10 已经停止更新，python-build-standalone 的最新版里没有它了，
+# Classic 分支只能靠这里的固定版本。
+PINNED_PYTHON = {
+    "3.10": ("20260901", "cpython-3.10.21+20260901-x86_64-pc-windows-msvc-install_only.tar.gz",
+             "b3edb1dacad300c7117ce4d6df97cd2e411afc0d173db43c224f904deb6253b5"),
+    "3.13": ("20260901", "cpython-3.13.15+20260901-x86_64-pc-windows-msvc-install_only.tar.gz",
+             "9bcc038a0bf180612ed56dec93d4977d035e80b8d9320ef51a38c287baf134b7"),
+}
+PINNED_GIT = [
+    ("v2.56.0.windows.4", "PortableGit-2.56.0.4-64-bit.7z.exe",
+     "b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1"),
+    ("v2.56.0.windows.3", "PortableGit-2.56.0.3-64-bit.7z.exe",
+     "4fc27b779829a36df77911e3f4dea09c66c790dd6c5f7dfa3b6a5479f1fe354f"),
+    ("v2.56.0.windows.4", "MinGit-2.56.0.4-64-bit.zip",
+     "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877"),
+]
 
 
 class PortableEnvError(Exception):
@@ -285,32 +305,147 @@ def verify_pe_signature(exe_path, log_cb=None):
     校验 PE 文件的 Authenticode 签名（仅 Windows 生效，其他平台直接放行）。
     自解压安装包在执行前先验签：代理塞过来的伪造二进制过不了系统信任链。
     git-for-windows 官方发布的二进制都由 Johannes Schindelin 签名。
+
+    直接调系统的 WinVerifyTrust，不绕道 PowerShell：以前用 Get-AuthenticodeSignature，
+    PowerShell 被安全软件拦截、被策略禁用或组件损坏时什么都不输出，用户看到的是
+    「状态: 未知，文件可能被篡改」——其实文件没问题，是校验根本没跑起来。
+
+    只有能证明文件不是官方原版时才拦截（见 _TRUST_BLOCKING、签名者不对）；校验跑不起来、
+    系统证书太旧这类「证明不了」的情况只记警告、继续部署（sha256 在这之前已经校验过）。
+    返回 True 表示验证通过，False 表示没能验证但放行。
     """
     if os.name != "nt":
         return True
-    quoted = exe_path.replace("'", "''")
-    ps = (f"$s = Get-AuthenticodeSignature -FilePath '{quoted}'; "
-          "Write-Output $s.Status.ToString(); "
-          "Write-Output $s.SignerCertificate.Subject")
+    name = what_name(exe_path)
+
+    def not_verified(reason):
+        if log_cb:
+            log_cb(f"[警告] {name} 的签名没能验证（{reason}），继续部署")
+        return False
+
     try:
-        r = subprocess.run(["powershell", "-NoProfile", "-Command", ps],
-                           capture_output=True, text=True, timeout=60,
-                           creationflags=0x08000000 if os.name == "nt" else 0)
+        code, signer = _authenticode_check(exe_path)
     except Exception as e:
-        raise PortableEnvError(f"签名校验执行失败: {e}")
-    lines = (r.stdout or "").strip().splitlines()
-    status = lines[0].strip() if lines else ""
-    subject = lines[1].strip() if len(lines) > 1 else ""
-    if status.lower() != "valid":
+        return not_verified(f"{type(e).__name__}: {e}")
+    if code in _TRUST_BLOCKING:
+        raise PortableEnvError(f"{name} 签名校验没有通过，已中止：{_TRUST_BLOCKING[code]}\n"
+                               "可以重新部署再试一次，或者先安装官方 Git（https://git-scm.com/download/win）"
+                               f"后取消勾选「自动下载便携版」。\n路径: {exe_path}")
+    if code != 0:
+        return not_verified(_TRUST_UNVERIFIED.get(code) or f"系统返回错误码 0x{code:08X}")
+    if not signer:
+        return not_verified("读不到签名者名字")
+    if "schindelin" not in signer.lower() and "git for windows" not in signer.lower():
         raise PortableEnvError(
-            f"{what_name(exe_path)} 签名校验失败（状态: {status or '未知'}），文件可能被篡改，已中止。\n"
-            f"路径: {exe_path}")
-    if "schindelin" not in subject.lower() and "git for windows" not in subject.lower():
-        raise PortableEnvError(
-            f"签名者不符合预期: {subject}（应为 git-for-windows 官方签名），已中止。")
+            f"签名者不符合预期: {signer}（应为 git-for-windows 官方签名），已中止。")
     if log_cb:
-        log_cb(f"签名校验通过: {subject}")
+        log_cb(f"签名校验通过: {signer}")
     return True
+
+
+# 这些结果能证明文件不是官方原版（官方包一定带这个签名），必须拦截
+_TRUST_BLOCKING = {
+    0x80096010: "文件内容和签名对不上，文件被改动过或已损坏。",
+    0x800B0100: "文件没有数字签名，不是官方发布的文件。",
+    0x800B0003: "文件没有数字签名，不是官方发布的文件。",
+    0x800B010C: "签名证书已被吊销。",
+}
+# 这些只说明这台电脑证明不了，不代表文件有问题
+_TRUST_UNVERIFIED = {
+    0x800B0109: "这台电脑不信任签发这个签名的根证书，多半是系统证书太旧",
+    0x800B0101: "签名证书已过期，且签名没有带有效的时间戳",
+    0x800B0111: "这台电脑设置了不信任这个发布者",
+}
+
+
+def _authenticode_check(path):
+    """返回 (WinVerifyTrust 的结果，0 表示通过；转成无符号数的错误码, 签名者名字)。"""
+    import ctypes
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("a", wintypes.DWORD), ("b", wintypes.WORD), ("c", wintypes.WORD), ("d", ctypes.c_ubyte * 8)]
+
+    class WINTRUST_FILE_INFO(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD), ("pcwszFilePath", wintypes.LPCWSTR),
+                    ("hFile", wintypes.HANDLE), ("pgKnownSubject", ctypes.c_void_p)]
+
+    class WINTRUST_DATA(ctypes.Structure):
+        _fields_ = [("cbStruct", wintypes.DWORD), ("pPolicyCallbackData", ctypes.c_void_p),
+                    ("pSIPClientData", ctypes.c_void_p), ("dwUIChoice", wintypes.DWORD),
+                    ("fdwRevocationChecks", wintypes.DWORD), ("dwUnionChoice", wintypes.DWORD),
+                    ("pFile", ctypes.POINTER(WINTRUST_FILE_INFO)), ("dwStateAction", wintypes.DWORD),
+                    ("hWVTStateData", wintypes.HANDLE), ("pwszURLReference", wintypes.LPCWSTR),
+                    ("dwProvFlags", wintypes.DWORD), ("dwUIContext", wintypes.DWORD),
+                    ("pSignatureSettings", ctypes.c_void_p)]
+
+    # WINTRUST_ACTION_GENERIC_VERIFY_V2：标准的 Authenticode 校验（和资源管理器里看到的「数字签名」同一套）
+    action = GUID(0x00AAC56B, 0xCD44, 0x11D0, (ctypes.c_ubyte * 8)(0x8C, 0xC2, 0x00, 0xC0, 0x4F, 0xC2, 0x95, 0xEE))
+    file_info = WINTRUST_FILE_INFO(ctypes.sizeof(WINTRUST_FILE_INFO), path, None, None)
+    data = WINTRUST_DATA()
+    data.cbStruct = ctypes.sizeof(WINTRUST_DATA)
+    data.dwUIChoice = 2            # WTD_UI_NONE
+    data.fdwRevocationChecks = 0   # WTD_REVOKE_NONE：吊销列表服务器在国内常连不上，和原来的校验行为一致
+    data.dwUnionChoice = 1         # WTD_CHOICE_FILE
+    data.pFile = ctypes.pointer(file_info)
+    data.dwStateAction = 1         # WTD_STATEACTION_VERIFY
+
+    wintrust = ctypes.WinDLL("wintrust.dll", use_last_error=True)
+    wintrust.WinVerifyTrust.argtypes = [wintypes.HANDLE, ctypes.POINTER(GUID), ctypes.c_void_p]
+    wintrust.WinVerifyTrust.restype = wintypes.LONG
+    no_ui = wintypes.HANDLE(-1)    # INVALID_HANDLE_VALUE：任何情况都不弹窗
+    code = wintrust.WinVerifyTrust(no_ui, ctypes.byref(action), ctypes.byref(data)) & 0xFFFFFFFF
+    data.dwStateAction = 2         # WTD_STATEACTION_CLOSE：释放校验状态
+    wintrust.WinVerifyTrust(no_ui, ctypes.byref(action), ctypes.byref(data))
+    return code, (_authenticode_signer(path) if code == 0 else "")
+
+
+def _authenticode_signer(path):
+    """读内嵌签名里的签名者名字（只在 WinVerifyTrust 通过之后用，这时签名已确认是真的）。"""
+    import ctypes
+    from ctypes import wintypes
+
+    crypt32 = ctypes.WinDLL("crypt32.dll", use_last_error=True)
+    crypt32.CryptQueryObject.argtypes = [wintypes.DWORD, ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+                                         wintypes.DWORD, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.POINTER(wintypes.HANDLE), ctypes.POINTER(wintypes.HANDLE),
+                                         ctypes.c_void_p]
+    crypt32.CryptMsgGetParam.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                         ctypes.POINTER(wintypes.DWORD)]
+    crypt32.CertFindCertificateInStore.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+                                                   ctypes.c_void_p, ctypes.c_void_p]
+    crypt32.CertFindCertificateInStore.restype = ctypes.c_void_p
+    crypt32.CertGetNameStringW.argtypes = [ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                           wintypes.LPWSTR, wintypes.DWORD]
+    crypt32.CertFreeCertificateContext.argtypes = [ctypes.c_void_p]
+    crypt32.CertCloseStore.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    crypt32.CryptMsgClose.argtypes = [wintypes.HANDLE]
+
+    store, msg = wintypes.HANDLE(), wintypes.HANDLE()
+    # CERT_QUERY_OBJECT_FILE / CONTENT_FLAG_PKCS7_SIGNED_EMBED / FORMAT_FLAG_BINARY
+    if not crypt32.CryptQueryObject(1, ctypes.c_wchar_p(path), 0x400, 2, 0, None, None, None,
+                                    ctypes.byref(store), ctypes.byref(msg), None):
+        return ""
+    try:
+        size = wintypes.DWORD()
+        if not crypt32.CryptMsgGetParam(msg, 7, 0, None, ctypes.byref(size)):   # CMSG_SIGNER_CERT_INFO_PARAM
+            return ""
+        info = ctypes.create_string_buffer(size.value)
+        if not crypt32.CryptMsgGetParam(msg, 7, 0, info, ctypes.byref(size)):
+            return ""
+        # X509_ASN_ENCODING | PKCS_7_ASN_ENCODING / CERT_FIND_SUBJECT_CERT
+        cert = crypt32.CertFindCertificateInStore(store, 0x10001, 0, 0xB0000, info, None)
+        if not cert:
+            return ""
+        try:
+            name = ctypes.create_unicode_buffer(256)
+            crypt32.CertGetNameStringW(cert, 4, 0, None, name, 256)   # CERT_NAME_SIMPLE_DISPLAY_TYPE
+            return name.value
+        finally:
+            crypt32.CertFreeCertificateContext(cert)
+    finally:
+        crypt32.CryptMsgClose(msg)
+        crypt32.CertCloseStore(store, 0)
 
 
 def what_name(path):
@@ -360,6 +495,40 @@ def pick_git_asset(assets):
     return None
 
 
+def git_candidates(releases):
+    """
+    按尝试顺序列出能下载的 Git：最近 3 个版本的 PortableGit，再加最新版的 MinGit。
+    MinGit 是普通 zip，用 Python 解压，不用运行自解压程序——杀软拦截 PortableGit 时还有机会。
+    没写校验和的版本跳过。返回 [{"name","url","sha256"}]。
+    """
+    portable, mingit = [], []
+    pattern = re.compile(r"^MinGit-[\d.]+-64-bit\.zip$")
+    for _tag, assets, body in releases:
+        a = pick_git_asset(assets)
+        sha = pick_git_asset_sha256(body, a["name"]) if a else None
+        if sha and len(portable) < 3:
+            portable.append({"name": a["name"], "url": a["url"], "sha256": sha})
+        for a in assets:
+            sha = pick_git_asset_sha256(body, a["name"]) if pattern.match(a["name"]) else None
+            if sha and not mingit:
+                mingit.append({"name": a["name"], "url": a["url"], "sha256": sha})
+    return portable + mingit
+
+
+def pinned_git_assets():
+    return [{"name": name, "sha256": sha,
+             "url": f"https://github.com/{GIT_REPO}/releases/download/{tag}/{name}"}
+            for tag, name, sha in PINNED_GIT]
+
+
+def pinned_python_asset(version_prefix):
+    pinned = PINNED_PYTHON.get(version_prefix)
+    if not pinned:
+        return None
+    tag, name, sha = pinned
+    return {"name": name, "url": pbs_download_url(tag, name), "sha256": sha}
+
+
 def download_file(url, dest_path, progress_cb=None, cancel_flag=None, cfg=None, log_cb=None):
     """
     下载文件。cfg 传入时会根据镜像设置尝试 GitHub 加速代理，
@@ -376,21 +545,27 @@ def download_file(url, dest_path, progress_cb=None, cancel_flag=None, cfg=None, 
             pass
 
     last_error = None
-    for i, u in enumerate(urls):
-        try:
-            if log_cb and i > 0:
-                log_cb(f"[网络] 上一个地址失败，改用: {u.split('/')[2]}")
-            return _download_once(u, dest_path, progress_cb, cancel_flag, log_cb=log_cb)
-        except PortableEnvError as e:
-            # 用户主动取消：直接向上抛。其余 PortableEnvError（重试耗尽等）
-            # 记下来，换下一个候选地址整个重新试。
-            if "已取消" in str(e):
-                raise
-            last_error = e
-            continue
-        except Exception as e:
-            last_error = e
-            continue
+    for round_no, (min_bps, stall_secs) in enumerate(_SPEED_ROUNDS):
+        if log_cb and round_no > 0:
+            log_cb("[网络] 所有地址都没下完，放宽速度要求再试一轮（已下载的部分保留）...")
+        for i, u in enumerate(urls):
+            try:
+                if log_cb and i > 0:
+                    log_cb(f"[网络] 上一个地址失败，改用: {u.split('/')[2]}")
+                return _download_once(u, dest_path, progress_cb, cancel_flag, log_cb=log_cb,
+                                      min_bps=min_bps, stall_secs=stall_secs)
+            except PortableEnvError as e:
+                # 用户主动取消：直接向上抛。其余 PortableEnvError（重试耗尽等）
+                # 记下来，换下一个候选地址整个重新试。
+                if "已取消" in str(e):
+                    raise
+                last_error = e
+                if log_cb:
+                    log_cb(f"[网络] {e}")
+                continue
+            except Exception as e:
+                last_error = e
+                continue
     raise PortableEnvError(f"下载失败（已尝试 {len(urls)} 个地址）: {last_error}")
 
 
@@ -405,8 +580,17 @@ _TRANSIENT_EXCEPTIONS = (
 
 _MAX_RESUME_ATTEMPTS = 5
 
+# 每轮的（速度下限 B/s，持续秒数）：连上了但几乎不动的地址（国内加速代理常见，100 多 B/s）
+# 不会触发任何超时，必须看实际速度才能发现。第一轮慢了就换地址；所有地址都慢说明就是
+# 网络差，第二轮放宽下限接着下。.part 一直保留，换地址不用从头来。
+_SPEED_ROUNDS = ((50 * 1024, 30), (2 * 1024, 60))
+# 小块读才能及时发现慢速：读满一块之前检查不到速度，256KB 一块按 100 B/s 算要等 40 多分钟
+_CHUNK_SIZE = 8 * 1024
+_PROGRESS_STEP = 256 * 1024
 
-def _download_once(url, dest_path, progress_cb=None, cancel_flag=None, log_cb=None):
+
+def _download_once(url, dest_path, progress_cb=None, cancel_flag=None, log_cb=None,
+                   min_bps=0, stall_secs=0):
     """
     下载单个 URL，支持断点续传：传输中途连接被重置时，不是整个重新下载，
     而是用 HTTP Range 头从已下载的字节数继续接着要，最多重试
@@ -423,8 +607,9 @@ def _download_once(url, dest_path, progress_cb=None, cancel_flag=None, log_cb=No
     attempt = 0
     while True:
         headers = {"Range": f"bytes={downloaded}-"} if downloaded else {}
+        size_before = downloaded
         try:
-            with requests.get(url, stream=True, timeout=60, headers=headers) as resp:
+            with requests.get(url, stream=True, timeout=(15, 60), headers=headers) as resp:
                 if downloaded and resp.status_code == 200:
                     # 服务器不支持 Range，忽略了续传请求，返回了完整内容——
                     # 已下载的部分作废，从头开始写
@@ -446,22 +631,39 @@ def _download_once(url, dest_path, progress_cb=None, cancel_flag=None, log_cb=No
                 mode = "ab" if downloaded and resp.status_code == 206 else "wb"
                 if mode == "wb":
                     downloaded = 0
+                window_start, window_size = time.monotonic(), downloaded
+                reported = downloaded
                 with open(tmp_path, mode) as f:
-                    for chunk in resp.iter_content(chunk_size=1024 * 256):
+                    for chunk in resp.iter_content(chunk_size=_CHUNK_SIZE):
                         if cancel_flag and cancel_flag():
                             raise PortableEnvError("下载已取消")
                         if not chunk:
                             continue
                         f.write(chunk)
                         downloaded += len(chunk)
-                        if progress_cb:
+                        if progress_cb and downloaded - reported >= _PROGRESS_STEP:
+                            reported = downloaded
                             progress_cb(downloaded, total)
+                        if min_bps:
+                            elapsed = time.monotonic() - window_start
+                            if elapsed >= stall_secs:
+                                if (downloaded - window_size) / elapsed < min_bps:
+                                    raise PortableEnvError(
+                                        f"下载速度低于 {min_bps // 1024} KB/s，换下一个地址"
+                                        f"（已下载 {downloaded/1024/1024:.1f} MB，保留续传）")
+                                window_start, window_size = time.monotonic(), downloaded
+                if progress_cb:
+                    progress_cb(downloaded, total)
             break  # 正常下载完成
         except PortableEnvError:
             raise  # 用户主动取消，不重试
         except _TRANSIENT_EXCEPTIONS as e:
             attempt += 1
             downloaded = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+            if downloaded <= size_before:
+                # 这次一个字节都没拿到（连不上、握手就被掐）：这种地址原地重试没用，
+                # 5 次 × 每次等超时要耗掉好几分钟，直接换下一个
+                raise PortableEnvError(f"连接失败: {type(e).__name__}")
             if attempt >= _MAX_RESUME_ATTEMPTS:
                 raise PortableEnvError(
                     f"下载中断且重试 {attempt} 次后仍失败（已下载 {downloaded} 字节）: {e}")
@@ -527,6 +729,21 @@ def extract_portable_git(archive_path, root_dir, log_cb=None):
         raise PortableEnvError(
             f"Git 解压失败 (退出码 {result.returncode})：{result.stdout}\n{result.stderr}"
         )
+    return git_exe
+
+
+def extract_min_git(archive_path, root_dir, log_cb=None):
+    """MinGit 是普通 zip，解压到 <root>/git，得到和 PortableGit 一样的 <root>/git/cmd/git.exe。"""
+    import zipfile
+    target_dir = os.path.join(root_dir, "git")
+    os.makedirs(target_dir, exist_ok=True)
+    if log_cb:
+        log_cb(f"正在解压 MinGit 到 {target_dir} ...")
+    with zipfile.ZipFile(archive_path) as zf:
+        zf.extractall(target_dir)
+    git_exe = os.path.join(target_dir, "cmd", "git.exe")
+    if not os.path.exists(git_exe):
+        raise PortableEnvError(f"解压完成但没找到 {git_exe}")
     return git_exe
 
 
@@ -612,20 +829,107 @@ def check_portable_git(git_root):
     return False, detail
 
 
+def _usual_git_paths():
+    """Git 的常见安装位置：安装时选了不加 PATH、或者 PATH 被改坏时，光看 PATH 找不到。"""
+    env = os.environ.get
+    roots = [env("ProgramFiles"), env("ProgramW6432"), env("ProgramFiles(x86)")]
+    paths = [os.path.join(r, "Git", "cmd", "git.exe") for r in roots if r]
+    if env("LOCALAPPDATA"):
+        paths.append(os.path.join(env("LOCALAPPDATA"), "Programs", "Git", "cmd", "git.exe"))
+    if env("USERPROFILE"):
+        paths.append(os.path.join(env("USERPROFILE"), "scoop", "apps", "git", "current", "cmd", "git.exe"))
+    if env("ProgramData"):
+        paths.append(os.path.join(env("ProgramData"), "chocolatey", "bin", "git.exe"))
+    return paths
+
+
 def system_git_ok():
-    """系统 PATH 里的 git 能不能用：(ok, git 路径或说明)"""
+    """电脑上已装的 git 能不能用：(ok, git 路径或说明)。先看 PATH，再看常见安装位置。"""
     import shutil
-    g = shutil.which("git")
-    if not g:
-        return False, "系统里没有装 Git"
+    flags = 0x08000000 if os.name == "nt" else 0
+    detail = "系统里没有装 Git"
+    for g in [shutil.which("git")] + _usual_git_paths():
+        if not g or not os.path.exists(g):
+            continue
+        try:
+            r = subprocess.run([g, "--version"], capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
+                               creationflags=flags)
+            if r.returncode == 0:
+                return True, g
+            detail = f"系统 Git 运行失败（退出码 {r.returncode}）"
+        except (OSError, subprocess.TimeoutExpired) as e:
+            detail = f"系统 Git 无法运行：{e}"
+    return False, detail
+
+
+_PYTHON_PROBE = "import sys, ssl, venv; print(sys.executable); print('%d.%d' % sys.version_info[:2])"
+
+
+def _python_version_of(cmd):
+    """跑一下这个 Python：能用就返回 (真实路径, "3.13")，否则 None。
+    微软商店的占位 python、缺 ssl / venv 的残缺版本都在这里被筛掉。"""
     try:
-        r = subprocess.run([g, "--version"], capture_output=True, timeout=30, stdin=subprocess.DEVNULL,
-                           creationflags=0x08000000 if os.name == "nt" else 0)
-        if r.returncode == 0:
-            return True, g
-        return False, f"系统 Git 运行失败（退出码 {r.returncode}）"
-    except (OSError, subprocess.TimeoutExpired) as e:
-        return False, f"系统 Git 无法运行：{e}"
+        # 按字节读再解码：路径带中文时，text=True 按系统编码解码会直接崩
+        r = subprocess.run(cmd + ["-c", _PYTHON_PROBE], capture_output=True, timeout=30,
+                           stdin=subprocess.DEVNULL, creationflags=0x08000000 if os.name == "nt" else 0)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = _decode_output(r.stdout).strip().splitlines()
+    if r.returncode != 0 or len(lines) < 2:
+        return None
+    return lines[0].strip(), lines[1].strip()
+
+
+def find_system_python(version_prefix):
+    """电脑上已装的、版本正好是 version_prefix 的 Python，返回路径；没有返回 None。
+    版本必须一致：Classic 只能用 3.10，别的版本依赖装不上。"""
+    import shutil
+    digits = version_prefix.replace(".", "")
+    cmds = [["py", f"-{version_prefix}"]]
+    for name in ("python", "python3"):
+        found = shutil.which(name)
+        if found:
+            cmds.append([found])
+    roots = [os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)"), "C:\\"]
+    if os.environ.get("LOCALAPPDATA"):
+        roots.insert(0, os.path.join(os.environ["LOCALAPPDATA"], "Programs", "Python"))
+    for root in roots:
+        if root:
+            cmds.append([os.path.join(root, f"Python{digits}", "python.exe")])
+    for cmd in cmds:
+        got = _python_version_of(cmd)
+        if got and got[1] == version_prefix:
+            return got[0]
+    return None
+
+
+def launcher_python_matches(app_dir, version_prefix):
+    """启动器自己的便携 Python（<启动器>/python）版本对得上吗？"""
+    exe = os.path.join(app_dir, "python", "python.exe")
+    if not os.path.exists(exe):
+        return False
+    got = _python_version_of([exe])
+    return bool(got and got[1] == version_prefix)
+
+
+def copy_launcher_python(app_dir, root_dir, log_cb=None):
+    """
+    把启动器自己的便携 Python 复制到 <root>/python。
+    启动器能打开就说明这份 Python 已经下载好了，而且 python-build-standalone 可重定位。
+    下载走不通时用它，一个字节都不用联网。返回 python.exe 路径，复制后跑不起来就抛错。
+    """
+    import shutil
+    target = os.path.join(root_dir, "python")
+    if log_cb:
+        log_cb(f"正在复制启动器自带的 Python 到 {target} ...")
+    shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(os.path.join(app_dir, "python"), target,
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    exe = os.path.join(target, "python.exe")
+    if not _python_version_of([exe]):
+        shutil.rmtree(target, ignore_errors=True)
+        raise PortableEnvError("复制出来的 Python 运行不了")
+    return exe
 
 
 def tune_bundled_git(git_root, log_cb=None):

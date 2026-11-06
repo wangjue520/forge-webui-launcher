@@ -1389,6 +1389,7 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
             self._deploy_portable_env(target, branch, need_python, need_git, log, progress)
             log("[部署] 便携环境准备完成\n\n")
             progress(0, 0)
+            deploy_env = make_env()   # 环境变了（新装的便携版，或自动改用的系统 Python / Git）：重建
 
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
@@ -1669,54 +1670,112 @@ def _deploy_portable_env(self, target, branch, need_python, need_git, log, progr
     # 已有且校验通过就直接用，部署第二个实例不用再下载一遍
     tmp = SHARED_CACHE_PORTABLE
     os.makedirs(tmp, exist_ok=True)
-    if True:
-        if need_python:
-            version_prefix = pe.PYTHON_VERSION_BY_BRANCH.get(branch, "3.10")
-            log(f"[便携环境] 查询 python-build-standalone 最新版本 (目标 Python {version_prefix}.x) ...\n")
-            net_log = lambda m: log(m + "\n")
-            tag = pe.get_latest_pbs_tag(cfg=self._deploy_cfg, log_cb=net_log)
-            # 防篡改：先取 release 官方清单 SHA256SUMS 作为哈希基准，
-            # 下载完必须校验通过才会解压/执行（加速代理是第三方中间人）。
-            log("[便携环境] 获取官方校验清单 SHA256SUMS ...\n")
-            sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self._deploy_cfg, log_cb=net_log)
-            # 文件名清单就在 SHA256SUMS 里，直接挑资产并拼下载直链，不调
-            # api.github.com 列资产（未认证限额 60 次/小时/IP，共享出口 IP
-            # 极易超限；releases/download 直链不吃这个限额）
-            asset = pe.pick_python_asset_from_sums(sha_map, version_prefix, tag)
-            if not asset:
-                raise pe.PortableEnvError(
-                    f"没有找到匹配 Python {version_prefix}.x / Windows x86_64 的构建，可能需要手动安装")
-            expected = sha_map.get(asset["name"])
-            if not expected:
-                raise pe.PortableEnvError(
-                    f"官方 SHA256SUMS 中没有 {asset['name']} 的哈希记录，无法验证下载内容，已中止")
-            log(f"[便携环境] 下载 {asset['name']} ...\n")
-            archive_path = os.path.join(tmp, asset["name"])
-            if not _cached_archive_ok(archive_path, expected, log):
-                pe.download_file(asset["url"], archive_path,
-                                 progress_cb=progress,
-                                 cancel_flag=self._deploy_cancel.is_set,
-                                 cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
-            pe.verify_downloaded_file(archive_path, expected,
-                                      what=f"Python 归档 {asset['name']}")
-            log("[便携环境] 校验通过，开始解压\n")
-            python_exe = pe.extract_python_tar(archive_path, target,
-                                               log_cb=lambda m: log(m + "\n"))
-            log(f"[便携环境] Python 部署完成: {python_exe}\n")
+    self._deploy_fallback_paths = {}
+    if need_python:
+        _deploy_portable_python(self, target, branch, tmp, log, progress)
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
+    if need_git:
+        _deploy_portable_git(self, target, tmp, log, progress)
+
+
+def _portable_fetch(self, item, tmp, log, progress):
+    """取一个安装包（item：name / url / sha256）：缓存里有就复用，下载完校验 sha256。返回本地路径。"""
+    log(f"[便携环境] 下载 {item['name']} ...\n")
+    archive_path = os.path.join(tmp, item["name"])
+    if not _cached_archive_ok(archive_path, item["sha256"], log):
+        try:
+            pe.download_file(item["url"], archive_path,
+                             progress_cb=progress,
+                             cancel_flag=self._deploy_cancel.is_set,
+                             cfg=self._deploy_cfg, log_cb=lambda m: log(m + "\n"))
+        except pe.PortableEnvError:
+            if self._deploy_cancel.is_set():
+                raise _DeployCancelled()
+            raise
+    pe.verify_downloaded_file(archive_path, item["sha256"], what=item["name"])
+    return archive_path
+
+
+def _deploy_portable_python(self, target, branch, tmp, log, progress):
+    """
+    准备部署用的 Python，一条路走不通就自动换下一条，全部走不通才报错：
+    最新版 → 内置的固定版本 → 复制启动器自己的 Python → 电脑上版本相同的 Python。
+    """
+    prefix = pe.PYTHON_VERSION_BY_BRANCH.get(branch, "3.10")
+    net_log = lambda m: log(m + "\n")
+    candidates = []
+    log(f"[便携环境] 查询 python-build-standalone 最新版本 (目标 Python {prefix}.x) ...\n")
+    try:
+        tag = pe.get_latest_pbs_tag(cfg=self._deploy_cfg, log_cb=net_log)
+        # 防篡改：先取 release 官方清单 SHA256SUMS 作为哈希基准，
+        # 下载完必须校验通过才会解压/执行（加速代理是第三方中间人）。
+        log("[便携环境] 获取官方校验清单 SHA256SUMS ...\n")
+        sha_map = pe.fetch_pbs_sha256sums(tag, cfg=self._deploy_cfg, log_cb=net_log)
+        # 文件名清单就在 SHA256SUMS 里，直接挑资产并拼下载直链，不调
+        # api.github.com 列资产（未认证限额 60 次/小时/IP，共享出口 IP
+        # 极易超限；releases/download 直链不吃这个限额）
+        asset = pe.pick_python_asset_from_sums(sha_map, prefix, tag)
+        if asset and sha_map.get(asset["name"]):
+            candidates.append({"name": asset["name"], "url": asset["url"], "sha256": sha_map[asset["name"]]})
+        else:
+            log(f"[便携环境] 最新版里已经没有 Python {prefix}（官方不再更新这个版本），改用固定版本\n")
+    except pe.PortableEnvError as e:
+        log(f"[便携环境] 查不到最新版本（{e}），改用固定版本\n")
+    pinned = pe.pinned_python_asset(prefix)
+    if pinned and not any(c["name"] == pinned["name"] for c in candidates):
+        candidates.append(pinned)
+
+    can_copy = pe.launcher_python_matches(APP_DIR, prefix)
+    failures = []
+    for item in candidates:
+        if failures and can_copy:
+            break      # 启动器自己就有版本对得上的 Python，不用在下载上继续耗时间
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
-        if need_git:
-            _deploy_portable_git(self, target, tmp, log, progress)
+        try:
+            archive_path = _portable_fetch(self, item, tmp, log, progress)
+            log("[便携环境] 校验通过，开始解压\n")
+            shutil.rmtree(os.path.join(target, "python"), ignore_errors=True)
+            python_exe = pe.extract_python_tar(archive_path, target, log_cb=net_log)
+            log(f"[便携环境] Python 部署完成: {python_exe}\n")
+            return
+        except _DeployCancelled:
+            raise
+        except Exception as e:
+            failures.append(f"{item['name']}：{e}")
+            log(f"[便携环境] {item['name']} 没有成功：{e}\n")
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
+
+    if can_copy:
+        try:
+            python_exe = pe.copy_launcher_python(APP_DIR, target, log_cb=net_log)
+            log(f"[便携环境] 下载没有成功，已改用启动器自带的 Python：{python_exe}\n")
+            return
+        except Exception as e:
+            failures.append(f"复制启动器自带的 Python：{e}")
+    sys_py = pe.find_system_python(prefix)
+    if sys_py:
+        log(f"[便携环境] 下载没有成功，改用电脑上已安装的 Python {prefix}：{sys_py}\n")
+        self._deploy_cfg["custom_python_path"] = sys_py
+        self._deploy_fallback_paths["custom_python_path"] = sys_py
+        return
+    raise pe.PortableEnvError(
+        f"Python {prefix} 没有准备好，能自动尝试的办法都试过了：\n  " +
+        "\n  ".join(failures or ["没有可用的下载地址"]) +
+        "\n\n多半是网络不通。开着代理 / 加速器重新点「开始部署」即可，已下载的部分会接着用。")
 
 
 def _deploy_portable_git(self, target, tmp, log, progress):
     """
-    下载并解压便携 Git，解压后必须真的能跑（git --version）才算成功。
+    准备部署用的 Git，一条路走不通就自动换下一条，全部走不通才报错：
+    最近 3 个版本的 PortableGit → MinGit（查不到版本信息时用内置的固定版本）→ 电脑上已装的 Git。
 
-    Git for Windows 新版偶尔在部分电脑上跑不起来（2.56 刚把主程序从 mingw64
-    挪到 ucrt64；新发布的程序装机量低，也更容易被杀软按"信誉"拦截），表现为
-    cmd\\git.exe 报 "error launching git: ????"。所以从最新版开始，跑不起来就
-    自动退回上一个正式版，最多试 3 个；都不行再看系统里有没有能用的 Git。
+    解压后必须真的能跑（git --version）才算成功。Git for Windows 新版偶尔在部分
+    电脑上跑不起来（2.56 刚把主程序从 mingw64 挪到 ucrt64；新发布的程序装机量低，
+    也更容易被杀软按"信誉"拦截），表现为 cmd\\git.exe 报 "error launching git: ????"。
+    电脑上已经有能用的 Git 时，便携版失败一次就直接用它，不在下载上继续耗时间。
     """
     net_log = lambda m: log(m + "\n")
     git_root = os.path.join(target, "git")
@@ -1726,53 +1785,67 @@ def _deploy_portable_git(self, target, tmp, log, progress):
     except pe.PortableEnvError:
         releases = []
     if not releases:   # 列表接口不通时退回只查最新版（老逻辑）
-        assets, body = pe.list_release_assets_with_meta(pe.GIT_REPO, tag=None, cfg=self._deploy_cfg, log_cb=net_log)
-        releases = [("latest", assets, body)]
+        try:
+            assets, body = pe.list_release_assets_with_meta(pe.GIT_REPO, tag=None, cfg=self._deploy_cfg, log_cb=net_log)
+            releases = [("latest", assets, body)]
+        except pe.PortableEnvError:
+            releases = []
+    candidates = pe.git_candidates(releases)
+    if not candidates:
+        log("[便携环境] 查不到版本信息（GitHub API 在国内常被墙或限流），改用固定版本\n")
+        candidates = pe.pinned_git_assets()
+
+    sys_ok, sys_git = pe.system_git_ok()
     failures = []
-    tried = 0
-    for tag, assets, body in releases:
-        asset = pe.pick_git_asset(assets)
-        if not asset:
-            continue
-        expected = pe.pick_git_asset_sha256(body, asset["name"])
-        if not expected:
-            log(f"[便携环境] {asset['name']} 的发布信息里没有校验和，跳过这个版本\n")
-            continue
-        if tried >= 3:
+    download_failures = 0
+    for item in candidates:
+        if failures and sys_ok:
             break
-        tried += 1
+        if download_failures >= 2:
+            log("[便携环境] 连续两个安装包都下载失败，多半是网络不通，不再试其它版本\n")
+            break
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
-        log(f"[便携环境] 下载 {asset['name']} ...\n")
-        archive_path = os.path.join(tmp, asset["name"])
-        if not _cached_archive_ok(archive_path, expected, log):
-            pe.download_file(asset["url"], archive_path,
-                             progress_cb=progress,
-                             cancel_flag=self._deploy_cancel.is_set,
-                             cfg=self._deploy_cfg, log_cb=net_log)
-        pe.verify_downloaded_file(archive_path, expected, what=f"Git 安装包 {asset['name']}")
-        # 自解压包执行前再验 Authenticode 签名（双保险）
-        pe.verify_pe_signature(archive_path, log_cb=net_log)
-        shutil.rmtree(git_root, ignore_errors=True)   # 上一个版本没跑起来的残留先清掉
-        git_exe = pe.extract_portable_git(archive_path, target, log_cb=net_log)
-        ok, detail = pe.check_portable_git(git_root)
+        try:
+            archive_path = _portable_fetch(self, item, tmp, log, progress)
+        except _DeployCancelled:
+            raise
+        except Exception as e:
+            download_failures += 1
+            failures.append(f"{item['name']}：{e}")
+            log(f"[便携环境] {item['name']} 下载没有成功，换下一个：{e}\n")
+            continue
+        try:
+            shutil.rmtree(git_root, ignore_errors=True)   # 上一个版本没跑起来的残留先清掉
+            if item["name"].lower().endswith(".zip"):
+                git_exe = pe.extract_min_git(archive_path, target, log_cb=net_log)
+            else:
+                # 自解压包执行前再验 Authenticode 签名（双保险）
+                pe.verify_pe_signature(archive_path, log_cb=net_log)
+                git_exe = pe.extract_portable_git(archive_path, target, log_cb=net_log)
+            ok, detail = pe.check_portable_git(git_root)
+        except Exception as e:   # 校验没过、解压被杀软拦、解压超时：都不该让整个部署停下来
+            ok, detail = False, str(e) or type(e).__name__
         if ok:
             log(f"[便携环境] Git 部署完成: {git_exe}（{detail}）\n")
             return
-        failures.append(f"{asset['name']}：{detail}")
-        log(f"[便携环境] {asset['name']} 解压好了但在这台电脑上运行不了：\n    {detail}\n"
-            "    改用上一个版本再试 ...\n")
+        failures.append(f"{item['name']}：{detail}")
+        log(f"[便携环境] {item['name']} 在这台电脑上用不了，换下一个：\n    {detail}\n")
+    if self._deploy_cancel.is_set():
+        raise _DeployCancelled()
     shutil.rmtree(git_root, ignore_errors=True)
-    sys_ok, sys_info = pe.system_git_ok()
     if sys_ok:
-        log(f"[便携环境] 便携 Git 都运行不了，改用系统里已安装的 Git：{sys_info}\n")
+        log(f"[便携环境] 便携 Git 没有成功，改用电脑上已安装的 Git：{sys_git}\n")
+        if not shutil.which("git"):   # 装了但不在 PATH 里：记下完整路径，后面的步骤才找得到
+            self._deploy_cfg["custom_git_path"] = sys_git
+            self._deploy_fallback_paths["custom_git_path"] = sys_git
         return
     raise pe.PortableEnvError(
-        "便携 Git 解压后无法运行：\n  " + "\n  ".join(failures or ["没有找到可用的 PortableGit 安装包"]) +
-        "\n\n常见原因是杀毒软件（360、火绒、Windows 安全中心等）拦截或删除了 Git 的程序文件。"
-        "可以把安装目录加入杀软白名单后重新点「开始部署」；"
-        "或者先安装官方 Git（https://git-scm.com/download/win，一路下一步即可），"
-        "再取消勾选「自动下载便携版 Python + Git」重新部署。")
+        "Git 没有准备好，能自动尝试的办法都试过了：\n  " +
+        "\n  ".join(failures or ["没有可用的下载地址"]) +
+        "\n\n如果是下载失败，开着代理 / 加速器重新点「开始部署」即可，已下载的部分会接着用。"
+        "如果是下载好了却用不了，多半是杀毒软件（360、火绒、Windows 安全中心等）拦截了 Git 的程序文件，"
+        "把安装目录加入白名单后重新部署。")
 
 
 def _drop_broken_bundled_git(target, log):
@@ -2597,6 +2670,9 @@ def _deploy_register_instance(self, target, branch, log, variant=None):
     label = cm.kind_label(branch, variant)
     gpu = {"gpu_backend": self._deploy_cfg.get("gpu_backend") or "",
            "amd_gfx": self._deploy_cfg.get("amd_gfx") or ""}
+    # 部署时自动改用了不在 PATH 里的系统 Python / Git：记到实例上，以后启动才找得到
+    gpu.update(getattr(self, "_deploy_fallback_paths", None) or {})
+    self._deploy_fallback_paths = {}
     for inst in self.cfg.get("instances") or []:
         if inst.get("webui_root") and _same_install(inst["webui_root"], target):
             inst["webui_branch"] = branch
@@ -2768,6 +2844,7 @@ def _deploy_flow_comfy(self, target, use_portable):
         if self._deploy_cancel.is_set():
             raise _DeployCancelled()
 
+        custom_git = (dcfg.get("custom_git_path") or "").strip().strip('"')   # 上一步可能自动改用了系统 Git
         git_exe = custom_git if (custom_git and os.path.exists(custom_git)) else (
             bundled_git if os.path.exists(bundled_git) else "git")
         if os.path.exists(bundled_git):
@@ -2825,7 +2902,8 @@ def _deploy_flow_comfy(self, target, use_portable):
             venv_py = os.path.join(target, "venv", "Scripts" if os.name == "nt" else "bin",
                                    "python.exe" if os.name == "nt" else "python")
             if not os.path.exists(venv_py):
-                sys_py = shutil.which("python") or shutil.which("python3") or "python"
+                sys_py = ((dcfg.get("custom_python_path") or "").strip()    # 自动选中的版本相同的系统 Python
+                          or shutil.which("python") or shutil.which("python3") or "python")
                 log("[部署] 使用系统 Python 创建独立 venv（不污染系统环境）\n")
                 if self._deploy_run_cmd(sys_py, ["-m", "venv", os.path.join(target, "venv")],
                                         target, log, env=env) != 0:

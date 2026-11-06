@@ -244,7 +244,9 @@ def deploy_flow(api, root, torch_variant):
         py = python_of(root)
         if not py:
             raise RuntimeError("便携 Python 没有准备好，请重试")
-        git = bundled_git if os.path.isfile(bundled_git) else "git"
+        # 便携 Git 没成功时可能自动改用了系统 Git（不在 PATH 里的话 custom_git_path 记着完整路径）
+        git = bundled_git if os.path.isfile(bundled_git) else (api._deploy_cfg.get("custom_git_path") or "git")
+        api._deploy_fallback_paths = {}   # 训练器不登记成实例，别留给下一次部署
         if api._deploy_cancel.is_set():
             raise _Cancelled()
 

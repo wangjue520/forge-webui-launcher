@@ -11,7 +11,7 @@
 # 为什么不写死在 bat 里：bat 内嵌 PowerShell 需要层层转义特殊字符
 # （| > & ( ) 等），极难维护；独立 .ps1 可以正常写逻辑、正常Review。
 #
-# 网络安全（重要）：下载会经过 ghfast.top / gh-proxy.com / github.moeyy.xyz
+# 网络安全（重要）：下载会经过 ghfast.top / gh-proxy.com / gh-proxy.org
 # 这类第三方 GitHub 加速代理，它们按设计就是中间人——有能力返回任何内容。
 # 所以本脚本对每一个下载物都做来源校验，校验不通过一律中止（fail-closed）：
 #   1. 资产清单与哈希取自 release 官方附带的 SHA256SUMS 文件（优先）或
@@ -30,8 +30,8 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# 与 mirror_manager.GITHUB_PROXIES 保持一致
-$proxyPrefixes = @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://github.moeyy.xyz/')
+# 与 mirror_manager.GITHUB_PROXIES 保持一致（tests/test_portable_download.py 会核对）
+$proxyPrefixes = @('https://ghfast.top/', 'https://gh-proxy.com/', 'https://ghproxy.net/', 'https://gh.llkk.cc/', 'https://gh-proxy.org/')
 $tagUrl = 'https://raw.githubusercontent.com/astral-sh/python-build-standalone/latest-release/latest-release.json'
 $releaseApi = 'https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/'
 
@@ -68,7 +68,7 @@ function Get-JsonWithFallback([string]$url, [bool]$useProxy) {
     $lastErr = $null
     foreach ($u in $candidates) {
         try {
-            $resp = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 30
+            $resp = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 12
             return ($resp.Content | ConvertFrom-Json)
         }
         catch {
@@ -87,21 +87,85 @@ if (-not (Test-Path $sysTar)) { $sysTar = 'tar.exe' }
 $sysCurl = 'C:\Windows\System32\curl.exe'
 if (-not (Test-Path $sysCurl)) { $sysCurl = $null }
 
-function Download-File([string]$url, [string]$dest) {
-    if (Test-Path $dest) { Remove-Item $dest -Force }
-    # 优先 curl.exe（Win10 1803+ 自带，速度快、自带断线重试）；
-    # 没有的话退回 Invoke-WebRequest
-    if ($sysCurl) {
-        & $sysCurl -fL --connect-timeout 15 --retry 2 --retry-delay 3 -o $dest $url
-        if ($LASTEXITCODE -ne 0) {
-            Remove-Item $dest -Force -ErrorAction SilentlyContinue
-            throw ("curl 下载失败 (exit " + $LASTEXITCODE + ")")
-        }
+function Measure-Sources([string[]]$urls) {
+    # 国内的加速代理时好时坏，今天最快的明天可能只剩 100 B/s，写死顺序靠不住。
+    # 所以开始下载前同时测一遍所有下载源（各下几秒），按实测速度排序，总共只花几秒。
+    # 返回 Good（能用的，从快到慢）和 Bad（连不上或几乎不动的，第一轮直接跳过）。
+    if (-not $sysCurl) { return @{ Good = $urls; Bad = @() } }
+    $probes = @()
+    foreach ($u in $urls) {
+        $out = [IO.Path]::GetTempFileName()
+        $err = [IO.Path]::GetTempFileName()
+        $curlArgs = '-sL --connect-timeout 5 --max-time 6 -r 0-2097151 -o NUL -w "%{http_code} %{speed_download}" "' + $u + '"'
+        $proc = Start-Process -FilePath $sysCurl -ArgumentList $curlArgs -NoNewWindow -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+        $probes += @{ Url = $u; Proc = $proc; Out = $out; Err = $err }
     }
-    else {
+    $results = @()
+    foreach ($p in $probes) {
+        if (-not $p.Proc.WaitForExit(9000)) {
+            try { $p.Proc.Kill() } catch { }
+            $p.Proc.WaitForExit(2000) | Out-Null
+        }
+        $speed = 0.0
+        $parts = ("" + (Get-Content -Path $p.Out -Raw -ErrorAction SilentlyContinue)).Trim() -split '\s+'
+        if ($parts.Count -eq 2 -and ($parts[0] -eq '200' -or $parts[0] -eq '206')) {
+            [double]::TryParse($parts[1], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$speed) | Out-Null
+        }
+        Remove-Item $p.Out, $p.Err -Force -ErrorAction SilentlyContinue
+        Write-Host ('[bootstrap] 测速 ' + ('{0,8:N0}' -f ($speed / 1024)) + ' KB/s  ' + $p.Url.Split('/')[2])
+        $results += New-Object PSObject -Property @{ Url = $p.Url; Speed = $speed }
+    }
+    $sorted = @($results | Sort-Object -Property Speed -Descending)
+    return @{
+        Good = @($sorted | Where-Object { $_.Speed -ge 10240 } | ForEach-Object { $_.Url })
+        Bad  = @($sorted | Where-Object { $_.Speed -lt 10240 } | ForEach-Object { $_.Url })
+    }
+}
+
+function Download-File([string]$url, [string]$dest, [int]$minBps, [int]$stallSec, [bool]$restartIfNoRange) {
+    # 优先 curl.exe（Win10 1803+ 自带，速度快）；没有的话退回 Invoke-WebRequest
+    if (-not $sysCurl) {
+        if (Test-Path $dest) { Remove-Item $dest -Force }
         Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 900 -OutFile $dest
+        if (-not (Test-Path $dest)) { throw '下载失败：目标文件不存在' }
+        return
+    }
+    # 这里只防「连上了但几乎不动」：只设连接超时的话，100 多 B/s 的连接永远不算失败，
+    # 会一直耗下去（用户实测 44MB 显示要 4 天）。速度持续低于下限就放弃，换下一个源。
+    # -C - 接着 $dest 已有的部分下，换源也不用从头来；不同源拼出来的文件最后照样过 sha256。
+    # 不用 --retry：换源和重试都由外层循环管，这里多试只会在坏的源上多耗时间。
+    $resume = @('-C', '-')
+    while ($true) {
+        $code = & $sysCurl -fL --connect-timeout 10 --speed-limit $minBps --speed-time $stallSec @resume -w '%{http_code}' -o $dest $url
+        $exit = $LASTEXITCODE
+        if ($exit -eq 0) { break }
+        if ($exit -eq 28) {
+            throw ('速度低于 ' + [int]($minBps / 1024) + ' KB/s 或连接超时，换下一个源（已下载的部分保留）')
+        }
+        if ($code -eq '416') {
+            # 已有的部分比完整文件还大，肯定是坏的
+            Remove-Item $dest -Force -ErrorAction SilentlyContinue
+            throw '已下载的部分已损坏，删除后重新下载'
+        }
+        if ($exit -eq 33 -and $restartIfNoRange -and $resume.Count -gt 0) {
+            # 这个源不支持续传：前面几轮都不行时，才值得丢掉已下载的部分从头下
+            Remove-Item $dest -Force -ErrorAction SilentlyContinue
+            $resume = @()
+            continue
+        }
+        throw ('curl 下载失败 (exit ' + $exit + ')')
     }
     if (-not (Test-Path $dest)) { throw '下载失败：目标文件不存在' }
+}
+
+function Get-WebText([string]$url) {
+    # 服务器按 application/octet-stream 返回时（SHA256SUMS 就是），PowerShell 5.1 的 .Content
+    # 是字节数组而不是字符串，直接拿去 -split 永远匹配不上。之前因此每次都退回 GitHub API，
+    # API 在国内常被墙或限流，查不到就只能用写死的旧版本。
+    $content = (Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 20).Content
+    if ($content -is [byte[]]) { return [Text.Encoding]::UTF8.GetString($content) }
+    return $content
 }
 
 function Get-TextWithFallback([string]$url, [bool]$useProxy) {
@@ -118,7 +182,7 @@ function Get-TextWithFallback([string]$url, [bool]$useProxy) {
     $lastErr = $null
     foreach ($u in $candidates) {
         try {
-            return (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 60).Content
+            return (Get-WebText $u)
         }
         catch {
             $lastErr = $_
@@ -193,7 +257,7 @@ function Get-ExpectedHash($asset, [bool]$useProxy) {
         }
         foreach ($u in $candidates) {
             try {
-                $text = (Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 60).Content
+                $text = Get-WebText $u
                 foreach ($line in ($text -split "`n")) {
                     $parts = $line.Trim() -split '\s+'
                     if ($parts.Count -eq 2 -and $parts[0] -match '^[0-9a-fA-F]{64}$' -and $parts[1] -eq $asset.Name) {
@@ -258,25 +322,41 @@ Write-Host ('[bootstrap] 期望 sha256: ' + $expectedHash)
 $candidates = @($asset.Url)
 foreach ($p in $proxyPrefixes) { $candidates += ($p + $asset.Url) }
 
+Write-Host '[bootstrap] 正在测试各下载源的速度 ...'
+$sources = Measure-Sources $candidates
+
+# 未完成的文件名带上哈希：上次中断留下的同一版本接着下，别的版本的残留不会被接上去
+$partPath = $ArchivePath + '.' + $expectedHash.Substring(0, 12) + '.part'
 $downloaded = $false
 $lastErr = $null
-# 两轮完整重试：加速代理对大文件经常抖动（限速、断流），第一轮全挂、
-# 第二轮就好是常态——这就是用户反馈"第一次失败、再点一遍就成功"的
-# 主要来源之一，在脚本内部消化掉，别让用户手动重开
-for ($pass = 1; $pass -le 2 -and -not $downloaded; $pass++) {
+# 三轮逐步放宽速度下限。第一轮只用测速能用的源，慢的立刻换；全都慢说明就是网络差，
+# 放宽下限后留在最快的源上慢慢下，总比下不完强。已下载的部分一直保留，每轮都不白跑。
+$passes = @(
+    @{ MinBps = 51200; StallSec = 20 },
+    @{ MinBps = 10240; StallSec = 30 },
+    @{ MinBps = 1024; StallSec = 60 }
+)
+for ($pass = 1; $pass -le $passes.Count -and -not $downloaded; $pass++) {
+    $urls = @($sources.Good) + @($sources.Bad)
+    if ($pass -eq 1 -and @($sources.Good).Count -gt 0) { $urls = @($sources.Good) }
     if ($pass -gt 1) {
-        Write-Host '[bootstrap] 第一轮全部失败，5 秒后再完整重试一轮 ...'
-        Start-Sleep -Seconds 5
+        Write-Host ('[bootstrap] 第 ' + ($pass - 1) + ' 轮没有下完，放宽速度要求后继续（已下载的部分保留）...')
+        Start-Sleep -Seconds 3
     }
-    foreach ($u in $candidates) {
+    foreach ($u in $urls) {
         try {
-            Write-Host ('[bootstrap] 下载: ' + $u)
-            Download-File $u $ArchivePath
-            if (Test-FileHash $ArchivePath $expectedHash) {
+            if ((Test-Path $partPath) -and (Test-FileHash $partPath $expectedHash)) {
                 $downloaded = $true
                 break
             }
-            $actualHash = (Get-FileHash -Path $ArchivePath -Algorithm SHA256).Hash.ToLower()
+            Write-Host ('[bootstrap] 下载: ' + $u)
+            Download-File $u $partPath $passes[$pass - 1].MinBps $passes[$pass - 1].StallSec ($pass -gt 1)
+            if (Test-FileHash $partPath $expectedHash) {
+                $downloaded = $true
+                break
+            }
+            $actualHash = (Get-FileHash -Path $partPath -Algorithm SHA256).Hash.ToLower()
+            Remove-Item $partPath -Force -ErrorAction SilentlyContinue
             $lastErr = ('校验失败！期望 ' + $expectedHash + '，实际 ' + $actualHash + '——该地址返回的内容被篡改或损坏，换下一个地址')
             Write-Host ('[bootstrap] ' + $lastErr)
         }
@@ -287,9 +367,11 @@ for ($pass = 1; $pass -le 2 -and -not $downloaded; $pass++) {
     }
 }
 if (-not $downloaded) {
-    Remove-Item $ArchivePath -Force -ErrorAction SilentlyContinue
-    throw ('所有候选地址都失败或校验不通过（已自动重试两轮）。最后错误: ' + $lastErr)
+    # 未完成的部分留着：下次启动接着下
+    throw ('所有下载源都失败或校验不通过（已自动重试 ' + $passes.Count + ' 轮）。最后错误: ' + $lastErr)
 }
+Move-Item -Path $partPath -Destination $ArchivePath -Force
+Get-ChildItem -Path ($ArchivePath + '.*.part') -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
 Write-Host ('[bootstrap] 校验通过，解压到 ' + $LauncherDir + ' ...')
 & $sysTar -xzf $ArchivePath -C $LauncherDir
