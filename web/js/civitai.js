@@ -269,8 +269,9 @@
   }
 
   App.pages.civitai = {
-    onShow() { h3Refresh(); },
+    onShow() { h3Refresh(); if (App.catalog) App.catalog.refresh(); },
     init(state) {
+      if (App.catalog) App.catalog.init();   // 目录内容等切到这一页（onShow）时再读
       h3Init();
       h3Refresh();
       log = App.pageLog("civitai", "模型下载");

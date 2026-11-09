@@ -168,11 +168,11 @@ def run_scenario(tmp):
     with open(os.path.splitext(old)[0] + ".civitai.info", "w") as f:
         f.write("{}")
     logs = []
-    new = wa._h3_relocate(api(h3_cfg, True), old, os.path.join(lib, "diffusion_models"), logs.append)
+    new = wa._relocate_in_library(api(h3_cfg, True), old, os.path.join(lib, "diffusion_models"), logs.append)
     check("h3 relocate moved", rel(new), "lib/diffusion_models/minimax_h3_fl2va_pruned-Q4_K.gguf")
     check("h3 relocate sidecar", os.path.exists(os.path.splitext(new)[0] + ".civitai.info"), True)
     inst_file = write_gguf(os.path.join(neo, "models", "Stable-diffusion", "a.gguf"), "flux", ["x"])
-    check("h3 relocate leaves instance file", wa._h3_relocate(api(h3_cfg, True), inst_file,
+    check("h3 relocate leaves instance file", wa._relocate_in_library(api(h3_cfg, True), inst_file,
                                                               os.path.join(lib, "diffusion_models"), logs.append), inst_file)
     os.remove(inst_file)
     shutil.rmtree(os.path.join(lib, "diffusion_models"))

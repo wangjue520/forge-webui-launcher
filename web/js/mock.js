@@ -226,6 +226,76 @@
         return ok({ ok: true });
       },
       h3_models_cancel: () => { window.App.onEvent({ scope: "h3dl", type: "done", ok: false, cancelled: true }); return ok({ ok: true }); },
+      // 常用模型目录：从仓库根目录起预览服务时直接读真实的 app/model_catalog.json（默认精度按 24GB 粗选）
+      model_catalog_info: () => fetch("../app/model_catalog.json").then((r) => r.json()).then((cat) => {
+        const kind = (location.search.match(/[?&]kind=(\w+)/) || [])[1] || "neo";
+        const G = 1073741824, BW = new Set(["nvfp4", "mxfp8", "fp4"]);
+        const issue = (o) => BW.has(o.fmt) ? "RTX 50 系专用" : (o.fmt === "gguf" && kind === "comfyui" ? "要先装 ComfyUI-GGUF 插件" : "");
+        const pick = (c) => {
+          const lim = c.role === "TextEncoder" ? 26.4 : (c.role === "DiffusionModel" || c.role === "Checkpoint" ? 22.5 : 1e9);
+          const ok2 = c.options.filter((o) => !issue(o) && o.fmt !== "gguf");
+          return (ok2.find((o) => o.size <= lim * G) || ok2[ok2.length - 1] || c.options[0]).id;
+        };
+        window.__mockCatalog = cat;
+        return {
+          ok: true, kind, kind_label: { comfyui: "ComfyUI", neo: "Forge Neo", h3: "Forge Neo H3", classic: "Forge Classic" }[kind],
+          gpu: "NVIDIA GeForce RTX 3090", vram_gb: 24, ram_gb: 63.9, blackwell: false, gguf_node: kind !== "comfyui",
+          library: true, has_root: true, running: false, active: null, groups: cat.groups, updated: cat.updated,
+          models: cat.models.map((m) => {
+            const vers = m.versions.map((v) => {
+              const ui = v.ui || m.ui;
+              const defaults = {};
+              v.components.forEach((c) => { defaults[c.id] = pick(c); });
+              return { id: v.id, label: v.label, note: v.note || "", default: !!v.default, supported: ui.includes(kind) || (kind === "h3" && ui.includes("neo")),
+                ui: ui.map((u) => ({ comfyui: "ComfyUI", neo: "Forge Neo", h3: "Forge Neo H3", classic: "Forge Classic", a1111: "A1111" }[u])),
+                defaults, components: v.components.map((c) => Object.assign({}, c, { desc: c.desc || "",
+                  options: c.options.map((o) => ({ id: o.id, label: o.label, fmt: o.fmt, quant: o.quant, file: o.file, size: o.size, note: o.note || "", issue: issue(o) })) })) };
+            });
+            return { id: m.id, name: m.name, group: m.group, desc: m.desc, tips: m.tips, license: m.license, link: m.link,
+              supported: vers.some((v) => v.supported), versions: vers };
+          }),
+        };
+      }).catch(() => ({ ok: false, error: "预览模式：要从仓库根目录起服务（…/web/index.html?mock=1）才读得到 app/model_catalog.json" })),
+      model_catalog_state: (id) => {
+        const m = (window.__mockCatalog || { models: [] }).models.find((x) => x.id === id);
+        const files = {}, where = {};
+        const W = { DiffusionModel: "共享模型库/diffusion_models", Checkpoint: "共享模型库/checkpoints", TextEncoder: "共享模型库/text_encoders",
+          VAE: "共享模型库/VAE", LoRA: "共享模型库/loras" };
+        (m ? m.versions : []).forEach((v) => v.components.forEach((c) => {
+          where[`${v.id}/${c.id}`] = W[c.role] || "models/model_patches";
+          c.options.forEach((o, oi) => {
+            // 演示：VAE 已下载、文本编码器第一档下了一半
+            const st = c.role === "VAE" ? "ok" : (c.role === "TextEncoder" && oi === 0 ? "part" : "");
+            files[`${v.id}/${c.id}/${o.id}`] = { state: st, part: st === "part" ? Math.round(o.size * 0.4) : 0 };
+          });
+        }));
+        return ok({ ok: true, files, where, disk_free: 812 * 1073741824 });
+      },
+      model_catalog_download: (sel) => {
+        const cat = window.__mockCatalog;
+        const todo = sel.map((s) => {
+          const m = cat.models.find((x) => x.id === s.model);
+          const c = m.versions.find((v) => v.id === s.version).components.find((x) => x.id === s.comp);
+          return { id: s.comp, o: c.options.find((x) => x.id === s.option) };
+        });
+        const total = todo.reduce((a, t) => a + t.o.size, 0);
+        let i = 0, done = 0, cur = 0;
+        const ev = (type, d) => window.App.onEvent(Object.assign({ scope: "mcdl", type }, d));
+        window.__mockMc = setInterval(() => {
+          const t = todo[i];
+          if (!t) { clearInterval(window.__mockMc); ev("done", { ok: true, downloaded: todo.length, skipped: 0 }); return; }
+          if (cur === 0) { ev("item", { id: t.id, state: "downloading" }); ev("log", { text: `[模型下载] (${i + 1}/${todo.length}) ${t.o.file}\n` }); }
+          cur = Math.min(t.o.size, cur + Math.max(t.o.size / 8, 2e8));
+          ev("progress", { id: t.id, name: t.o.file, index: i + 1, count: todo.length, downloaded: cur, total: t.o.size, all_done: done + cur, all_total: total });
+          if (cur >= t.o.size) { ev("item", { id: t.id, state: "ok" }); done += t.o.size; cur = 0; i++; }
+        }, 250);
+        return ok({ ok: true, count: todo.length });
+      },
+      model_catalog_cancel: () => {
+        clearInterval(window.__mockMc);
+        window.App.onEvent({ scope: "mcdl", type: "done", ok: false, cancelled: true });
+        return ok({ ok: true });
+      },
       instance_config_get: () => ok({ ok: true, iid: "demo", config: mockConfig, cmd_args: "" }),
       instance_config_update: () => ok({ ok: true, cmd_args: "" }),
       launch_env_detect: () => ok({ python: "", git: "" }),

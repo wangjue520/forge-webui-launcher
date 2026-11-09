@@ -627,6 +627,38 @@
 
       <!-- ======== 模型下载 ======== -->
       <section class="page" id="page-civitai">
+        <div class="card mc-collapsed" id="mc-card" hidden>
+          <div class="card-title mc-toggle" id="mc-toggle" role="button" tabindex="0" aria-expanded="false">常用模型一键下载<span class="card-title-hint">选模型 → 选版本和精度，主模型、文本编码器、VAE 一次下好，自动放进对应文件夹；断点续传、sha256 校验</span><span class="mc-fold" id="mc-fold">展开 ▾</span></div>
+          <div class="mc-body" id="mc-body" hidden>
+          <div class="mc-bar">
+            <div class="chips mc-groups" id="mc-groups"></div>
+            <input type="text" id="mc-search" placeholder="搜索模型…">
+          </div>
+          <div class="mc-models" id="mc-models"></div>
+          <div class="mc-detail" id="mc-detail" hidden>
+            <div class="mc-head">
+              <b class="mc-name" id="mc-name"></b>
+              <span class="mc-ui" id="mc-ui"></span>
+              <button class="btn btn-xs" id="mc-link">模型主页</button>
+            </div>
+            <div class="mc-desc" id="mc-desc"></div>
+            <div class="hint mc-tips" id="mc-tips"></div>
+            <div class="mc-version-row" id="mc-version-row">
+              <span class="mc-label">版本</span>
+              <select id="mc-version"></select>
+            </div>
+            <div class="hint" id="mc-hw"></div>
+            <div class="h3-list" id="mc-list"></div>
+            <div class="action-row">
+              <button class="btn btn-accent" id="mc-start"><svg class="btn-icon"><use href="#i-download"/></svg>下载选中的文件</button>
+              <button class="btn" id="mc-cancel" disabled>取消</button>
+              <span class="hint h3-total" id="mc-total"></span>
+            </div>
+            <div class="progress" id="mc-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
+          </div>
+          </div>
+        </div>
+
         <div class="card" id="h3-card" hidden>
           <div class="card-title">H3 视频模型一键下载<span class="card-title-hint">按 Forge Neo H3 的模型表配齐，自动放进对应目录；断点续传、sha256 校验</span></div>
           <div class="hint" id="h3-hw"></div>
@@ -1193,6 +1225,7 @@
 <script src="js/launch.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/deploy.js"></script>
+<script src="js/catalog.js"></script>
 <script src="js/civitai.js"></script>
 <script src="js/models.js"></script>
 <script src="js/extensions.js"></script>

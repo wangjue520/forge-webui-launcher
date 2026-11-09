@@ -340,7 +340,7 @@
     launcher: "启动器设置",
     deploy: "环境部署",
     versions: "版本管理",
-    civitai: "模型下载 · Civitai / liblib",
+    civitai: "模型下载 · 常用模型 / Civitai / liblib",
     models: "模型管理",
     outputs: "输出管理",
     extensions: "常用插件",
