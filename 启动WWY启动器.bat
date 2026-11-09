@@ -74,6 +74,8 @@ set "VENV=%~dp0.venv"
 rem 引号直接包进变量：路径可能带空格，后面每次展开都得自带引号
 set VPY="%~dp0.venv\Scripts\python.exe"
 set "PIPLOG=%TEMP%\forge_launcher_pip.log"
+rem 首次部署前测速得到的 PyPI 源顺序（:speedtest 写，:pip_install_all 读）
+set "PYPI_ORDER=%TEMP%\forge_launcher_pypi_order.txt"
 set "PY="
 set "REBUILT="
 
@@ -81,6 +83,13 @@ if not exist "%REQ%" (
     echo.
     echo   [x] 找不到 requirements.txt，启动器文件不完整，请重新解压一份。
     goto :end_fail
+)
+
+rem ---------- 0.0 整个文件夹搬了位置（整合包 / 分发模式）：先把 .venv 指回自带的 python\ ----------
+rem venv 里记着建它时 Python 的绝对路径，换盘符 / 换目录后 .venv 会被当成失效、删掉重新联网装依赖。
+rem 自带的便携 Python 本身可以随便搬，改一下 .venv\pyvenv.cfg 就行（venv_relocate.py 只用标准库）。
+if exist "%~dp0python\python.exe" if exist "%~dp0.venv\pyvenv.cfg" (
+    "%~dp0python\python.exe" -I "%~dp0app\venv_relocate.py" "%~dp0." 2>nul
 )
 
 rem ---------- 0. 快速通道：.venv 已经能用 ----------
@@ -108,6 +117,10 @@ if exist "%~dp0python\python.exe" (
     set PY="%~dp0python\python.exe"
     goto :got_python
 )
+
+rem 要联网部署了：先测速，按最快的源下（所有源都很慢时会先问用户）
+call :speedtest github
+if "%SPEED_RC%"=="2" goto :user_cancel
 
 echo.
 echo   正在准备便携版 Python（只需下载一次，约 30MB）...
@@ -205,6 +218,7 @@ echo   [3/3] 正在安装依赖（一般十几秒，安装日志失败时才会显示）...
 echo.
 
 call :pip_install_all
+if errorlevel 3 goto :user_cancel
 if errorlevel 2 goto :local_fail
 if errorlevel 1 goto :all_failed
 goto :deps_ok
@@ -214,9 +228,14 @@ rem  :pip_install_all —— 按 requirements.txt 安装依赖，自动轮换下载源
 rem  按 IP 归属地决定镜像顺序：国内 -> 镜像优先；国外 -> 官方源优先。
 rem  检测不到时按国内处理（用户大多数在国内，且官方源始终排在最后兜底）。
 rem  额外的 pip 参数放在 %PIP_EXTRA% 里（比如修复时的 --force-reinstall）。
-rem  返回值：0 成功；1 所有源都失败（多半是网络）；2 本地环境问题，换源也没用
+rem  测过速（:speedtest）时改成按实测速度从快到慢逐个源装，测不了才按地区。
+rem  返回值：0 成功；1 所有源都失败（多半是网络）；2 本地环境问题，换源也没用；
+rem          3 测速提示里用户选了不部署
 rem ===================================================================
 :pip_install_all
+call :speedtest
+if "%SPEED_RC%"=="2" exit /b 3
+if exist "%PYPI_ORDER%" goto :order_ranked
 if not defined REGION_DONE call :detect_region
 
 if /i "%REGION%"=="CN" goto :order_cn
@@ -245,6 +264,48 @@ call :try_install "-i https://mirrors.aliyun.com/pypi/simple" "阿里云镜像"
 if errorlevel 2 exit /b 2
 if not errorlevel 1 exit /b 0
 exit /b 1
+
+:order_ranked
+set "PIP_RESULT="
+for /f "usebackq tokens=1,* delims=|" %%a in ("%PYPI_ORDER%") do call :try_ranked "%%a" "%%b"
+if "%PIP_RESULT%"=="ok" exit /b 0
+if "%PIP_RESULT%"=="local" exit /b 2
+exit /b 1
+
+:try_ranked
+if defined PIP_RESULT exit /b 0
+call :try_install "-i %~1" "%~2"
+if errorlevel 2 (
+    set "PIP_RESULT=local"
+    exit /b 0
+)
+if not errorlevel 1 set "PIP_RESULT=ok"
+exit /b 0
+
+rem ===================================================================
+rem  :speedtest [github] —— 首次部署前测一次各下载源的速度（speedtest_sources.ps1）
+rem  PyPI 源按速度排好写进 %PYPI_ORDER%，传 github 时连 GitHub 线路一起测（下便携 Python 用）。
+rem  所有源都很慢：提示开启或关闭梯子（代理）后重测；还慢就问
+rem  「预计部署时间过长，是否继续部署？（Y/N）」，选 N 时 SPEED_RC=2。
+rem  一次启动只测一次；测速本身出问题不挡部署（没有顺序文件就按地区选源）。
+rem ===================================================================
+:speedtest
+if defined SPEED_DONE exit /b 0
+set "SPEED_DONE=1"
+set "SPEED_RC=0"
+if exist "%PYPI_ORDER%" del /f /q "%PYPI_ORDER%" >nul 2>nul
+where powershell >nul 2>nul
+if errorlevel 1 exit /b 0
+set "SPEED_ARGS="
+if /i "%~1"=="github" set "SPEED_ARGS=-NeedGithub"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\speedtest_sources.ps1" -OutFile "%PYPI_ORDER%" %SPEED_ARGS%
+if errorlevel 2 set "SPEED_RC=2"
+exit /b 0
+
+:user_cancel
+echo.
+echo   已取消部署。网速好一些的时候再双击本文件就行（已经下好的部分会保留）。
+goto :end_fail
 
 :all_failed
 echo.
