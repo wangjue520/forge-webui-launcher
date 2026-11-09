@@ -1,6 +1,19 @@
 {
   "entries": [
     {
+      "version": "3.1.012",
+      "count": 190,
+      "date": "2026-11-09",
+      "title": "模型下载页新增「常用模型一键下载」：选模型、选版本和精度，主模型 + 文本编码器 + VAE 一次下好",
+      "items": [
+        "收录 23 个常用模型：Anima、WAI、NoobAI、Illustrious、Pony、Z-Image、Krea 2、MOSS-Image、Qwen-Image 2.1 / Qwen-Image / Qwen-Image-Edit、FLUX.1 / FLUX.2、ERNIE-Image、Wan 2.2、MiniMax H3、SDXL、SD1.5 等",
+        "每个模型可选版本（如 Anima 的 Aesthetic / Turbo / Base），每个文件可选精度：bf16、fp8、int8、GGUF Q8–Q2 等，默认按你的显卡、显存和内存挑好",
+        "文件自动放进对应文件夹：开了共享模型库放库里，没开按 ComfyUI / Forge 各自的目录放；已下载的显示「已下载」，下了一半的会续传",
+        "当前实例用不了的模型会提示；ComfyUI 选了 GGUF 但没装 ComfyUI-GGUF 插件也会提示",
+        "国内网络自动走 HF 镜像，一条线路出错自动换另一条接着续传，下完校验 sha256；卡片默认收起，点标题展开"
+      ]
+    },
+    {
       "version": "3.1.010",
       "count": 188,
       "date": "2026-11-09",

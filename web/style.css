@@ -1283,6 +1283,40 @@ textarea.ta-prompt {
 
 @media (prefers-reduced-motion: reduce) { .pm-live { animation: none !important; } }
 
+/* 模型下载页：常用模型一键下载（下面的文件行和 H3 卡片共用 .h3-row 那一套） */
+.mc-toggle { cursor: pointer; user-select: none; }
+.mc-fold { margin-left: auto; padding-left: 12px; font-size: 12px; font-weight: normal; color: var(--text-dim); white-space: nowrap; }
+.mc-toggle:hover .mc-fold { color: var(--ink); }
+.mc-collapsed .card-title { margin-bottom: 0; }
+.mc-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 10px; }
+.mc-bar .mc-groups { flex: 1; min-width: 0; }
+.mc-bar .mc-groups .chip { padding: 3px 12px; font-size: 12px; }
+.mc-bar input { width: 200px; padding: 5px 10px; font-size: 12.5px; }
+.mc-models { display: flex; flex-direction: column; gap: 8px; }
+.mc-group { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 4px 10px; align-items: start; }
+.mc-gtitle { font-size: 12px; color: var(--text-faint); padding-top: 4px; }
+.mc-chip { padding: 4px 12px; font-size: 12.5px; }
+.mc-chip.mc-off:not(.on) { opacity: .5; }
+.mc-detail { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mc-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; }
+.mc-name { font-size: 15px; }
+.mc-ui { font-size: 12px; color: var(--text-dim); }
+.mc-head .btn { margin-left: auto; }
+.mc-desc { font-size: 12.5px; color: var(--text-dim); line-height: 1.7; margin-top: 4px; }
+.mc-tips { margin: 2px 0 0; }
+.mc-version-row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.mc-version-row[hidden] { display: none; }
+.mc-version-row select { flex: 0 1 420px; min-width: 0; padding: 5px 8px; font-size: 12.5px; }
+.mc-label { font-size: 12.5px; color: var(--text-dim); }
+#mc-hw { margin: 8px 0 0; }
+.mc-one { font-size: 12.5px; color: var(--text-dim); width: 250px; }
+.mc-row.mc-unchecked .h3-size, .mc-row.mc-unchecked .h3-sub { opacity: .55; }
+.mc-issue { color: var(--warn); }
+@media (max-width: 720px) {
+  .mc-group { grid-template-columns: minmax(0, 1fr); }
+  .mc-one { grid-column: 1 / -1; margin-left: 25px; }
+}
+
 /* 模型下载页：H3 视频模型一键下载 */
 .h3-list { margin-top: 6px; }
 .h3-row {

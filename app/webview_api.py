@@ -55,6 +55,7 @@ import diagnose as dg
 import diagnose_llm as dl
 import version_manager as vm
 import h3_models as h3m
+import model_catalog as mc
 import amd_rocm
 import netspeed
 import lora_trainer as lt
@@ -574,6 +575,10 @@ class LauncherApi:
         # H3 视频模型一键下载
         self._h3_thread = None
         self._h3_cancel = False
+        # 常用模型一键下载（模型目录）
+        self._mc_thread = None
+        self._mc_cancel = False
+        self._mc_active = None          # 正在下载的 {model, version}，界面切回来时接着显示进度
 
         # 模型管理
         self._models_categories = []
@@ -4056,9 +4061,9 @@ def _h3_dirs(self, it):
     return dest, disp, out
 
 
-def _h3_relocate(self, found, dest, log):
+def _relocate_in_library(self, found, dest, log, tag="[H3]"):
     """
-    已下好的文件在共享库的另一个分类里（旧版放进了库的 checkpoints），挪到现在该在的
+    已下好的文件在共享库的另一个分类里（旧版把 DiT 放进了库的 checkpoints），挪到现在该在的
     diffusion_models。只挪库里的：实例自己目录里的 Neo 本来就读得到，不碰。
     挪不动（同名已存在 / 被占用）就原地用，返回实际路径。
     """
@@ -4074,14 +4079,14 @@ def _h3_relocate(self, found, dest, log):
     try:
         new = cd.move_with_sidecars(found, dest)
     except OSError as e:
-        log(f"[H3] {os.path.basename(found)} 想挪到模型库的「{os.path.basename(dest)}」但没挪成（{e}），"
+        log(f"{tag} {os.path.basename(found)} 想挪到模型库的「{os.path.basename(dest)}」但没挪成（{e}），"
             "先留在原处；停掉正在运行的实例后再点一次下载即可")
         return found
     if new:
-        log(f"[H3] {os.path.basename(found)} 原来在模型库的「{os.path.basename(os.path.dirname(found))}」里，"
+        log(f"{tag} {os.path.basename(found)} 原来在模型库的「{os.path.basename(os.path.dirname(found))}」里，"
             f"ComfyUI 读不到，已挪到「{os.path.basename(dest)}」")
         return new
-    log(f"[H3] {os.path.basename(found)} 应该放在模型库的「{os.path.basename(dest)}」，"
+    log(f"{tag} {os.path.basename(found)} 应该放在模型库的「{os.path.basename(dest)}」，"
         "但那里已有同名文件，先留在原处")
     return found
 
@@ -4164,137 +4169,335 @@ def _api_h3_models_download(self, selection):
         except h3m.H3ModelError as e:
             return {"ok": False, "error": str(e)}
         dest, disp, look = _h3_dirs(self, it)
-        plan.append({"id": it["id"], "label": it["label"], "repo": it["repo"], "path": path,
+        plan.append({"id": it["id"], "label": it["label"], "srcs": [{"hf": it["repo"], "path": path}],
                      "name": name, "size": size, "sha": None, "dest": dest, "where": disp,
-                     "look": look})
+                     "look": look, "tolerance": 0, "relocate": True})
     if not plan:
         return {"ok": False, "error": "没有勾选要下载的模型"}
     self._h3_cancel = False
-
-    def work():
-        import mirror_manager as mm
-        log = lambda t: self._emit("h3dl", "log", text=t + "\n")
-        item = lambda p, state, **kw: self._emit("h3dl", "item", id=p["id"], state=state, **kw)
-        failed, done_n, skipped = [], 0, 0
-        try:
-            use_mirror = mm.resolve_mode(self.cfg, log)
-            bases = h3m.base_order(use_mirror)
-            # 先查一次 HF 文件列表，拿最新大小和 sha256
-            for repo in dict.fromkeys(p["repo"] for p in plan):
-                if self._h3_cancel:
-                    raise cd.CivitaiError("下载已取消")
-                tree = h3m.fetch_tree(repo, bases)
-                if tree is None:
-                    log(f"[H3] 查不到 {repo} 的文件列表（网络不通？），先按已知大小下载，跳过哈希校验")
-                    continue
-                for p in plan:
-                    if p["repo"] == repo and p["path"] in tree:
-                        size, sha = tree[p["path"]]
-                        p["size"] = size or p["size"]
-                        p["sha"] = sha
-
-            todo = []
-            for p in plan:
-                found, size_ok = h3m.existing_file(p["look"], p["name"], p["size"])
-                if found and size_ok:
-                    skipped += 1
-                    found = _h3_relocate(self, found, p["dest"], log)
-                    log(f"[H3] 已存在，跳过：{p['name']}（{found}）")
-                    item(p, "ok")
-                    continue
-                if found:
-                    log(f"[H3] {p['name']} 已存在但大小不对（可能没下完或是旧版），重新下载覆盖")
-                p["need"] = max(0, p["size"] - h3m.partial_size(p["dest"], p["name"]))
-                todo.append(p)
-
-            # 磁盘空间：按所在磁盘汇总还要下载的量
-            by_disk = {}
-            for p in todo:
-                key = os.path.splitdrive(os.path.abspath(p["dest"]))[0].upper() or "/"
-                by_disk.setdefault(key, [p["dest"], 0])[1] += p["need"]
-            for key, (d, need) in by_disk.items():
-                free = _disk_free(d)
-                if free is not None and free < need + 2 * 1024 ** 3:
-                    raise cd.CivitaiError(
-                        f"{key or d} 剩余空间不够：还要下载 {need / 1024 ** 3:.1f} GB，"
-                        f"只剩 {free / 1024 ** 3:.1f} GB（另需留 2GB 余量）")
-
-            grand = sum(p["need"] for p in todo)
-            finished = 0
-            last_emit = [0.0]
-            for idx, p in enumerate(todo):
-                if self._h3_cancel:
-                    raise cd.CivitaiError("下载已取消")
-                item(p, "downloading")
-                log(f"[H3] ({idx + 1}/{len(todo)}) {p['name']} → {p['where']}"
-                    f"（{p['size'] / 1024 ** 3:.2f} GB）")
-                part0 = h3m.partial_size(p["dest"], p["name"])
-                if part0:
-                    log(f"[H3] 接着上次的 {part0 / 1024 ** 3:.2f} GB 续传（先核对已下载部分，大文件要等一会）")
-
-                def prog(d, t, p=p, idx=idx, part0=part0):
-                    now = time.monotonic()
-                    if now - last_emit[0] < 0.25 and d < t:
-                        return
-                    last_emit[0] = now
-                    self._emit("h3dl", "progress", id=p["id"], name=p["name"],
-                               index=idx + 1, count=len(todo),
-                               downloaded=d, total=t or p["size"],
-                               all_done=finished + max(0, d - part0), all_total=grand)
-
-                info = {"name": p["name"], "sizeKB": p["size"] // 1024,
-                        "hashes": {"SHA256": p["sha"]} if p["sha"] else {}}
-                result, err = None, None
-                for base in bases:
-                    if self._h3_cancel:
-                        break
-                    info["downloadUrl"] = h3m.file_url(base, p["repo"], p["path"])
-                    try:
-                        result = cd.download_file(info, p["dest"], progress_cb=prog,
-                                                  cancel_flag=lambda: self._h3_cancel)
-                        break
-                    except Exception as e:  # 网络错误 / 服务器报错：换下一个源接着续传
-                        err = e
-                        if self._h3_cancel:
-                            break
-                        host = base.split("//", 1)[-1]
-                        log(f"[H3] 从 {host} 下载出错：{e}；换另一个源继续（已下载部分会续传）")
-                if self._h3_cancel:
-                    raise cd.CivitaiError("下载已取消（已下载的部分保留，下次会接着下）")
-                finished += p["need"]
-                if result is None:
-                    failed.append(p["name"])
-                    item(p, "error", error=str(err))
-                    log(f"[H3] 失败：{p['name']}：{err}")
-                    continue
-                final, hash_ok = result
-                if hash_ok is False:
-                    failed.append(p["name"])
-                    item(p, "error", error="哈希校验未通过")
-                    log(f"[H3] 哈希校验未通过，文件已另存为 {final}，请删掉后重下")
-                    continue
-                done_n += 1
-                item(p, "ok")
-                log(f"[H3] 完成：{final}" + ("（sha256 校验通过）" if hash_ok else ""))
-
-            if failed:
-                self._emit("h3dl", "done", ok=False,
-                           error=f"{len(failed)} 个文件没下好：{'、'.join(failed)}（可以再点一次下载，会续传）")
-            else:
-                self._emit("h3dl", "done", ok=True, downloaded=done_n, skipped=skipped)
-        except cd.CivitaiError as e:
-            log(f"[H3] {e}")
-            self._emit("h3dl", "done", ok=False, cancelled=self._h3_cancel, error=str(e))
-        except Exception as e:
-            log(f"[H3] 出错：{e}")
-            self._emit("h3dl", "done", ok=False, error=f"下载失败：{e}")
-
-    self._h3_thread = self._spawn(work, name="h3-models")
+    self._h3_thread = self._spawn(
+        lambda: _batch_model_download(self, plan, "h3dl", "[H3]", lambda: self._h3_cancel), name="h3-models")
     return {"ok": True}
 
 
 def _api_h3_models_cancel(self):
     self._h3_cancel = True
+    return {"ok": True}
+
+
+def _batch_model_download(self, plan, scope, tag, cancelled):
+    """
+    H3 卡片和常用模型目录共用的批量下载（在后台线程里跑）：
+      先查一次 HF 文件列表拿最新大小和 sha256 → 已下好的跳过（库里放错分类的顺手挪对）→
+      按磁盘核对剩余空间 → 逐个下载（.part 断点续传、边下边算 sha256；一条线路出错换下一条接着续传）。
+    plan 每项：id、label、name、size、sha（可为 None）、srcs（[{hf, path}] / [{civitai}]）、dest、where、look、
+              tolerance（同名文件大小差多少以内算已下好）、relocate（是否把库里放错分类的挪过来）
+    事件都发在 scope 下：log / item(id, state[, error]) / progress / done
+    """
+    import mirror_manager as mm
+    log = lambda t: self._emit(scope, "log", text=t + "\n")
+    item = lambda p, state, **kw: self._emit(scope, "item", id=p["id"], state=state, **kw)
+    failed, done_n, skipped = [], 0, 0
+    try:
+        use_mirror = mm.resolve_mode(self.cfg, log)
+        bases = h3m.base_order(use_mirror)
+        api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
+        # 先查一次 HF 文件列表，拿最新大小和 sha256（目录里记的是生成目录那天的）
+        for repo in dict.fromkeys(s["hf"] for p in plan for s in p["srcs"] if s.get("hf")):
+            if cancelled():
+                raise cd.CivitaiError("下载已取消")
+            tree = h3m.fetch_tree(repo, bases)
+            if tree is None:
+                log(f"{tag} 查不到 {repo} 的文件列表（网络不通？），先按已知大小下载")
+                continue
+            for p in plan:
+                s = next((s for s in p["srcs"] if s.get("hf") == repo), None)
+                if s and s["path"] in tree:
+                    size, sha = tree[s["path"]]
+                    p["size"] = size or p["size"]
+                    p["sha"] = sha or p["sha"]
+
+        todo = []
+        for p in plan:
+            found, size_ok = mc.existing_file(p["look"], p["name"], p["size"], p.get("tolerance", 0))
+            if found and size_ok:
+                skipped += 1
+                if p.get("relocate"):
+                    found = _relocate_in_library(self, found, p["dest"], log, tag)
+                log(f"{tag} 已存在，跳过：{p['name']}（{found}）")
+                item(p, "ok")
+                continue
+            if found:
+                log(f"{tag} {p['name']} 已存在但大小不对（可能没下完或是旧版），重新下载覆盖")
+            p["need"] = max(0, p["size"] - mc.partial_size(p["dest"], p["name"]))
+            todo.append(p)
+
+        # 磁盘空间：按所在磁盘汇总还要下载的量
+        by_disk = {}
+        for p in todo:
+            key = os.path.splitdrive(os.path.abspath(p["dest"]))[0].upper() or "/"
+            by_disk.setdefault(key, [p["dest"], 0])[1] += p["need"]
+        for key, (d, need) in by_disk.items():
+            free = _disk_free(d)
+            if free is not None and free < need + 2 * 1024 ** 3:
+                raise cd.CivitaiError(
+                    f"{key or d} 剩余空间不够：还要下载 {need / 1024 ** 3:.1f} GB，"
+                    f"只剩 {free / 1024 ** 3:.1f} GB（另需留 2GB 余量）")
+
+        grand = sum(p["need"] for p in todo)
+        finished = 0
+        last_emit = [0.0]
+        for idx, p in enumerate(todo):
+            if cancelled():
+                raise cd.CivitaiError("下载已取消")
+            item(p, "downloading")
+            log(f"{tag} ({idx + 1}/{len(todo)}) {p['name']} → {p['where']}"
+                f"（{p['size'] / 1024 ** 3:.2f} GB）")
+            part0 = mc.partial_size(p["dest"], p["name"])
+            if part0:
+                log(f"{tag} 接着上次的 {part0 / 1024 ** 3:.2f} GB 续传（先核对已下载部分，大文件要等一会）")
+
+            def prog(d, t, p=p, idx=idx, part0=part0):
+                now = time.monotonic()
+                if now - last_emit[0] < 0.25 and d < t:
+                    return
+                last_emit[0] = now
+                self._emit(scope, "progress", id=p["id"], name=p["name"],
+                           index=idx + 1, count=len(todo),
+                           downloaded=d, total=t or p["size"],
+                           all_done=finished + max(0, d - part0), all_total=grand)
+
+            info = {"name": p["name"], "sizeKB": p["size"] // 1024,
+                    "hashes": {"SHA256": p["sha"]} if p["sha"] else {}}
+            result, err = None, "没有可用的下载地址"
+            for host, url, is_civitai in mc.source_urls({"src": p["srcs"]}, bases, use_mirror):
+                if cancelled():
+                    break
+                info["downloadUrl"] = url
+                try:
+                    result = cd.download_file(info, p["dest"], api_key if is_civitai else None,
+                                              progress_cb=prog, cancel_flag=cancelled)
+                    break
+                except Exception as e:  # 网络错误 / 服务器报错：换下一条线路接着续传
+                    err = e
+                    if cancelled():
+                        break
+                    log(f"{tag} 从 {host} 下载出错：{e}；换另一个源继续（已下载部分会续传）")
+            if cancelled():
+                raise cd.CivitaiError("下载已取消（已下载的部分保留，下次会接着下）")
+            finished += p["need"]
+            if result is None:
+                failed.append(p["name"])
+                item(p, "error", error=str(err))
+                log(f"{tag} 失败：{p['name']}：{err}")
+                continue
+            final, hash_ok = result
+            if hash_ok is False:
+                failed.append(p["name"])
+                item(p, "error", error="哈希校验未通过")
+                log(f"{tag} 哈希校验未通过，文件已另存为 {final}，请删掉后重下")
+                continue
+            done_n += 1
+            item(p, "ok")
+            log(f"{tag} 完成：{final}" + ("（sha256 校验通过）" if hash_ok else ""))
+
+        if failed:
+            self._emit(scope, "done", ok=False,
+                       error=f"{len(failed)} 个文件没下好：{'、'.join(failed)}（可以再点一次下载，会续传）")
+        else:
+            self._emit(scope, "done", ok=True, downloaded=done_n, skipped=skipped)
+    except cd.CivitaiError as e:
+        log(f"{tag} {e}")
+        self._emit(scope, "done", ok=False, cancelled=cancelled(), error=str(e))
+    except Exception as e:
+        log(f"{tag} 出错：{e}")
+        self._emit(scope, "done", ok=False, error=f"下载失败：{e}")
+
+
+# ============================================================
+# 常用模型一键下载（模型目录：app/model_catalog.json）
+# ============================================================
+
+# 模型角色 → 模型库 / 实例里可能放着它的分类（找「已经下过」用；DiT 旧版启动器放进过 checkpoints）
+_CATALOG_ROLE_KEYS = {
+    "DiffusionModel": ("diffusion_models", "checkpoints"), "Checkpoint": ("checkpoints",),
+    "TextEncoder": ("text_encoders",), "VAE": ("vae",), "LoRA": ("loras",),
+    "ControlNet": ("controlnet",), "Upscaler": ("upscale_models",), "Embedding": ("embeddings",),
+}
+
+_GPU_IDENTITY = None
+
+
+def _gpu_identity():
+    """第一块 NVIDIA 显卡的 {name, sm}（sm = 计算能力，如 8.6），查一次缓存；没有 N 卡返回 {}"""
+    global _GPU_IDENTITY
+    if _GPU_IDENTITY is not None:
+        return _GPU_IDENTITY
+    out = {}
+    exe = _find_nvidia_smi()
+    if exe:
+        # 老驱动的 nvidia-smi 不认 compute_cap，整条查询会失败：退回只查名字，按型号估架构
+        for fields in ("name,compute_cap", "name"):
+            try:
+                r = subprocess.run([exe, "--query-gpu=" + fields, "--format=csv,noheader"],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                   timeout=4, creationflags=_NO_WINDOW)
+            except (OSError, subprocess.SubprocessError):
+                break
+            lines = (r.stdout or "").strip().splitlines() if r.returncode == 0 else []
+            if not lines:
+                continue
+            parts = [x.strip() for x in lines[0].split(",")]
+            out["name"] = parts[0]
+            if len(parts) > 1:
+                try:
+                    out["sm"] = float(parts[1])
+                except ValueError:
+                    pass
+            break
+    if out.get("name") and not out.get("sm"):
+        out["sm"] = mc.sm_from_name(out["name"])
+    _GPU_IDENTITY = out
+    return out
+
+
+def _comfy_has_gguf(cfg):
+    """ComfyUI 实例装了 ComfyUI-GGUF 没有（文件夹名带 gguf 的都算，停用的 .disabled 不算）"""
+    comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
+    if not comfy_dir:
+        return False
+    nodes = os.path.join(comfy_dir, "custom_nodes")
+    try:
+        return any("gguf" in n.lower() and not n.lower().endswith(".disabled")
+                   and os.path.isdir(os.path.join(nodes, n)) for n in os.listdir(nodes))
+    except OSError:
+        return False
+
+
+def _catalog_ctx(self):
+    """(挑默认精度用的上下文, 显卡信息)"""
+    kind = mc.instance_kind(self.cfg, cm.is_a1111)
+    ram_gb, vram_gb = _h3_hw()
+    gpu = _gpu_identity()
+    gguf_node = _comfy_has_gguf(self.cfg) if kind == "comfyui" else True
+    return mc.make_ctx(kind, vram_gb, ram_gb, gpu.get("sm"), gguf_node), gpu
+
+
+def _catalog_dirs(self, role, folder=None):
+    """
+    目录里的一个组件 → (下载目录, 显示用位置, 找「已存在」时要看的目录)。
+    有角色的按 _role_dest 走（开了共享库放库里，ComfyUI / WebUI 各按自己的目录名）；
+    找「已存在」时当前实例、模型库、旧版放错的位置（库里的 checkpoints）都看一遍。
+    没有角色的（model_patches 这类库里没有的分类）放当前实例自己的目录。
+    """
+    if role:
+        dest, disp = _role_dest(self, role, folder)
+        keys = _CATALOG_ROLE_KEYS.get(role, ())
+    else:
+        dest, disp = _download_dest(self, folder) if folder else ("", "")
+        k = ml.library_key_for_folder(folder) if folder else None
+        keys = (k,) if k else ()
+    look = [dest] if dest else []
+    inst = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
+    look += [inst[k] for k in keys if k in inst]
+    root = _models_root(self.cfg)
+    if root and folder and not role:
+        look.append(os.path.join(root, *folder.split("/")))
+    lib = _library_path(self)
+    if lib:
+        for k in keys:
+            look += ml.library_dir_variants(lib, k)
+    out, seen = [], set()
+    for d in look:
+        n = os.path.normcase(os.path.abspath(d))
+        if n not in seen:
+            seen.add(n)
+            out.append(d)
+    return dest, disp, out
+
+
+def _api_model_catalog_info(self):
+    try:
+        ctx, gpu = _catalog_ctx(self)
+        out = mc.public_view(ctx)
+    except (OSError, ValueError, KeyError) as e:
+        return {"ok": False, "error": f"读不了模型目录（app/model_catalog.json）：{e}"}
+    root = (self.cfg.get("webui_root") or "").strip()
+    out.update(ok=True, kind=ctx["kind"], kind_label=mc.KIND_LABELS.get(ctx["kind"], ""),
+               gpu=gpu.get("name") or "", vram_gb=ctx["vram_gb"], ram_gb=ctx["ram_gb"],
+               blackwell=ctx["blackwell"], gguf_node=ctx["gguf_node"],
+               library=bool(_library_path(self)), has_root=bool(root and os.path.isdir(root)),
+               running=bool(self._mc_thread and self._mc_thread.is_alive()), active=self._mc_active)
+    return out
+
+
+def _api_model_catalog_state(self, model_id):
+    """某个模型所有版本 / 组件 / 精度的下载状态（已下载 / 下了一半 / 同名但大小不对）和保存位置"""
+    model = mc.find_model(model_id)
+    if not model:
+        return {"ok": False, "error": f"目录里没有这个模型：{model_id}"}
+    where, files, dirs = {}, {}, {}
+    main_dest = None
+    for v in model["versions"]:
+        for c in v["components"]:
+            key = (c.get("role"), c.get("folder"))
+            if key not in dirs:
+                dirs[key] = _catalog_dirs(self, c.get("role"), c.get("folder"))
+            dest, disp, look = dirs[key]
+            where[f"{v['id']}/{c['id']}"] = disp
+            if main_dest is None and c.get("role") in mc.MAIN_ROLES and dest and os.path.isabs(dest):
+                main_dest = dest
+            for o in c["options"]:
+                p, ok = mc.existing_file(look, o["file"], o["size"])
+                part = mc.partial_size(dest, o["file"]) if dest else 0
+                state = "ok" if p and ok else ("diff" if p else ("part" if part else ""))
+                files[f"{v['id']}/{c['id']}/{o['id']}"] = {"state": state, "part": part}
+    return {"ok": True, "where": where, "files": files,
+            "disk_free": _disk_free(main_dest) if main_dest else None}
+
+
+def _api_model_catalog_download(self, selection):
+    """selection：[{model, version, comp, option}]，每个组件选好的精度各一个"""
+    if self._mc_thread and self._mc_thread.is_alive():
+        return {"ok": False, "error": "已经在下载了：等这一批下完，或者先点「取消」"}
+    root = (self.cfg.get("webui_root") or "").strip()
+    if not _library_path(self) and not (root and os.path.isdir(root)):
+        return {"ok": False, "error": "还没有可用的实例目录：先在「一键启动」选好 WebUI / ComfyUI 的目录，"
+                                      "或者在「模型管理」开启共享模型库"}
+    plan, seen, active = [], set(), None
+    for sel in selection or []:
+        try:
+            model, ver, comp, opt = mc.resolve(sel.get("model"), sel.get("version"),
+                                               sel.get("comp"), sel.get("option"))
+        except mc.CatalogError as e:
+            return {"ok": False, "error": str(e)}
+        dest, disp, look = _catalog_dirs(self, comp.get("role"), comp.get("folder"))
+        if not dest or not os.path.isabs(dest):
+            return {"ok": False, "error": f"「{comp['label']}」不知道该放进哪个文件夹（当前实例目录不存在？）"}
+        key = (os.path.normcase(os.path.abspath(dest)), opt["file"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        active = active or {"model": model["id"], "version": ver["id"]}
+        plan.append({"id": comp["id"], "label": comp["label"], "name": opt["file"], "size": opt["size"],
+                     "sha": opt.get("sha256"), "srcs": opt["src"], "dest": dest, "where": disp, "look": look,
+                     "tolerance": mc.SIZE_TOLERANCE, "relocate": comp.get("role") == "DiffusionModel"})
+    if not plan:
+        return {"ok": False, "error": "没有勾选要下载的文件"}
+    self._mc_cancel = False
+    self._mc_active = active
+
+    def work():
+        try:
+            _batch_model_download(self, plan, "mcdl", "[模型下载]", lambda: self._mc_cancel)
+        finally:
+            self._mc_active = None
+    self._mc_thread = self._spawn(work, name="model-catalog")
+    return {"ok": True, "count": len(plan)}
+
+
+def _api_model_catalog_cancel(self):
+    self._mc_cancel = True
     return {"ok": True}
 
 
@@ -9723,6 +9926,10 @@ for _name, _fn in {
     "h3_models_info": _api_h3_models_info,
     "h3_models_download": _api_h3_models_download,
     "h3_models_cancel": _api_h3_models_cancel,
+    "model_catalog_info": _api_model_catalog_info,
+    "model_catalog_state": _api_model_catalog_state,
+    "model_catalog_download": _api_model_catalog_download,
+    "model_catalog_cancel": _api_model_catalog_cancel,
     "detect_installs": _api_detect_installs,
     "_fetch_liblib": _fetch_liblib,
     "_liblib_download_start": _liblib_download_start,
