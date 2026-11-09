@@ -162,6 +162,18 @@ class VenvRelocateTest(unittest.TestCase):
         self.assertFalse(venv_relocate.relocate(self.launcher))
         self.assertEqual(self._read(), before)
 
+    def test_copy_while_original_still_exists(self):
+        # 同一台电脑上复制了一份：原件的 python\ 还在，副本也要改指自己的 python\
+        orig = os.path.join(self.tmp, "原件")
+        os.makedirs(os.path.join(orig, "python"))
+        open(os.path.join(orig, "python", "python.exe"), "wb").close()
+        home = os.path.join(orig, "python")
+        with open(os.path.join(self.launcher, ".venv", "pyvenv.cfg"), "w", encoding="utf-8") as f:
+            f.write(f"home = {home}\nversion = 3.13.15\nexecutable = {home}\\python.exe\n"
+                    f"command = {home}\\python.exe -m venv {orig}\\.venv\n")
+        self.assertTrue(venv_relocate.relocate(self.launcher))
+        self.assertIn(f"home = {os.path.join(self.launcher, 'python')}\n", self._read())
+
     def test_no_venv(self):
         os.rmdir(os.path.join(self.launcher, ".venv"))
         self.assertFalse(venv_relocate.relocate(self.launcher))

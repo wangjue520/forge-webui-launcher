@@ -14,6 +14,25 @@ import os
 import sys
 
 
+def _built_by_other_copy(values):
+    """
+    pyvenv.cfg 是不是另一个位置的启动器用它自带的 python\\ 建的：
+    command 形如「<旧启动器>\\python\\python.exe -m venv <旧启动器>\\.venv」，home 是 <旧启动器>\\python。
+    同一台电脑上把启动器复制一份时，旧的那份还在，不能因为「旧 Python 还在」就不改——
+    否则副本一直借用原件的 Python，原件一删副本就坏。
+    """
+    home = os.path.normcase(os.path.normpath(values.get("home", "") or "."))
+    cmd = values.get("command", "")
+    marker = " -m venv "
+    if marker not in cmd:
+        return False
+    old_venv = cmd.split(marker, 1)[1].strip().strip('"')
+    if os.path.basename(os.path.normpath(old_venv)).lower() != ".venv":
+        return False
+    old_root = os.path.dirname(os.path.normpath(old_venv))
+    return home == os.path.normcase(os.path.join(old_root, "python"))
+
+
 def relocate(launcher_dir):
     """返回 True = 改过；False = 不需要改 / 没法改"""
     launcher_dir = os.path.abspath(launcher_dir)
@@ -33,8 +52,9 @@ def relocate(launcher_dir):
     home = values.get("home", "")
     if home and os.path.normcase(os.path.normpath(home)) == os.path.normcase(py_dir):
         return False
-    if home and os.path.isfile(os.path.join(home, "python.exe")):
-        # 原来那个 Python 还在（venv 本来就不是用自带 Python 建的）：别动
+    if home and os.path.isfile(os.path.join(home, "python.exe")) and not _built_by_other_copy(values):
+        # 原来那个 Python 还在，而且不是「别处一份启动器用它自带 Python 建的」
+        # （比如 bat 退回用系统 Python 建的 venv）：别动
         return False
     new = {"home": py_dir, "executable": py_exe,
            "command": f"{py_exe} -m venv {venv_dir}"}
