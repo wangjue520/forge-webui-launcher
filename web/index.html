@@ -423,7 +423,13 @@
             <span class="hint" id="s-mirror-status"></span>
             <button class="btn" id="s-mirror-redetect">重新检测网络环境</button>
           </div>
-          <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。反过来也一样：即使检测为能直连，装插件 / 节点时 GitHub 连不上也会自动切到国内加速（会同时测几个地址，挑最快的）；只有选「总是使用官方源」才只走直连。</div>
+          <div class="hint">开启后，便携版 Python/Git、Forge 源码、插件会走 GitHub 加速代理，torch 等 Python 依赖走清华 PyPI 镜像，WD14 模型走 HuggingFace 镜像。部署前会先花十几秒同时测一遍各个源的速度，按实测速度挑最快的（开着梯子时官方源往往更快，也会被选上）；所有源都很慢会提示开启或关闭梯子后重测。镜像只是优先尝试，失败会自动回退官方源，不会因为镜像挂了就装不上。反过来也一样：即使检测为能直连，装插件 / 节点时 GitHub 连不上也会自动切到国内加速（会同时测几个地址，挑最快的）；只有选「总是使用官方源」才只走直连。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">分发模式<span class="card-title-hint">把启动器连同 ComfyUI / WebUI 整个打包发给别人时打开</span></div>
+          <label class="chk-row"><input type="checkbox" id="s-dist-mode" data-cfg="dist_mode"><i></i><span>配置里的实例、ComfyUI、Python、Git 等路径存成相对启动器目录的相对路径</span></label>
+          <div class="hint">打开后整个文件夹换目录、换盘符、拷到别的电脑都能直接用：启动器按自己现在的位置找实例。只有放在启动器文件夹里面、或者和启动器文件夹并排放的目录（比如 <code>..\ComfyUI</code>）才会存成相对路径，别处的照旧存完整路径。拷到别的电脑时只清掉 Civitai / liblib / AI 诊断的 Key 和网络检测结果，实例保留。</div>
         </div>
 
         <div class="card">

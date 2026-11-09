@@ -97,9 +97,7 @@ def _github_candidates(url, cfg=None, log_cb=None):
     if cfg is not None:
         try:
             import mirror_manager as mm
-            if mm.resolve_github_mode(cfg, log_cb):
-                mirrored = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
-                urls = [u for u in mirrored if u != url] + [url]
+            urls = mm.github_candidates(url, cfg, log_cb)   # 有测速结果时按实测速度排
         except Exception:
             pass
     return urls
@@ -534,15 +532,7 @@ def download_file(url, dest_path, progress_cb=None, cancel_flag=None, cfg=None, 
     下载文件。cfg 传入时会根据镜像设置尝试 GitHub 加速代理，
     代理失败自动换下一个，全部失败则回退原始地址。
     """
-    urls = [url]
-    if cfg is not None:
-        try:
-            import mirror_manager as mm
-            if mm.resolve_github_mode(cfg, log_cb):
-                mirrored = [mm.github_url(url, True, i) for i in range(len(mm.GITHUB_PROXIES))]
-                urls = [u for u in mirrored if u != url] + [url]
-        except Exception:
-            pass
+    urls = _github_candidates(url, cfg, log_cb)
 
     last_error = None
     for round_no, (min_bps, stall_secs) in enumerate(_SPEED_ROUNDS):

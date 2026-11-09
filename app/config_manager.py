@@ -82,6 +82,10 @@ DEFAULT_CONFIG = {
     "mirror_mode": "auto",
     "mirror_detected": "",   # 自动检测结果缓存（cn / global），清空可重新检测
     "github_mirror_detected": "",  # GitHub 专用探测缓存（ok / blocked），跟上面那个是独立的两套判断
+    "source_rank": {},       # 部署前测速的结果（source_speed），有新鲜结果时按实测速度选源
+    # 分发模式：配置里的实例 / Python / Git 等路径存成相对启动器目录的相对路径，
+    # 整个文件夹打包发给别人、换目录或换盘符都能直接用（见 to_portable_path）
+    "dist_mode": False,
     # 手动网络代理（Clash 等本机代理的 HTTP 端口），全局生效，见 proxy_manager
     "proxy_enabled": False,
     "proxy_url": "",
@@ -466,6 +470,8 @@ def load_config():
             loaded = True
         except Exception:
             pass
+    # 相对路径一律按启动器目录换算成绝对路径（分发模式存的就是相对路径），内存里的代码照旧只见绝对路径
+    resolve_portable_paths(cfg)
     old_version = cfg.get("config_version", 0)
     if migrate_config(cfg):
         if loaded and old_version < CONFIG_VERSION:
@@ -491,8 +497,101 @@ def load_config():
 
 # 顶层里属于「这台电脑」或「这个人」的键（实例里的路径另外处理）
 _MACHINE_KEYS = ("model_library_path", "civitai_api_key", "liblib_token", "diag_llm_api_key", "caption_api_key",
-                 "mirror_detected", "github_mirror_detected")
+                 "mirror_detected", "github_mirror_detected", "source_rank")
 _PATH_SUFFIXES = ("_dir", "_path", "_root", "_dirs")
+# 分发模式换电脑时也要清掉的：原主人的 Key / 登录凭证，和原电脑的网络检测结果
+_SECRET_KEYS = ("civitai_api_key", "liblib_token", "diag_llm_api_key", "caption_api_key",
+                "mirror_detected", "github_mirror_detected", "source_rank")
+# 实例里存路径的键
+_INSTANCE_PATH_KEYS = ("webui_root", "custom_python_path", "custom_git_path")
+
+
+# ============================================================
+# 分发模式：路径存成相对启动器目录的相对路径
+# ============================================================
+# 整合包是「启动器 + ComfyUI」整个文件夹打包的，解压到哪个盘、哪个目录都得能用。
+# 存盘时把包里的路径换成相对启动器目录的相对路径，读配置时再按启动器现在的位置换算回来。
+# 只换「包里」的路径：启动器目录里面的，或和启动器文件夹并排放的（..\ComfyUI 这种，
+# 整合包常见的摆法）；再往外的（..\..\别的东西、别的盘）不是包的一部分，照旧存绝对路径。
+
+LAUNCHER_DIR = os.path.dirname(CONFIG_PATH)
+
+
+def _is_path_key(k):
+    return k in _INSTANCE_PATH_KEYS or k.endswith(_PATH_SUFFIXES)
+
+
+def to_portable_path(p, base=None):
+    """绝对路径 → 相对 base（默认启动器目录）的相对路径；不在包里的原样返回"""
+    if not isinstance(p, str):
+        return p
+    raw = p.strip().strip('"')
+    if not raw or not os.path.isabs(raw):
+        return p
+    base = base or LAUNCHER_DIR
+    try:
+        rel = os.path.relpath(os.path.normpath(raw), os.path.normpath(base))
+    except ValueError:          # 不在同一个盘
+        return p
+    parts = rel.replace("/", "\\").split("\\")
+    ups = 0
+    while ups < len(parts) and parts[ups] == "..":
+        ups += 1
+    if ups > 1 or (ups == 1 and len(parts) == 1):
+        return p                # 包外面的路径（.. 只能出现一次，且后面得跟着名字）
+    return rel
+
+
+def from_portable_path(p, base=None):
+    """相对路径 → 按 base（默认启动器目录）换算的绝对路径；绝对路径 / 空值原样返回"""
+    if not isinstance(p, str):
+        return p
+    raw = p.strip().strip('"')
+    if not raw or os.path.isabs(raw) or "://" in raw:
+        return p
+    if re.match(r"^[A-Za-z]:", raw):   # 「C:foo」这种盘符相对路径，不认
+        return p
+    return os.path.normpath(os.path.join(base or LAUNCHER_DIR, raw))
+
+
+def _map_paths(cfg, fn):
+    """对配置里所有路径类的值（顶层 + 每个实例）执行 fn，原地修改"""
+    def conv(v):
+        if isinstance(v, str):
+            return fn(v)
+        if isinstance(v, list):
+            return [fn(x) if isinstance(x, str) else x for x in v]
+        return v
+    for k, v in list(cfg.items()):
+        if not k.startswith("_") and _is_path_key(k) and isinstance(v, (str, list)):
+            cfg[k] = conv(v)
+    for inst in cfg.get("instances") or []:
+        if isinstance(inst, dict):
+            for k in _INSTANCE_PATH_KEYS:
+                if isinstance(inst.get(k), str):
+                    inst[k] = conv(inst[k])
+
+
+def resolve_portable_paths(cfg, base=None):
+    _map_paths(cfg, lambda v: from_portable_path(v, base))
+
+
+def portable_copy(cfg, base=None):
+    """存盘用的副本：路径换成相对路径（只在分发模式下调用）"""
+    import copy
+    out = copy.deepcopy({k: v for k, v in cfg.items() if not k.startswith("_")})
+    _map_paths(out, lambda v: to_portable_path(v, base))
+    return out
+
+
+def _reset_for_dist(cfg):
+    """分发模式下读到别的电脑写的配置：实例和包里的路径都保留，只清原主人的 Key 和网络检测结果"""
+    for k in _SECRET_KEYS:
+        cfg[k] = DEFAULT_CONFIG.get(k, "")
+    lib = (cfg.get("model_library_path") or "").strip()
+    if lib and not os.path.isdir(lib):       # 包外面的模型库在这台电脑上没有
+        cfg["model_library_path"] = ""
+        cfg["model_library_enabled"] = False
 
 
 def machine_id():
@@ -542,8 +641,13 @@ def adapt_to_machine(cfg, loaded):
     saved = cfg.get("machine_id") or ""
     changed = False
     if loaded and saved and saved != mid:
-        _reset_machine_specific(cfg)
-        cfg["_new_machine"] = True
+        if cfg.get("dist_mode"):
+            # 分发模式：整合包本来就是给别的电脑用的，路径已按启动器现在的位置换算好，不清实例
+            _reset_for_dist(cfg)
+            cfg["_dist_moved"] = True
+        else:
+            _reset_machine_specific(cfg)
+            cfg["_new_machine"] = True
         changed = True
     if saved != mid:
         cfg["machine_id"] = mid
@@ -592,9 +696,10 @@ def save_config(cfg):
     # 先写临时文件再原子替换：直接 "w" 打开会先截断原文件，
     # 写入中断（断电/磁盘满/杀软）就留下一份空配置，下次启动回到默认
     tmp_path = CONFIG_PATH + ".tmp"
+    data = portable_copy(cfg) if cfg.get("dist_mode") else \
+        {k: v for k, v in cfg.items() if not k.startswith("_")}
     with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump({k: v for k, v in cfg.items() if not k.startswith("_")},
-                  f, ensure_ascii=False, indent=2)
+        json.dump(data, f, ensure_ascii=False, indent=2)
     os.replace(tmp_path, CONFIG_PATH)
 
 
@@ -915,7 +1020,7 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
     try:
         import mirror_manager as mm
         if mm.resolve_mode(cfg):
-            overrides.update(mm.pip_env_overrides(True))
+            overrides.update(mm.pip_env_overrides(True, cfg))
             # HuggingFace 模型下载也要走镜像——否则部署成功后的首次运行
             # 才撞墙（CLIP/VAE/模型下载超时），体验最差
             overrides["HF_ENDPOINT"] = mm.HF_MIRROR
@@ -929,7 +1034,7 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
             # 不插手——用户显式配置优先级最高。
             if "TORCH_COMMAND" not in os.environ and "TORCH_INDEX_URL" not in os.environ \
                     and cfg.get("gpu_backend") != "rocm":
-                torch_mirror = mm.forge_torch_mirror_index(root_dir)
+                torch_mirror = mm.forge_torch_mirror_index(root_dir, cfg)
                 if torch_mirror:
                     overrides["TORCH_INDEX_URL"] = torch_mirror
     except Exception:
@@ -1306,7 +1411,7 @@ def build_comfy_env(cfg, root_dir):
     try:
         import mirror_manager as mm
         if mm.resolve_mode(cfg):
-            env.update(mm.pip_env_overrides(True))
+            env.update(mm.pip_env_overrides(True, cfg))
             env["HF_ENDPOINT"] = mm.HF_MIRROR
     except Exception:
         pass

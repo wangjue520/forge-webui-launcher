@@ -79,6 +79,36 @@ GITHUB_PROXIES = [
 ]
 
 
+# ---- 部署前测速的结果（source_speed.run 写进 cfg["source_rank"]）----
+# 有新鲜的测速结果时，「用不用镜像」「先试哪个」都按实测速度来，不再按地区猜。
+# 测速只代表那一刻的网络，放久了不作数，过期后退回原来的地区检测。
+SOURCE_RANK_TTL = 12 * 3600
+
+
+def speed_rank(cfg, group):
+    """某一类源的测速排名（从快到慢的 [{"id","name","bps"}]）；没测过 / 过期 / 全不通返回 None"""
+    r = (cfg or {}).get("source_rank")
+    if not isinstance(r, dict):
+        return None
+    try:
+        if time.time() - float(r.get("time") or 0) > SOURCE_RANK_TTL:
+            return None
+    except (TypeError, ValueError):
+        return None
+    items = r.get(group)
+    if not isinstance(items, list) or not any(isinstance(x, dict) and (x.get("bps") or 0) > 0
+                                              for x in items):
+        return None
+    return sorted((x for x in items if isinstance(x, dict)), key=lambda x: -(x.get("bps") or 0))
+
+
+def _order_by_rank(ids, rank):
+    """按测速从快到慢排 ids；没测到 / 不通的排在后面，保持原顺序"""
+    speed = {x.get("id"): x.get("bps") or 0 for x in rank or []}
+    alive = sorted((i for i in ids if speed.get(i, 0) > 0), key=lambda i: -speed[i])
+    return alive + [i for i in ids if i not in alive]
+
+
 def _probe(url):
     """返回响应耗时（秒），不可达返回 None"""
     start = time.time()
@@ -153,6 +183,10 @@ def resolve_mode(cfg, log_cb=None):
     if mode == "never":
         return False
 
+    rank = speed_rank(cfg, "pypi")
+    if rank:
+        return rank[0].get("id") != ""      # 测速最快的是国内镜像就用镜像（id 空串 = 官方源）
+
     cached = cfg.get("mirror_detected")
     if cached in ("cn", "global"):
         return cached == "cn"
@@ -187,6 +221,10 @@ def resolve_github_mode(cfg, log_cb=None):
         return True
     if mode == "never":
         return False
+
+    rank = speed_rank(cfg, "github")
+    if rank:
+        return rank[0].get("id") != ""      # 测速最快的是加速代理就走代理（id 空串 = 直连）
 
     cached = cfg.get("github_mirror_detected")
     if cached in ("blocked", "ok"):
@@ -249,6 +287,74 @@ def github_url(url, use_mirror, proxy_index=0):
     return f"{GITHUB_PROXIES[proxy_index]}/{url}"
 
 
+def pypi_mirror_order(cfg):
+    """PYPI_MIRRORS 的下标，按测速从快到慢（没测过就是原顺序）"""
+    ids = [u for _n, u in PYPI_MIRRORS]
+    order = _order_by_rank(ids, speed_rank(cfg, "pypi"))
+    return [ids.index(u) for u in order]
+
+
+def pypi_argsets(cfg, log_cb=None):
+    """
+    pip 的镜像参数组（按顺序轮换用，调用方最后自己补官方源 []）。
+    不需要镜像（官方最快 / 国外 / 总是用官方源）返回空列表。
+    """
+    if not resolve_mode(cfg, log_cb):
+        return []
+    return [pip_index_args(True, i) for i in pypi_mirror_order(cfg)]
+
+
+def fastest_pypi_index(cfg):
+    """测速最快的国内 PyPI 镜像地址（没测过就是第一个）"""
+    return PYPI_MIRRORS[pypi_mirror_order(cfg)[0]][1]
+
+
+def github_proxy_order(cfg):
+    """GITHUB_PROXIES 的下标，按测速从快到慢（没测过就是原顺序）"""
+    return [GITHUB_PROXIES.index(p) for p in _order_by_rank(list(GITHUB_PROXIES), speed_rank(cfg, "github"))]
+
+
+def github_route_order(cfg, log_cb=None, fallback=False):
+    """
+    访问 GitHub 的尝试顺序：[加速代理前缀 或 ""（直连）]。
+    有测速结果：按实测速度排，直连也参与排名，连不上的放最后兜底；
+    没有：老规则——需要加速时代理在前、直连兜底；不需要时只直连（fallback=True 再补上代理兜底）。
+    """
+    if cfg is None or cfg.get("mirror_mode") == "never":
+        return [""]
+    rank = speed_rank(cfg, "github")
+    if rank and cfg.get("mirror_mode") != "always":
+        return _order_by_rank([""] + list(GITHUB_PROXIES), rank)
+    proxies = [GITHUB_PROXIES[i] for i in github_proxy_order(cfg)]
+    if resolve_github_mode(cfg, log_cb):
+        return proxies + [""]
+    return [""] + proxies if fallback else [""]
+
+
+def github_candidates(url, cfg, log_cb=None):
+    """GitHub 地址的候选列表（逐个试），顺序见 github_route_order；不是 GitHub 地址原样返回"""
+    out = []
+    for p in github_route_order(cfg, log_cb):
+        u = url if p == "" else github_url(url, True, GITHUB_PROXIES.index(p))
+        if u not in out:
+            out.append(u)
+    return out
+
+
+def torch_bases(cfg, log_cb=None):
+    """torch 索引基址（不带 cuda tag）的尝试顺序；官方源永远在候选里"""
+    if cfg is None or cfg.get("mirror_mode") == "never":
+        return [PYTORCH_OFFICIAL_WHL]
+    rank = speed_rank(cfg, "torch")
+    ids = list(PYTORCH_MIRROR_BASES) + [PYTORCH_OFFICIAL_WHL]
+    if rank and cfg.get("mirror_mode") != "always":
+        return _order_by_rank(ids, rank)
+    if resolve_mode(cfg, log_cb):
+        mirrors = _order_by_rank(list(PYTORCH_MIRROR_BASES), rank) if rank else list(PYTORCH_MIRROR_BASES)
+        return mirrors + [PYTORCH_OFFICIAL_WHL]
+    return [PYTORCH_OFFICIAL_WHL]
+
+
 def huggingface_url(url, use_mirror):
     """把 huggingface.co 换成国内镜像域名"""
     if not use_mirror:
@@ -265,7 +371,7 @@ _LAUNCH_UTILS_INDEX_RE = re.compile(
 _CUDA_TAG_RE = re.compile(r'^(cu[0-9]+|cpu)$')
 
 
-def forge_torch_mirror_index(root_dir):
+def forge_torch_mirror_index(root_dir, cfg=None):
     """
     读取 <root>/modules/launch_utils.py，提取 Forge 默认 TORCH_INDEX_URL 里的
     cuda tag，返回对应的国内镜像索引地址；读不到/不是官方 pytorch 索引就返回
@@ -292,10 +398,17 @@ def forge_torch_mirror_index(root_dir):
     tag = default_url[len(PYTORCH_OFFICIAL_WHL) + 1:].strip("/")
     if not _CUDA_TAG_RE.match(tag):
         return None
-    return f"{PYTORCH_MIRROR_BASES[0]}/{tag}"
+    base = PYTORCH_MIRROR_BASES[0]
+    if cfg is not None:
+        rank = speed_rank(cfg, "torch")
+        if rank:
+            if rank[0].get("id") == PYTORCH_OFFICIAL_WHL:
+                return None        # 测速是官方 torch 源最快：不改，Forge 用它默认的官方索引
+            base = _order_by_rank(list(PYTORCH_MIRROR_BASES), rank)[0]
+    return f"{base}/{tag}"
 
 
-def pip_env_overrides(use_mirror):
+def pip_env_overrides(use_mirror, cfg=None):
     """
     生成注入给 webui.bat 子进程的环境变量，让 Forge 内部自己调用的 pip
     也走镜像——这是最关键的一环：torch 等几个 GB 的包是 Forge 的 launch.py
@@ -307,7 +420,7 @@ def pip_env_overrides(use_mirror):
     """
     if not use_mirror:
         return {}
-    _name, index = PYPI_MIRRORS[0]
+    index = fastest_pypi_index(cfg) if cfg is not None else PYPI_MIRRORS[0][1]
     return {
         "PIP_INDEX_URL": index,
         # 断点续传和超时放宽，2GB 级别的包在国内网络下很容易触发默认超时

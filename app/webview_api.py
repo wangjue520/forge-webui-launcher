@@ -1130,6 +1130,90 @@ class LauncherApiDeployMixin:  # 仅为阅读分节，实际方法都挂在 Laun
     pass
 
 
+def _deploy_speedtest(self, plan, log, torch_tag=None, groups=("github", "pypi", "torch")):
+    """
+    部署开始前测一遍各下载源的速度，后面每一步都按实测速度选最快的源。
+    所有源都很慢（按最快的源估算，光下载就要超过 1 小时）：
+      1. 先提示开 / 关梯子（代理）后重新测速——开着梯子的国内镜像常常更慢，没开的 GitHub 直连常常不通；
+      2. 重测还慢（或用户不想动梯子）：「预计部署时间过长，是否继续部署？（Y/N）」，
+         选 Y 就照常慢慢部署，选 N 取消。不会直接报错拒绝。
+    测速本身出错不影响部署（退回原来按地区选源）。
+    """
+    import source_speed as ss
+    cancelled = self._deploy_cancel.is_set
+    lg = lambda m: log(m + "\n")
+
+    def measure():
+        lg("[测速] 正在测各下载源的速度（十几秒），之后自动选最快的 ...")
+        rank = ss.run(self._deploy_cfg, groups=groups, torch_tag=torch_tag, log=lg, cancelled=cancelled)
+        if cancelled():
+            raise _DeployCancelled()
+        ss.store(self._deploy_cfg, rank)
+        with self._cfg_lock:      # 部署完装插件等也按这次测速选源
+            ss.store(self.cfg, rank)
+            try:
+                cm.save_config(self.cfg)
+            except Exception:
+                pass
+        est = ss.estimate_seconds(rank, plan)
+        lg(f"[测速] 按最快的源估算，下载约需 {ss.fmt_duration(est)}")
+        return rank
+
+    try:
+        rank = measure()
+    except _DeployCancelled:
+        raise
+    except Exception as e:
+        lg(f"[测速] 测速出错，按原来的规则选源：{e}")
+        return
+    if not ss.is_slow(rank, plan):
+        return
+
+    def body(rank, tail):
+        return "\n".join(ss.summary_lines(rank)) + \
+            f"\n\n按现在的速度，光下载就要约 {ss.fmt_duration(ss.estimate_seconds(rank, plan))}。\n\n" + tail
+
+    try:
+        import urllib.request
+        px = urllib.request.getproxies()      # 环境变量 + Windows 系统代理（启动器设置里的代理也写进了环境变量）
+        proxy_on = bool(px.get("https") or px.get("http"))
+    except Exception:
+        proxy_on = False
+    tip = ("检测到开着代理（梯子）：可以试试先关掉梯子（国内镜像走梯子常常更慢）"
+           if proxy_on else "可以试试开启梯子（代理）；如果梯子开的是 TUN / 虚拟网卡模式，也可以关掉试试")
+    lg("[测速] 所有下载源都很慢")
+    choice = self._ask(
+        "deploy", "所有下载源都很慢",
+        body(rank, tip + "，切换好后点「重新测速」。\n"
+                         "梯子开着或关着都试过了，就点「跳过」。"),
+        [{"id": "retest", "label": "重新测速", "kind": "primary"},
+         {"id": "skip", "label": "跳过", "kind": "normal"},
+         {"id": "cancel", "label": "取消部署", "kind": "danger"}],
+        cancel_event=self._deploy_cancel)
+    if choice in (None, "cancel"):
+        raise _DeployCancelled()
+    if choice == "retest":
+        try:
+            rank = measure()
+        except _DeployCancelled:
+            raise
+        except Exception as e:
+            lg(f"[测速] 重新测速出错：{e}")
+        if not ss.is_slow(rank, plan):
+            lg("[测速] 重新测速后速度正常，继续部署")
+            return
+    choice = self._ask(
+        "deploy", "预计部署时间过长",
+        body(rank, "预计部署时间过长，是否继续部署？（Y/N）\n"
+                   "选「是」会照常部署，只是要多等一会儿，中途断了会自动换源重试。"),
+        [{"id": "yes", "label": "是（Y），继续部署", "kind": "primary"},
+         {"id": "no", "label": "否（N），取消", "kind": "danger"}],
+        cancel_event=self._deploy_cancel)
+    if choice != "yes":
+        raise _DeployCancelled()
+    lg("[测速] 网速较慢，按用户选择继续部署（会慢一些，请耐心等待）")
+
+
 # ============================================================
 # 环境部署
 # ============================================================
@@ -1368,6 +1452,10 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
                 pass
             return e
         _drop_broken_bundled_git(target, log)
+        # 先测速，后面每一步都按实测速度选源（A 卡的 torch 不走这几个源，不测 torch）
+        _deploy_speedtest(self, "forge", log,
+                          groups=("github", "pypi") if self._deploy_cfg.get("gpu_backend") == "rocm"
+                          else ("github", "pypi", "torch"))
         deploy_env = make_env()
 
         bundled_python = os.path.join(target, "python", "python.exe")
@@ -1421,9 +1509,8 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
             repo_candidates = [repo]
             try:
                 import mirror_manager as mm
-                if mm.resolve_github_mode(self._deploy_cfg, log):
-                    mirrored = [mm.github_url(repo, True, i) for i in range(len(mm.GITHUB_PROXIES))]
-                    repo_candidates = [u for u in mirrored if u != repo] + [repo]
+                repo_candidates = mm.github_candidates(repo, self._deploy_cfg, log)   # 有测速结果按实测速度排
+                if repo_candidates[0] != repo:
                     log(f"[网络] 使用 GitHub 加速（{len(repo_candidates)} 个候选地址，失败自动切换）\n")
             except Exception:
                 pass
@@ -2763,9 +2850,7 @@ def _comfy_update_existing(self, target, git_exe, env, log, dcfg):
     candidates = [COMFY_REPO]
     try:
         import mirror_manager as mm
-        if mm.resolve_github_mode(dcfg, log):
-            mirrored = [mm.github_url(COMFY_REPO, True, i) for i in range(len(mm.GITHUB_PROXIES))]
-            candidates = [u for u in mirrored if u != COMFY_REPO] + [COMFY_REPO]
+        candidates = mm.github_candidates(COMFY_REPO, dcfg, log)   # 有测速结果按实测速度排
     except Exception:
         pass
     parent = os.path.dirname(os.path.abspath(target)) or "."
@@ -2834,6 +2919,12 @@ def _deploy_flow_comfy(self, target, use_portable):
         need_python = not os.path.exists(bundled_python) and (use_portable or not has_sys_python)
         need_git = not os.path.exists(bundled_git) and (use_portable or not has_sys_git)
 
+        # ---- 0. 测速：后面每一步都按实测速度选最快的源 ----
+        rocm = amd_rocm.is_rocm(dcfg)
+        _deploy_speedtest(self, "comfyui", log,
+                          torch_tag=None if rocm else _pick_comfy_torch_tag(lambda m: None),
+                          groups=("github", "pypi") if rocm else ("github", "pypi", "torch"))
+
         # ---- 1. 便携 Python / Git ----
         if need_python or need_git:
             log(f"[部署] 准备便携环境 (Python: {'需要' if need_python else '跳过'}, "
@@ -2855,9 +2946,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             candidates = [COMFY_REPO]
             try:
                 import mirror_manager as mm
-                if mm.resolve_github_mode(dcfg, log):
-                    mirrored = [mm.github_url(COMFY_REPO, True, i) for i in range(len(mm.GITHUB_PROXIES))]
-                    candidates = [u for u in mirrored if u != COMFY_REPO] + [COMFY_REPO]
+                candidates = mm.github_candidates(COMFY_REPO, dcfg, log)   # 有测速结果按实测速度排
             except Exception:
                 pass
             parent = os.path.dirname(os.path.abspath(target)) or "."
@@ -2916,12 +3005,10 @@ def _deploy_flow_comfy(self, target, use_portable):
         torch_indexes = [f"{mm_official()}/{torch_tag}"]
         try:
             import mirror_manager as mm
-            if mm.resolve_mode(dcfg, log):
-                # 全部镜像都进候选（按顺序轮换，官方源兜底）：单个镜像缺包/
-                # 同步延迟/限速是国内依赖装不上的最常见原因，只试一个太脆
-                pip_mirror_argsets = [mm.pip_index_args(True, i)
-                                      for i in range(len(mm.PYPI_MIRRORS))]
-                torch_indexes = [f"{b}/{torch_tag}" for b in mm.PYTORCH_MIRROR_BASES] + torch_indexes
+            # 全部镜像都进候选（按测速从快到慢轮换，官方源兜底）：单个镜像缺包/
+            # 同步延迟/限速是国内依赖装不上的最常见原因，只试一个太脆
+            pip_mirror_argsets = mm.pypi_argsets(dcfg, log)
+            torch_indexes = [f"{b}/{torch_tag}" for b in mm.torch_bases(dcfg, log)]
         except Exception:
             pass
 
@@ -3455,8 +3542,7 @@ def _install_cuda_torch_comfy(self, py, cwd, log, env, cfg):
     indexes = [f"{mm_official()}/{tag}"]
     try:
         import mirror_manager as mm
-        if mm.resolve_mode(cfg, log):
-            indexes = [f"{b}/{tag}" for b in mm.PYTORCH_MIRROR_BASES] + indexes
+        indexes = [f"{b}/{tag}" for b in mm.torch_bases(cfg, log)]   # 有测速结果按实测速度排
     except Exception:
         pass
     for idx in indexes:
@@ -5708,25 +5794,21 @@ def _gh_sources(cfg, log=None):
       能直连（包括开了代理）       → 直连在前，国内加速兜底
     最后这条以前只试直连：「能直连」只是某一次探测的结论，还永久缓存，
     之后真去 clone 时被墙 / 限速很常见，直连一失败就装不上了。
+    部署前测过速时按实测速度排（直连也参与排名），见 mirror_manager.github_route_order。
     """
     try:
         import mirror_manager as mm
-        if cfg.get("mirror_mode") == "never":
-            return [""]
-        mirrors = vm.net_sources(mm.GITHUB_PROXIES)[:-1]
-        if mm.resolve_github_mode(cfg, log):
-            return mirrors + [""]
-        return [""] + mirrors
+        return [vm.net_sources([p])[0] if p else ""
+                for p in mm.github_route_order(cfg, log, fallback=True)]
     except Exception:
         return [""]
 
 
 def _pip_mirror_argsets(cfg, log=None):
-    """国内网络时返回全部 PyPI 镜像的参数组列表（按顺序轮换用），国外返回空"""
+    """要走镜像时返回全部 PyPI 镜像的参数组列表（按测速从快到慢轮换用），官方源最快 / 国外返回空"""
     try:
         import mirror_manager as mm
-        if mm.resolve_mode(cfg, log):
-            return [mm.pip_index_args(True, i) for i in range(len(mm.PYPI_MIRRORS))]
+        return mm.pypi_argsets(cfg, log)
     except Exception:
         pass
     return []
