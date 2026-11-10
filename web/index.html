@@ -9,73 +9,12 @@
 <link rel="stylesheet" href="splash.css">
 <link rel="stylesheet" href="themes/vector-scene.css">
 <link rel="stylesheet" href="themes/bauform-base.css">
+<link rel="stylesheet" href="themes/endfield-splash.css">
 </head>
 <body>
 
-<!-- 开屏动画 v3（明日方舟：终末地风格 —— 浅灰工业终端 / 等高线地形 / 轨道环 / 柠檬黄擦除）
-     时间轴见 js/splash.js；样式独立在 splash.css -->
-<div id="splash">
-  <div class="sp-power"><i class="sp-dot"></i><i class="sp-hair"></i></div>
-  <div class="sp-scene">
-    <canvas class="sp-topo"></canvas>
-    <div class="sp-grid"></div>
-    <div class="sp-ruler sp-ruler-top"></div>
-    <div class="sp-ruler sp-ruler-left"></div>
-
-    <svg class="sp-orbit" viewBox="0 0 600 600" aria-hidden="true">
-      <g class="sp-orb-ticks"><circle cx="300" cy="300" r="262"/></g>
-      <circle class="sp-orb-main" cx="300" cy="300" r="236"/>
-      <circle class="sp-orb-dash" cx="300" cy="300" r="176"/>
-      <circle class="sp-orb-inner" cx="300" cy="300" r="96"/>
-      <g class="sp-orb-arc"><circle cx="300" cy="300" r="236"/><rect x="530" y="294" width="12" height="12"/></g>
-      <g class="sp-orb-cross"><path d="M300 30v80M300 490v80M30 300h80M490 300h80"/></g>
-      <text class="sp-orb-label" x="318" y="58">ORBIT · 04</text>
-      <text class="sp-orb-label" x="318" y="556">R 236.00</text>
-    </svg>
-
-    <div class="sp-pin"><i></i><span>NODE-01<br><em>本地终端</em></span></div>
-
-    <div class="sp-hud sp-hud-tl">
-      <div><b>//</b>WWY INDUSTRIES</div><span>启动终端 · BOOT TERMINAL</span>
-    </div>
-    <div class="sp-hud sp-hud-tr">
-      <span class="sp-clock">00:00:00</span><span>SECTOR 00 · NODE 01</span>
-    </div>
-
-    <div class="sp-core">
-      <div class="sp-kicker"><b>▼</b>PROTOCOL 01<span>启动协议</span></div>
-      <div class="sp-title-wrap">
-        <div class="sp-title"><span class="sp-t1" data-final="WWY">WWY</span><span class="sp-t2" data-final="启动器">启动器</span></div>
-        <div class="sp-sweep"></div>
-      </div>
-      <div class="sp-meta">
-        <span class="sp-meta-line"></span>
-        <span class="sp-meta-txt">COMFYUI · WEBUI LAUNCHER</span>
-        <span class="sp-ver">V<b class="sp-ver-num">-.-.--</b></span>
-      </div>
-    </div>
-
-    <div class="sp-log">
-      <div class="sp-log-row"><span>LOAD</span>UI.MODULES<i></i><em>OK</em></div>
-      <div class="sp-log-row"><span>LINK</span>WEBVIEW2 RUNTIME<i></i><em>OK</em></div>
-      <div class="sp-log-row sp-log-bridge"><span>SYNC</span>PYTHON BRIDGE<i></i><em>WAIT</em></div>
-    </div>
-
-    <div class="sp-progress">
-      <div class="sp-prog-head"><span>INITIALIZING<b class="sp-prog-cn">初始化中</b></span><span class="sp-pct">000</span></div>
-      <div class="sp-segs"></div>
-    </div>
-
-    <div class="sp-foot">
-      <span class="sp-barcode"></span>
-      <span>ENGINE <b>//</b> WEBVIEW2</span>
-      <span class="sp-tri">▽▽▽</span>
-      <span class="sp-skip">CLICK TO SKIP</span>
-    </div>
-  </div>
-  <div class="sp-wipe sp-wipe-k"></div>
-  <div class="sp-wipe sp-wipe-y"></div>
-</div>
+<!-- 开屏动画：空壳，内容由各风格的开屏脚本画进来（默认终末地见 js/endfield-splash.js）-->
+<div id="splash"></div>
 
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <defs>
@@ -123,7 +62,7 @@
       <button class="nav-item" data-page="settings"><svg><use href="#i-settings"/></svg><span>高级选项</span></button>
       <button class="nav-item" data-page="launcher"><svg><use href="#i-wrench"/></svg><span>启动器设置</span></button>
       <button class="nav-item" data-page="deploy"><svg><use href="#i-deploy"/></svg><span>环境部署</span></button>
-      <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站·liblib</em></button>
+      <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站 / liblib</em></button>
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
       <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
@@ -141,7 +80,6 @@
 
   <!-- ============ 主区域 ============ -->
   <main id="main">
-    <canvas id="bg-topo" aria-hidden="true"></canvas>
     <header id="topbar">
       <span class="page-mark">▼</span>
       <div class="page-head">
@@ -1209,7 +1147,6 @@
 
 <script src="js/current_theme.js"></script>
 <script src="js/themes.js"></script>
-<script src="js/topo.js"></script>
 <script src="media/vector-splash.js"></script>
 <script src="js/vector-scene.js"></script>
 <script src="js/bauform-xray.js"></script>
@@ -1219,6 +1156,7 @@
 <script src="js/rhine-splash.js"></script>
 <script src="js/dissoc-gl.js"></script>
 <script src="js/dissoc-splash.js"></script>
+<script src="js/endfield-splash.js"></script>
 <script src="js/splash.js"></script>
 <script src="js/mock.js"></script>
 <script src="js/core.js"></script>
@@ -1244,6 +1182,7 @@
 <script src="js/neumorph.js"></script>
 <script src="js/vector.js"></script>
 <script src="js/deco.js"></script>
+<script src="js/endfield.js"></script>
 <script src="js/bauform.js"></script>
 <script src="js/rhine.js"></script>
 </body>
