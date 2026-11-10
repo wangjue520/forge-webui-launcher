@@ -664,6 +664,13 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
     note：用户自己写的问题描述 / 说明（可能日志里根本没报错，比如出图不对；也可能是「缺模型不用管」）
     takeover：AI 接管模式的 {"round","max","history","state"}，见 takeover_text
     followup：上一次的诊断结果（用户追问时带上）；fix：用户点了「执行修复」，要 AI 给出能直接执行的动作"""
+    try:   # Key 在 LoRA 训练器里改过的话先同步过来（app/ai_api_sync.py）
+        import ai_api_sync
+        if ai_api_sync.sync(api.cfg):
+            import config_manager as cm
+            cm.save_config(api.cfg)
+    except Exception:
+        pass
     conf = resolve(api.cfg)
     if not conf:
         raise LlmError("还没有设置 AI：到「启动器设置 → 报错诊断」填 API Key")
