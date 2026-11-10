@@ -484,6 +484,9 @@ def load_config():
                 pass
     project_active(cfg)
     adapt_to_machine(cfg, loaded)
+    # 报错诊断的 AI 设置和 LoRA 训练器同步（训练器里填过 Key 的，这里直接能用）
+    import ai_api_sync
+    ai_api_sync.sync(cfg, local_mtime=os.path.getmtime(CONFIG_PATH) if loaded else 0)
     return cfg
 
 
@@ -693,6 +696,9 @@ def save_config(cfg):
     if cfg.get("instances"):
         absorb_active(cfg)
     write_theme_file(cfg)
+    # 报错诊断的 AI 设置：这边改过就写进和训练器共用的文件；训练器改过就先拿过来再存（不拿旧值盖掉训练器刚改的）
+    import ai_api_sync
+    ai_api_sync.sync(cfg)
     # 先写临时文件再原子替换：直接 "w" 打开会先截断原文件，
     # 写入中断（断电/磁盘满/杀软）就留下一份空配置，下次启动回到默认
     tmp_path = CONFIG_PATH + ".tmp"

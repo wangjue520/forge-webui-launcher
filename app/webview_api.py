@@ -864,6 +864,7 @@ class LauncherApi:
         # 每次打开 / 刷新页面都按目录重新认一遍各实例的类型，记录错了就在这里纠正，
         # 后面返回给前端的 config / 实例列表就已经是对的
         self._reconcile_kinds()
+        _ai_sync(self)   # LoRA 训练器里改过报错诊断的 AI 设置：刷新页面就能看到
         local_ver = updater.get_local_info(self.cfg)
         deploy_branches = [{"label": l, "key": k} for l, k in DEPLOY_BRANCH_OPTIONS]
         # 当前活动实例是 ComfyUI 时把 ComfyUI 排到第一位（Forge 用户顺序不变）：
@@ -9289,7 +9290,19 @@ def _api_diag_undo(self, token):
     return {"ok": True, "text": "已撤销"}
 
 
+def _ai_sync(self):
+    """报错诊断的 AI 设置和 LoRA 训练器同步（app/ai_api_sync.py）；训练器那边改过就存盘。"""
+    import ai_api_sync
+    with self._cfg_lock:
+        if ai_api_sync.sync(self.cfg):
+            try:
+                cm.save_config(self.cfg)
+            except OSError:
+                pass
+
+
 def _api_diag_info(self):
+    _ai_sync(self)
     return {"ok": True, "providers": dl.provider_list(), "ai_ready": bool(dl.resolve(self.cfg)),
             "targets": [{"type": "inst", "iid": i.get("id"), "name": i.get("name") or i.get("id")}
                         for i in self.cfg.get("instances") or []] + [{"type": "launcher", "name": "启动器本身"}]}
