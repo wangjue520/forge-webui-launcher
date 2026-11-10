@@ -184,13 +184,7 @@ body {
 /* ============ 主区域 ============ */
 #main { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
 
-/* 背景：等高线（js/topo.js 画）+ 网格 */
-#bg-topo {
-  position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0;
-  opacity: .55;
-  -webkit-mask-image: linear-gradient(90deg, transparent 15%, #000 75%);
-          mask-image: linear-gradient(90deg, transparent 15%, #000 75%);
-}
+/* 背景：网格（默认风格在 themes/endfield.css 里换成两角的等高线） */
 #main::before {
   content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 0;
   background-image:

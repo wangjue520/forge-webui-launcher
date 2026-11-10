@@ -17,7 +17,9 @@
 (function () {
   "use strict";
   var THEMES = [
-    { id: "terminal", label: "终末地 · 工业终端（默认）", css: "", splash: "terminal" },
+    // 终末地（默认）：按 endfield-ui 规则重做——纸面 + 墨色 + 唯一的黄色、切角 = 可以按、宽体英文配粗体中文；
+    // 结构仍是 style.css，themes/endfield.css 换皮，界面动效 js/endfield.js，开屏 js/endfield-splash.js
+    { id: "terminal", label: "终末地 · 工业终端（默认）", css: "themes/endfield.css", splash: "terminal" },
     // 构型 · BAUFORM（机能包豪斯，深色）：结构沿用默认（style.css），themes/bauform.css 全面改皮，
     // 动效 / 背景由 js/bauform.js 负责，数字翻牌是 js/bauform-flap.js，
     // 西文装饰字体是自制的 WWY Bauform（tools/build_bauform_font.py）

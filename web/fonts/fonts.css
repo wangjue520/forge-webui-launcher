@@ -5,8 +5,14 @@
    WWY Sans SC  — 思源黑体 / Noto Sans SC 子集，400–900 可变字重（中文）
    WWY Inter    — Inter 可变字体（液态玻璃的西文正文，最接近 SF Pro）
    WWY Barlow   — Barlow Semi Condensed（终末地的西文标题 / 数字，DIN 系工业感）
-   WWY Mono     — JetBrains Mono（终末地的编号、路径、日志）
+   WWY Saira    — Saira 可变字体拉丁子集，字重 100–900、宽度 50–125%（终末地的界面字：宽体标签 / 编号 / 大字）
+   WWY Mono     — JetBrains Mono（编号、路径、日志）
    WWY Grotesk  — TeX Gyre Heros 拉丁子集（矢量突破风格的紧排大字，许可见文件末尾注释） */
+@font-face {
+  font-family: "WWY Saira";
+  src: url("Saira-Sub.woff2") format("woff2");
+  font-weight: 100 900; font-stretch: 50% 125%; font-style: normal; font-display: swap;
+}
 @font-face {
   font-family: "WWY Sans SC";
   src: url("NotoSansSC-Sub.woff2") format("woff2");

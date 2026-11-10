@@ -1,0 +1,233 @@
+/* ============================================================
+   终末地开屏（js/endfield-splash.js），始终加载：开屏在主题样式生效前就开始了
+   选择器都限定在 #splash.efs 里，不影响别的风格
+   颜色 / 字体 / 曲线和主界面同一套（themes/endfield.css 的 --ef-*）
+   ============================================================ */
+#splash.efs {
+  --ef-paper: #f4f4f2;
+  --ef-panel: #ffffff;
+  --ef-ink: #161616;
+  --ef-ink-2: #5c5c5c;
+  --ef-rule: #d9d9d6;
+  --ef-chip: #e4e4e0;
+  --ef-signal: #fffa00;
+  --ef-hatch: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(22, 22, 22, .22) 5px 6.5px);
+  --ef-ui: "WWY Saira", "WWY Sans SC", "Microsoft YaHei UI", sans-serif;
+  --ef-snap: cubic-bezier(.16, 1, .3, 1);
+  --ef-mech: cubic-bezier(.7, 0, .2, 1);
+  --ef-ease: cubic-bezier(.2, .7, .1, 1);
+  --pad: clamp(28px, 5vw, 72px);
+  background: #161616;
+  color: var(--ef-ink);
+  font-family: var(--ef-ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+#splash.efs.efs-ready { cursor: pointer; }
+#splash.efs.efs-out2 { background: transparent; }
+
+/* ---------- 纸面 ---------- */
+.efs-paper {
+  position: absolute; inset: 0; overflow: hidden;
+  background: var(--ef-paper);
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  column-gap: clamp(32px, 5vw, 88px);
+  padding: 0 var(--pad);
+}
+.efs-out2 .efs-paper { visibility: hidden; }
+/* 两角各一小片极淡的等高线 */
+.efs-paper::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: rgba(22, 22, 22, .09);
+  -webkit-mask: url("../media/contour-a.svg") right -9rem top -7rem / 52rem auto no-repeat,
+                url("../media/contour-b.svg") left -6rem bottom -14rem / 40rem auto no-repeat;
+          mask: url("../media/contour-a.svg") right -9rem top -7rem / 52rem auto no-repeat,
+                url("../media/contour-b.svg") left -6rem bottom -14rem / 40rem auto no-repeat;
+}
+.efs-paper > * { position: relative; }
+
+/* 三色条：页顶全宽 */
+.efs-tri {
+  position: absolute !important; left: 0; right: 0; top: 0; height: 3px;
+  display: grid; grid-template-columns: repeat(3, 1fr); transform-origin: left;
+}
+.efs-tri i:nth-child(1) { background: #ff00f0; }
+.efs-tri i:nth-child(2) { background: var(--ef-signal); }
+.efs-tri i:nth-child(3) { background: #00ffa2; }
+
+/* 眉标 */
+.efs-eyebrow {
+  font-size: 11px; font-weight: 600; font-stretch: 125%;
+  letter-spacing: .14em; text-transform: uppercase; color: var(--ef-ink-2);
+}
+
+/* ---------- 顶行：眉标 + 字段 ---------- */
+.efs-top {
+  grid-column: 1 / -1;
+  display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 22px;
+  padding-top: clamp(22px, 4vh, 40px);
+}
+.efs-facts {
+  display: flex; margin: 0; padding: 0; list-style: none;
+  font-size: 13px; font-stretch: 112%; color: var(--ef-ink-2);
+  font-variant-numeric: tabular-nums; letter-spacing: .02em;
+}
+.efs-facts li { padding: 0 12px; border-left: 1px solid var(--ef-rule); }
+.efs-facts li:first-child { padding-left: 0; border-left: 0; }
+.efs-facts b { font-weight: 600; color: var(--ef-ink); }
+
+/* ---------- 左：字标 ---------- */
+.efs-hero { align-self: center; min-width: 0; padding-bottom: 4vh; }
+.efs-word {
+  display: flex; flex-direction: column; margin: 0;
+  font-weight: 800; font-stretch: 125%; line-height: .84; letter-spacing: -.02em;
+  text-transform: uppercase;
+}
+.efs-word span { display: block; width: max-content; line-height: .84; }
+.efs-word .solid { font-size: clamp(76px, 12.4vw, 196px); }
+.efs-word .hollow {
+  margin-top: .14em;
+  font-size: calc(clamp(76px, 12.4vw, 196px) * .48);
+  color: transparent; -webkit-text-stroke: 2px var(--ef-ink);
+}
+.efs-marker { margin: clamp(18px, 3.4vh, 30px) 0 0; }
+.efs-marker span {
+  display: inline-block; padding: 2px 12px 3px;
+  font-size: clamp(17px, 1.7vw, 22px); font-weight: 800; letter-spacing: .02em;
+  background: linear-gradient(var(--ef-signal), var(--ef-signal)) left / 100% 100% no-repeat;
+}
+.efs-lede { margin: 12px 0 0; font-size: 14px; line-height: 1.75; color: var(--ef-ink-2); }
+
+/* ---------- 右：切角画框 + 斜线纹影子 ---------- */
+.efs-frame { align-self: center; margin: 0 1rem 1.6rem 0; padding-bottom: 4vh; }
+.efs-frame::before {
+  content: ""; position: absolute; inset: 1.5rem -1rem calc(4vh - 1rem) 1.5rem;
+  background: var(--ef-hatch);
+}
+.efs-window {
+  --cut: 40px;
+  position: relative;
+  padding: 26px 30px 52px;           /* 底部留出铭牌压上来的位置，不盖住进度格 */
+  background: var(--ef-panel);
+  clip-path: polygon(var(--cut) 0, 100% 0, 100% calc(100% - var(--cut)), calc(100% - var(--cut)) 100%, 0 100%, 0 var(--cut));
+}
+.efs-head {
+  display: flex; align-items: flex-end; justify-content: space-between; gap: 16px;
+  padding: 0 0 14px 18px; border-bottom: 1px solid var(--ef-ink);
+}
+.efs-pair { display: inline-flex; flex-direction: column; gap: 3px; line-height: 1.15; }
+.efs-pair small { font-size: 11px; font-weight: 600; font-stretch: 125%; letter-spacing: .14em; color: var(--ef-ink-2); }
+.efs-pair small::before { content: "// "; letter-spacing: 0; }
+.efs-pair b { font-size: 21px; font-weight: 800; }
+.efs-count { font-size: 14px; font-stretch: 112%; color: var(--ef-ink-2); font-variant-numeric: tabular-nums; }
+.efs-count b { font-size: 26px; font-weight: 800; color: var(--ef-ink); }
+
+/* 记录行：编号 / 名称 / 状态 */
+.efs-rows { margin: 0; padding: 0; list-style: none; }
+.efs-rows li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0 14px; align-items: center;
+  padding: 11px 0; border-bottom: 1px solid var(--ef-rule);
+  font-size: 14px;
+}
+.efs-tag {
+  padding: 1px 14px 1px 8px;
+  font-size: 12px; font-weight: 500; font-stretch: 112%; font-variant-numeric: tabular-nums;
+  color: #fff; background: linear-gradient(-45deg, transparent 6.5px, var(--ef-ink) 7px);
+}
+.efs-rows .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.efs-rows .st {
+  padding: 0 8px; border: 1px solid var(--ef-ink);
+  font-size: 12px; line-height: 1.6; white-space: nowrap;
+}
+/* 后台还没连上：虚线框 = 还在后台进行；连上后变实线 */
+.efs-bridge:not(.ok) .st { border-style: dashed; color: var(--ef-ink-2); border-color: var(--ef-ink-2); }
+
+/* 24 格机械进度条，读数补零 */
+.efs-progress {
+  display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: baseline;
+  margin-top: 20px;
+}
+.efs-pct { font-size: 15px; font-weight: 700; font-stretch: 112%; font-variant-numeric: tabular-nums; }
+.efs-progress > i {
+  grid-column: 1 / -1; height: 12px;
+  background: linear-gradient(90deg, var(--ef-signal) calc(var(--p, 0) * 100%), transparent 0), var(--ef-chip);
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 calc(100% / 24 - 3px), transparent 0 calc(100% / 24));
+          mask: repeating-linear-gradient(90deg, #000 0 calc(100% / 24 - 3px), transparent 0 calc(100% / 24));
+}
+
+/* 铭牌：墨底一行字；就绪后变成可点的黄块 */
+.efs-plate {
+  position: absolute; left: -1.25rem; bottom: calc(4vh - .9rem);
+  max-width: 80%; margin: 0;
+  padding: 9px 26px 10px 16px;
+  background: linear-gradient(-45deg, transparent 10px, var(--ef-ink) 10.5px);
+  color: #fff; font-size: 14px; font-weight: 700;
+}
+.efs-ready .efs-plate { background: linear-gradient(-45deg, transparent 10px, var(--ef-signal) 10.5px); color: var(--ef-ink); }
+
+/* 底部：斜线纹带 */
+.efs-band {
+  grid-column: 1 / -1; height: 12px; margin-bottom: clamp(22px, 4vh, 40px);
+  background: var(--ef-hatch); border-left: 48px solid var(--ef-ink);
+  transform-origin: left;
+}
+
+/* ---------- 撤场：黄块带墨色亮边擦入，再向右退出 ---------- */
+.efs-wipe {
+  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  background: var(--ef-signal);
+  transform: translateX(-101%);
+}
+.efs-wipe::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 6px; background: var(--ef-ink); }
+.efs-out1 .efs-wipe { transform: none; transition: transform .28s var(--ef-mech); }
+.efs-out2 .efs-wipe { transform: translateX(101%); transition: transform .22s var(--ef-mech); }
+.efs-out2 .efs-wipe::after { right: auto; left: 0; }
+
+/* ---------- 入场（减少动态效果时一律不做，直接是最终状态） ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .efs:not(.efs-go) .efs-paper { clip-path: polygon(0 0, 0 0, -14% 100%, -14% 100%); }
+  .efs-go .efs-paper { animation: efs-shutter .36s var(--ef-mech) both; }
+  .efs-go .efs-tri { animation: efs-sweep .6s var(--ef-ease) .08s both; }
+  .efs-go .efs-word .solid { animation: efs-drive .62s var(--ef-mech) .12s both; }
+  .efs-go .efs-word .hollow { animation: efs-drive .62s var(--ef-mech) .26s both; }
+  .efs-go .efs-marker span { animation: efs-stroke .42s var(--ef-mech) .48s both; }
+  .efs-go .efs-lede { animation: efs-come .32s var(--ef-snap) .56s both; }
+  .efs-go .efs-frame { animation: efs-power .52s var(--ef-mech) .2s both; }
+  .efs-go .efs-rows li { animation: efs-come .32s var(--ef-snap) both; animation-delay: calc(.42s + var(--i, 0) * 38ms); }
+  .efs-go .efs-plate { animation: efs-wipe-in .28s var(--ef-mech) .64s both; }
+  .efs-go .efs-band { animation: efs-sweep .6s var(--ef-ease) .3s both; }
+  .efs-go .efs-progress > i { transition: none; }
+}
+@keyframes efs-shutter {
+  from { clip-path: polygon(0 0, 0 0, -14% 100%, -14% 100%); }
+  to   { clip-path: polygon(0 0, 114% 0, 100% 100%, -14% 100%); }
+}
+@keyframes efs-sweep { from { transform: scaleX(0); } }
+@keyframes efs-drive {
+  from { clip-path: inset(0 100% 0 0); transform: translateX(-.12em); }
+  to   { clip-path: inset(-10% -5% -10% 0); transform: none; }
+}
+@keyframes efs-stroke { from { background-size: 0% 100%; } }
+@keyframes efs-power {
+  from { opacity: 0; clip-path: inset(0 0 100% 0); }
+  to   { opacity: 1; clip-path: inset(-40px); }
+}
+@keyframes efs-come {
+  from { opacity: 0; transform: translateX(-14px); clip-path: inset(0 100% 0 0); }
+  to   { opacity: 1; transform: none; clip-path: inset(-4px -2% -4px 0); }
+}
+@keyframes efs-wipe-in { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(-2px); } }
+
+/* 窗口矮或窄时：收紧版面 */
+@media (max-height: 700px) {
+  .efs-lede { display: none; }
+  .efs-rows li { padding: 8px 0; }
+  .efs-window { padding: 20px 24px 46px; }
+}
+@media (max-width: 1020px) {
+  .efs-paper { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .efs-word .solid { font-size: clamp(64px, 11vw, 150px); }
+  .efs-word .hollow { font-size: calc(clamp(64px, 11vw, 150px) * .48); }
+}
