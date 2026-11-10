@@ -710,3 +710,160 @@
   :root[data-ui-theme="vector"] .vbm-title small { display: none; }
   :root[data-ui-theme="vector"] #vb-mast { gap: 20px; }
 }
+
+/* ============================================================
+   二期：按 endfield-ui 的规则收拾（2026-11）
+   材质、配色、圆角、立体场景、PV 大字页头这些「矢量突破」自己的特色都不动，
+   只借那套规则里管「信息和交互」的部分：
+     一、青色只表示「当前 / 可以点 / 正在运行」：卡片序号、竖条、小标题回到墨色，
+        正在填写的那张卡片竖条才变青；去掉卡片角上的「+」准星
+     二、出错 / 注意不用红和橙，前面插一面柠檬黄小旗（PV 里本来就有的黄色小标签）；
+        红色只留给删除
+     三、读的地方要清楚：卡片和输入框的玻璃更实，不再透出后面的青色团；小字的青色换成深青
+     四、编号、日期、计数用等宽数字；页头的装饰字换成真实数据（js/vector.js）
+     五、动效对应操作：按钮指向时青色从左擦入，列表行指向时左边落下青条、整行右移；
+        箭头阵列和页头软球只在换页时动一下，不再一直循环；入场缩短到 1 秒内
+   ============================================================ */
+:root[data-ui-theme="vector"] {
+  --vb-glass: linear-gradient(150deg, rgba(255, 255, 255, .86), rgba(255, 255, 255, .7));
+  --vb-glass-strong: linear-gradient(150deg, rgba(255, 255, 255, .94), rgba(255, 255, 255, .8));
+  --input-bg: rgba(255, 255, 255, .9);
+  --ok: var(--vb-cy-deep);
+  --warn: var(--ink);
+  --bad: var(--ink);              /* 出错用黄旗 + 墨字；删除按钮另外写成红色 */
+  --vb-flag: var(--vb-hl);
+  --vb-trace: var(--vb-cy-2);     /* 表示「这里」的竖条 */
+}
+
+/* ---- 一、青色只给当前 / 可点 / 运行中 ---- */
+:root[data-ui-theme="vector"] .nav-item::after {
+  content: counter(nav, decimal-leading-zero); font-variant-numeric: tabular-nums;
+}
+:root[data-ui-theme="vector"] .brand-ver { background: var(--ink); color: #eaf6f6; box-shadow: none; }
+:root[data-ui-theme="vector"] .card::before {
+  background: rgba(20, 40, 42, .22); box-shadow: none;
+  transition: background-color .28s var(--vb-ease), height .28s var(--vb-ease);
+}
+:root[data-ui-theme="vector"] .card:focus-within::before {   /* 正在填写的这张 */
+  background: linear-gradient(var(--vb-cy), #7fe4e6); box-shadow: 0 0 10px rgba(30, 200, 204, .55); height: 28px;
+}
+:root[data-ui-theme="vector"] .card::after { content: none; }
+:root[data-ui-theme="vector"] .card-title::before { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+:root[data-ui-theme="vector"] .sub-title::before { background: var(--ink); box-shadow: none; width: 5px; height: 5px; }
+:root[data-ui-theme="vector"] .sub-title::after { border-bottom: 1px solid var(--line); }
+:root[data-ui-theme="vector"] .detail-view .sect::before { background: var(--ink); box-shadow: none; }
+:root[data-ui-theme="vector"] :is(.card-flat, .out-filters, .inst-card)::before { background: rgba(20, 40, 42, .28); box-shadow: none; }
+:root[data-ui-theme="vector"] .inst-card.active::before { background: var(--vb-cy); box-shadow: 0 0 10px rgba(30, 200, 204, .6); }
+:root[data-ui-theme="vector"] .ext-group { color: var(--vb-cy-deep); }
+:root[data-ui-theme="vector"] .ext-group::after { border-bottom-color: var(--line); }
+:root[data-ui-theme="vector"] .ext-status { background: rgba(30, 200, 204, .16); color: var(--vb-cy-deep); font-weight: 700; }
+:root[data-ui-theme="vector"] .ext-status.ext-upd { background: var(--vb-flag); color: var(--ink); }
+:root[data-ui-theme="vector"] .ext-status.ext-rec { background: transparent; color: var(--ink); outline: 1px solid rgba(20, 40, 42, .3); }
+:root[data-ui-theme="vector"] .ic-kind[data-kind="comfyui"] { color: #05393b; }
+:root[data-ui-theme="vector"] .hint-block::before { background: rgba(20, 40, 42, .25); }
+:root[data-ui-theme="vector"] .hint-block { background: linear-gradient(150deg, rgba(255, 255, 255, .9), rgba(246, 250, 250, .74)); }
+
+/* 状态：运行中 = 青色实心（不再一直闪）；启动中 = 黄旗色；没在运行 = 淡 */
+:root[data-ui-theme="vector"] .status-pill:is([data-state="ready"], [data-state="running"]) .dot { animation: none; }
+:root[data-ui-theme="vector"] .status-pill[data-state="starting"],
+:root[data-ui-theme="vector"] #sidebar .status-pill[data-state="starting"] {
+  background: var(--vb-flag); color: var(--ink); border-color: rgba(255, 255, 255, .8);
+}
+:root[data-ui-theme="vector"] .status-pill[data-state="starting"] .dot { background: var(--ink); box-shadow: none; }
+:root[data-ui-theme="vector"] :is(.status-pill[data-state="idle"], .status-pill[data-state="stopped"]) { color: var(--text-faint); }
+
+/* ---- 二、出错 / 注意：黄旗 + 墨字，红色只给删除 ---- */
+:root[data-ui-theme="vector"] :is(.hint[data-status="warn"], .hint[data-status="bad"], .env-status[data-status="warn"], .env-status[data-status="bad"], .ext-variant, .pv-warn) {
+  color: var(--ink); font-weight: 600;
+}
+:root[data-ui-theme="vector"] :is(.hint[data-status="warn"], .hint[data-status="bad"], .env-status[data-status="warn"], .env-status[data-status="bad"], .ext-variant, .pv-warn, .toast.error, .ext-upd-err, .dg-act-err)::before {
+  display: inline-block; margin-right: 7px; padding: 1px 6px; border-radius: 4px; vertical-align: .05em;
+  background: var(--vb-flag); color: var(--ink); font: 700 10.5px/1.5 "WWY Sans SC", sans-serif; letter-spacing: 0;
+}
+:root[data-ui-theme="vector"] :is(.hint[data-status="warn"], .env-status[data-status="warn"], .ext-variant, .pv-warn)::before { content: "注意"; }
+:root[data-ui-theme="vector"] :is(.hint[data-status="bad"], .env-status[data-status="bad"], .ext-upd-err, .dg-act-err)::before { content: "出错"; }
+:root[data-ui-theme="vector"] :is(.hint[data-status="warn"], .hint[data-status="bad"]):empty::before { content: none; }
+:root[data-ui-theme="vector"] .hint[data-status="ok"] { color: var(--vb-cy-deep); }
+:root[data-ui-theme="vector"] .pv-warn { border-radius: 10px; background: rgba(255, 255, 255, .8); border: 1px solid rgba(20, 40, 42, .14); }
+:root[data-ui-theme="vector"] .toast.error::before {
+  content: "出错"; position: static; width: auto; height: auto; margin: 0 8px 0 0; box-shadow: none;
+}
+:root[data-ui-theme="vector"] .toast.error { padding-left: 14px; }
+:root[data-ui-theme="vector"] .dg-badge { background: var(--vb-flag); color: var(--ink); border-radius: 99px; font-weight: 700; }
+:root[data-ui-theme="vector"] .dg-card { border-left-color: rgba(20, 40, 42, .4); }
+:root[data-ui-theme="vector"] .dg-card[data-level="warn"] { border-left-color: var(--vb-flag); }
+:root[data-ui-theme="vector"] .dg-card[data-level="ok"] { border-left-color: var(--vb-cy); }
+:root[data-ui-theme="vector"] .wd-item.s-failed { border-color: rgba(20, 40, 42, .3); box-shadow: inset 4px 0 0 var(--vb-flag); }
+:root[data-ui-theme="vector"] .s-failed .wd-state { background: var(--vb-flag); border-color: transparent; color: var(--ink); }
+:root[data-ui-theme="vector"] .oc-missing { background: var(--vb-flag); color: var(--ink); }
+:root[data-ui-theme="vector"] .link-banner .is-dot[data-state="offline"] { background: var(--vb-flag); }
+/* 删除：红色只出现在这里 */
+:root[data-ui-theme="vector"] .btn-danger-text { color: #b3261e; }
+:root[data-ui-theme="vector"] .btn-danger-text:hover:not(:disabled) { color: #fff; background: linear-gradient(180deg, #d0453c, #a8281f); }
+
+/* ---- 三、读的地方要清楚 ---- */
+:root[data-ui-theme="vector"] :is(.table-wrap, .preview-box, .detail-view) { background-color: rgba(255, 255, 255, .82); }
+:root[data-ui-theme="vector"] .vbm-under { color: var(--vb-cy-deep); text-transform: uppercase; }
+:root[data-ui-theme="vector"] .vb-lab { font-variant-numeric: tabular-nums; }
+
+/* ---- 四、页头右侧：实例数胶囊（亮几颗 = 几个在运行）+ 日期 ---- */
+:root[data-ui-theme="vector"] .vbm-node { --on: 0; font-variant-numeric: tabular-nums; }
+:root[data-ui-theme="vector"] .vbm-node b { font-weight: 400; }
+:root[data-ui-theme="vector"] .vbm-node i {
+  -webkit-mask: linear-gradient(90deg, #000 calc(var(--on) * 12.6px + .1px), rgba(0, 0, 0, .28) 0);
+          mask: linear-gradient(90deg, #000 calc(var(--on) * 12.6px + .1px), rgba(0, 0, 0, .28) 0);
+}
+:root[data-ui-theme="vector"] .topbar-clock { font-size: 0; }
+:root[data-ui-theme="vector"] .topbar-clock::after { content: attr(data-date); display: block; font-size: 8.5px; font-variant-numeric: tabular-nums; }
+
+/* ---- 五、动效对应操作 ---- */
+/* 按钮：保留玻璃胶囊和浮起，指向时青色从左擦入（主按钮本来就是青色，保留往前推的箭头） */
+:root[data-ui-theme="vector"] .btn:not(.btn-primary):not(.btn-accent):not(.btn-success) { isolation: isolate; overflow: hidden; }
+:root[data-ui-theme="vector"] .btn:not(.btn-primary):not(.btn-accent):not(.btn-success)::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(90deg, rgba(30, 200, 204, .26), rgba(30, 200, 204, .12));
+  transform: translateX(-101%); transition: transform .28s cubic-bezier(.7, 0, .2, 1);
+}
+:root[data-ui-theme="vector"] .btn:not(.btn-primary):not(.btn-accent):not(.btn-success):is(:hover, :focus-visible):not(:disabled)::before { transform: none; }
+:root[data-ui-theme="vector"] .btn-danger-text::before { background: linear-gradient(180deg, #d0453c, #a8281f) !important; }
+/* 列表行（插件、整理记录、远程主机）：左边落下一条青色竖条，整行右移，不再整块浮起 */
+:root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer) { position: relative; overflow: hidden; }
+:root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer)::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--vb-trace);
+  transform: scaleY(0); transform-origin: top; transition: transform .2s cubic-bezier(.16, 1, .3, 1);
+}
+:root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer) > * { transition: transform .25s cubic-bezier(.16, 1, .3, 1); }
+:root[data-ui-theme="vector"] .ext-item:hover { transform: none; }
+/* 已安装的插件：不再整体变淡、不用墨色竖条（竖条只表示「指着这一行」），名字退成次要墨色 */
+:root[data-ui-theme="vector"] .ext-item.installed { box-shadow: var(--vb-shadow); }
+:root[data-ui-theme="vector"] .ext-item.installed :is(.ext-name, .ext-desc) { opacity: 1; }
+:root[data-ui-theme="vector"] .ext-item.installed .ext-name { color: var(--text-dim); }
+:root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer):hover::before { transform: none; }
+:root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer):hover > * { transform: translateX(6px); }
+/* 箭头阵列、侧栏箭头、页头软球：平时静止，换页时走一小段（js/vector.js 加 .vb-kick） */
+:root[data-ui-theme="vector"] #sidebar::before { animation: none; }
+#vb-front .vb-arrows::before { animation: none; }
+#vb-mast .vbm-blobs i { animation: none; }
+:root.vb-kick[data-ui-theme="vector"] #sidebar::before { animation: vbArrowRow .6s linear 2; }
+:root.vb-kick #vb-front .vb-arrows::before { animation: vbArrows .7s linear 2; }
+:root.vb-kick #vb-mast .vbm-blobs i { animation: vbBob .6s ease-in-out 2 alternate; }
+/* 入场：整段 1 秒内（卡片每块晚 38ms，单块 0.36 秒） */
+:root[data-ui-theme="vector"] .page { animation-duration: .36s; }
+:root[data-ui-theme="vector"] .page.active > :is(.card, .action-row, .console-wrap, .hint-block, .drop-banner, .toolbar) { animation-duration: .36s; }
+:root[data-ui-theme="vector"] .page.active > :nth-child(2) { animation-delay: 38ms; }
+:root[data-ui-theme="vector"] .page.active > :nth-child(3) { animation-delay: 76ms; }
+:root[data-ui-theme="vector"] .page.active > :nth-child(4) { animation-delay: 114ms; }
+:root[data-ui-theme="vector"] .page.active > :nth-child(5) { animation-delay: 152ms; }
+:root[data-ui-theme="vector"] .page.active > :nth-child(n+6) { animation-delay: 190ms; }
+:root[data-ui-theme="vector"] #modal { animation-duration: .3s; }
+:root[data-ui-theme="vector"] .toast { animation-duration: .28s; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-ui-theme="vector"] :is(.btn, .ext-item, .journal-row, .link-peer, .card)::before,
+  :root[data-ui-theme="vector"] :is(.ext-item, .journal-row, .link-peer) > * { transition: none !important; }
+  :root.vb-kick[data-ui-theme="vector"] #sidebar::before,
+  :root.vb-kick #vb-front .vb-arrows::before,
+  :root.vb-kick #vb-mast .vbm-blobs i,
+  :root[data-ui-theme="vector"] #modal,
+  :root[data-ui-theme="vector"] .toast { animation: none !important; }
+}

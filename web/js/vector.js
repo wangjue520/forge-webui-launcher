@@ -4,10 +4,12 @@
  *       [标签列]  WWY LAUNCHER            ← 两行青色大字，字距 -0.065em、行距 0.74 互相咬合
  *       [标签列]  MODELS “06”             ← 第二行 = 当前页英文名 + 弯引号编号
  *       [标签]    模型管理                ← 墨黑中文页名（真正要读的）
- *                 TRIAL FROM LOCAL NODE   ← 压在下面的一行青色小字
+ *                 LOCAL / COMFYUI / IDLE  ← 压在下面的一行小字：本机或远程 + 当前实例 + 运行状态
  *     内容跟着 core.js 写进 #page-code（"06 // MODELS"）和 #page-title 的文字走，
  *     用 MutationObserver 监听，不改 core.js 的导航逻辑。
- *  2. 页头右侧：●●● NODE 胶囊、三行说明小字（时钟沿用原来的 #topbar-clock）
+ *     标签列和小字都是真实数据（版本号、总页数、实例和状态），不放编出来的英文。
+ *  2. 页头右侧：●●● NODE 胶囊（实例数，亮几颗 = 几个在运行）、三行小字（日期 / 版本 / 运行数），
+ *     时钟沿用原来的 #topbar-clock
  *  3. 侧栏品牌：WWY 大字 + 启动器
  *  4. 背景：烘焙好的远 / 中 / 近三张立体场景图层（翻页时分层视差）；缺图时退回
  *     实时场景（js/vector-scene.js：方块 + 软球 + 景深）与淡等高环，
@@ -133,9 +135,9 @@
     m.id = "vb-mast";
     m.setAttribute("aria-hidden", "true");   // 屏幕阅读器继续读原来的 #page-title
     var en = el("div", "vbm-en", null, m);
-    el("span", "vb-lab", "Terminal", en);
+    el("span", "vb-lab vbm-ver", "Launcher", en);         // 拿到版本号后换成 V3.1.xxx
     el("div", "vb-big vbm-l1", "WWY LAUNCHER", en);
-    el("span", "vb-lab", "Numbers", en);
+    el("span", "vb-lab vbm-of", "Page", en);              // 「OF 10」：一共几页（侧栏里看得见的）
     var l2 = el("div", "vb-big vbm-l2", null, en);
     el("span", "vbm-word", "", l2);
     var q = el("span", "vbm-q", null, l2);
@@ -146,7 +148,7 @@
     var cn = el("div", "vbm-cn", null, m);
     el("span", "vb-lab", "Module", cn);
     el("div", "vbm-title", "", cn);
-    el("div", "vbm-under", "TRIAL FROM LOCAL NODE", cn);
+    el("div", "vbm-under", "LOCAL", cn);                  // 本机 / 远程主机 + 当前实例 + 运行状态（见 syncLive）
     // 水滴团放进页头的弹性空地里：页名长、窗口窄时自动缩小 / 让位，不会压到文字
     var bw = el("div", "vbm-blobs", null, m);
     bw.appendChild(buildBlobs());
@@ -190,6 +192,66 @@
       m.classList.remove("vbm-in");
       void m.offsetWidth;   // 重新触发动画
       m.classList.add("vbm-in");
+      kick();
+    }
+    syncLive();
+  }
+
+  /* 装饰元素只在「换页」这一下动：右缘箭头阵列、侧栏箭头、页头软球各走一小段后停住，
+     不再一直循环（每个动效对应一次操作）。减少动态效果时 CSS 直接关掉 */
+  var kickTimer = 0;
+  function kick() {
+    clearTimeout(kickTimer);
+    root.classList.remove("vb-kick");
+    void root.offsetWidth;
+    root.classList.add("vb-kick");
+    kickTimer = setTimeout(function () { root.classList.remove("vb-kick"); }, 1500);
+  }
+
+  /* 页头里原来写死的装饰字（TERMINAL / NUMBERS / TRIAL FROM LOCAL NODE / NODE01 / 三行英文说明）
+     换成真实数据：版本、总页数、本机 / 远程 + 当前实例 + 运行状态、实例数和运行中的个数、日期 */
+  var STATE_EN = { idle: "IDLE", stopped: "STOPPED", starting: "STARTING", ready: "RUNNING", running: "RUNNING" };
+  function pad2(n) { return (n < 10 ? "0" : "") + n; }
+  function setText(node, text) { if (node && node.textContent !== text) node.textContent = text; }
+  function syncLive() {
+    if (!built) return;
+    var m = built.mast;
+    var ver = "";
+    try { ver = String((App.state && App.state.launcher && App.state.launcher.version) || "").replace(/^v/i, ""); } catch (e) {}
+    setText(m.querySelector(".vbm-ver"), ver ? "V" + ver : "Launcher");
+    var pages = document.querySelectorAll(".nav-item:not([hidden])").length;
+    setText(m.querySelector(".vbm-of"), pages ? "Of " + pad2(pages) : "Page");
+
+    var list = (window.App && App.instances && App.instances.instances) || [];
+    var activeId = window.App && App.instances && App.instances.active;
+    var cur = null, running = 0;
+    list.forEach(function (i) {
+      var st = (i.status && i.status.state) || "idle";
+      if (st === "running" || st === "ready" || st === "starting") running++;
+      if (i.id === activeId) cur = i;
+    });
+    var remote = document.body.classList.contains("remote-mode");
+    var where = remote ? "REMOTE " + (($("link-banner-name") || {}).textContent || "").split("（")[0].trim() : "LOCAL";
+    var gs = $("global-status");
+    var state = STATE_EN[(gs && gs.dataset.state) || "idle"] || "IDLE";
+    var parts = [where.trim()];
+    if (cur && cur.name) parts.push(String(cur.name).toUpperCase());
+    parts.push(state);
+    setText(m.querySelector(".vbm-under"), parts.join(" / "));
+
+    if (built.node) {
+      setText(built.node.querySelector("b"), "NODE" + pad2(list.length || 1));
+      built.node.style.setProperty("--on", String(Math.min(3, running)));
+      built.node.title = list.length + " 个实例，" + running + " 个在运行";
+    }
+    if (built.note) {
+      var d = new Date();
+      var lines = [d.getFullYear() + "." + pad2(d.getMonth() + 1) + "." + pad2(d.getDate()),
+                   ver ? "Version " + ver : "Version -",
+                   running + " of " + (list.length || 1) + " running"];
+      var s = built.note.querySelector("span");
+      var html = lines.join("<br>");
+      if (s && s.innerHTML !== html) s.innerHTML = html;
     }
   }
 
@@ -198,11 +260,10 @@
     if (!extra) return {};
     var node = el("div", "vbm-node");
     el("i", null, null, node);
-    node.appendChild(document.createTextNode("NODE01"));
+    el("b", null, "NODE01", node);
     extra.insertBefore(node, extra.firstChild);
     var note = el("div", "vbm-note");
-    var s = el("span", null, null, note);
-    s.innerHTML = "The current module has been synchronized.<br>All data will be archived locally.<br>Please stand by for unknown changes ahead.";
+    el("span", null, null, note);
     extra.appendChild(note);
     return { node: node, note: note };
   }
@@ -239,12 +300,17 @@
       var n = $(id);
       if (n) built.obs.observe(n, { childList: true, characterData: true, subtree: true });
     });
+    // 运行状态 / 实例数会在后台变：低频刷一下（只在文字真的变了才改 DOM）
+    built.live = setInterval(syncLive, 1500);
   }
 
   function teardown() {
     if (!built) return;
     built.obs.disconnect();
+    clearInterval(built.live);
     clearInterval(numTimer);
+    clearTimeout(kickTimer);
+    root.classList.remove("vb-kick");
     [built.deco, built.front, built.mast, built.node, built.note].forEach(function (n) { if (n && n.parentNode) n.remove(); });
     var name = document.querySelector(".brand-name");
     if (name && built.brandHTML != null) name.innerHTML = built.brandHTML;
