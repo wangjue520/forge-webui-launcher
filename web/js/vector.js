@@ -233,7 +233,15 @@
     var remote = document.body.classList.contains("remote-mode");
     var where = remote ? "REMOTE " + (($("link-banner-name") || {}).textContent || "").split("（")[0].trim() : "LOCAL";
     var gs = $("global-status");
-    var state = STATE_EN[(gs && gs.dataset.state) || "idle"] || "IDLE";
+    var gsState = (gs && gs.dataset.state) || "idle";
+    var state = STATE_EN[gsState] || "IDLE";
+    // 有实例在运行（任一实例 running / ready，或侧栏状态是运行中）→ 深色
+    var anyRunning = gsState === "running" || gsState === "ready" || list.some(function (i) {
+      var st = i.status && i.status.state;
+      return st === "running" || st === "ready";
+    });
+    setDark(anyRunning);
+    if (anyRunning && !running) running = 1;   // 实例列表还没到时，至少按侧栏状态亮一颗
     var parts = [where.trim()];
     if (cur && cur.name) parts.push(String(cur.name).toUpperCase());
     parts.push(state);
@@ -253,6 +261,35 @@
       var html = lines.join("<br>");
       if (s && s.innerHTML !== html) s.innerHTML = html;
     }
+  }
+
+  /* 深色：有实例在运行时整套换成深色（样式见 themes/vector.css「三期」）。
+     第一次判定（刚打开、刚切到这个风格）直接切；之后状态变化时，新配色从侧栏的运行状态处
+     以圆形扩散揭开（约 3000px/s，240–600ms）。开屏还在 / 系统要求减少动态效果 / 不支持
+     View Transitions 时直接切换。 */
+  var reduceMotion = window.matchMedia && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  function setDark(on) {
+    if (!built) return;
+    var cur = root.classList.contains("vb-dark");
+    if (built.darkKnown && cur === on) return;
+    var first = !built.darkKnown;
+    built.darkKnown = true;
+    if (cur === on) return;
+    var apply = function () { root.classList.toggle("vb-dark", on); };
+    if (first || reduceMotion || $("splash") || !document.startViewTransition) { apply(); return; }
+    var pill = $("global-status");
+    var r = pill ? pill.getBoundingClientRect() : { left: 0, top: innerHeight, width: 0, height: 0 };
+    var x = r.left + r.width / 2, y = r.top + r.height / 2;
+    var rad = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    var dur = Math.max(240, Math.min(600, rad / 3));
+    root.classList.add("vb-theming");
+    var vt;
+    try { vt = document.startViewTransition(apply); } catch (e) { root.classList.remove("vb-theming"); apply(); return; }
+    vt.ready.then(function () {
+      root.animate({ clipPath: ["circle(0px at " + x + "px " + y + "px)", "circle(" + rad + "px at " + x + "px " + y + "px)"] },
+        { duration: dur, easing: "cubic-bezier(.7, 0, .2, 1)", pseudoElement: "::view-transition-new(root)" });
+    }).catch(function () {});
+    vt.finished.then(function () { root.classList.remove("vb-theming"); }, function () { root.classList.remove("vb-theming"); });
   }
 
   function buildExtra() {
@@ -300,13 +337,19 @@
       var n = $(id);
       if (n) built.obs.observe(n, { childList: true, characterData: true, subtree: true });
     });
-    // 运行状态 / 实例数会在后台变：低频刷一下（只在文字真的变了才改 DOM）
+    // 运行状态 / 实例数会在后台变：低频刷一下（只在文字真的变了才改 DOM）；
+    // 侧栏状态一变就立刻刷（深色切换不用等下一轮）
     built.live = setInterval(syncLive, 1500);
+    var gs = $("global-status");
+    built.gsObs = new MutationObserver(function () { syncLive(); });
+    if (gs) built.gsObs.observe(gs, { attributes: true, attributeFilter: ["data-state"] });
   }
 
   function teardown() {
     if (!built) return;
     built.obs.disconnect();
+    if (built.gsObs) built.gsObs.disconnect();
+    root.classList.remove("vb-dark", "vb-theming");
     clearInterval(built.live);
     clearInterval(numTimer);
     clearTimeout(kickTimer);
