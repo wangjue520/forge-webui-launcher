@@ -677,6 +677,7 @@
       });
       $("#md-batch-cancel").addEventListener("click", () => App.api.models_batch_cancel());
 
+      App.on("models", "changed", () => reloadAll());
       App.on("models", "lookup_status", (e) => App.toast(e.text));
       App.on("models", "lookup_progress", () => {}); // 状态文字已足够
       App.on("models", "lookup_done", (e) => {

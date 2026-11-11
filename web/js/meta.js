@@ -36,6 +36,8 @@
   let missingRows = [];
   let downloading = false;
   let missingProg = null;
+  let fileProg = null;
+  let downloadSpeed = { at: 0, bytes: 0, value: 0 };
   let marks = null;
 
   const STATE_TEXT = {
@@ -104,6 +106,8 @@
     missingRows = [];
     downloading = false;
     if (missingProg) missingProg.hide();
+    if (fileProg) fileProg.hide();
+    $("#meta-download-cancel").hidden = true;
 
     $("#meta-scan").disabled = true;
     $("#meta-download").disabled = true;
@@ -131,6 +135,7 @@
   /* ================= 主流程：从 File 对象打开 ================= */
 
   async function openFile(file, knownPath) {
+    if (downloading) { App.toast("模型下载中，请先完成或取消下载再换图片", "", 4000); return; }
     const my = ++seq;
     markStart();
     resetPage("读取中…");
@@ -237,6 +242,7 @@
   /* ================= 按路径打开（选择图片按钮） ================= */
 
   async function openPath(path) {
+    if (downloading) { App.toast("模型下载中，请先完成或取消下载再换图片", "", 4000); return; }
     const my = ++seq;
     markStart();
     resetPage("读取中…");
@@ -339,6 +345,10 @@
     if (row.state === "found" || row.state === "done") {
       extra = `<div class="dim" style="font-size:11px">${App.esc(row.file_name || "")}` +
         (row.size_mb ? `（${row.size_mb} MB）` : "") + `</div>`;
+      if (row.state === "done" && row.path) {
+        extra += `<div class="dim" style="font-size:11px;word-break:break-all">保存到：${App.esc(row.path)}</div>` +
+          `<button class="btn btn-xs" data-reveal="${App.esc(row.path)}">定位文件</button>`;
+      }
     } else if (row.error) {
       extra = `<div class="dim" style="font-size:11px">${App.esc(row.error)}</div>`;
     }
@@ -367,6 +377,8 @@
       }));
     tb.querySelectorAll("[data-search]").forEach((b) =>
       b.addEventListener("click", (e) => { e.stopPropagation(); nameSearch(+b.dataset.search); }));
+    tb.querySelectorAll("[data-reveal]").forEach((b) =>
+      b.addEventListener("click", () => App.api.reveal_in_explorer(b.dataset.reveal)));
     updateDownloadBtn();
   }
 
@@ -391,6 +403,7 @@
   App.pages.meta = {
     init() {
       missingProg = App.progress($("#meta-missing-progress"));
+      fileProg = App.progress($("#meta-file-progress"));
 
       $("#meta-pick").addEventListener("click", async () => {
         const r = await App.api.choose_images(false, true);
@@ -446,10 +459,31 @@
         const indexes = missingRows.filter((r) => r.checked && r.state === "found").map((r) => r.idx);
         if (!indexes.length) return;
         downloading = true; updateDownloadBtn();
+        $("#meta-scan").disabled = true; $("#meta-pick").disabled = true;
+        $("#meta-download-cancel").hidden = false;
+        $("#meta-download-cancel").disabled = false;
+        $("#meta-download-cancel").textContent = "取消下载";
+        downloadSpeed = { at: 0, bytes: 0, value: 0 };
+        missingProg.set(0, `准备下载 ${indexes.length} 个模型…`);
+        const failedStart = (msg) => {
+          App.toast(msg, "error"); downloading = false; updateDownloadBtn();
+          $("#meta-download-cancel").hidden = true;
+          $("#meta-scan").disabled = cur.refsCount === 0; $("#meta-pick").disabled = false;
+          missingProg.hide(); fileProg.hide();
+        };
         try {
           const r = await App.api.meta_download(indexes);
-          if (r && r.ok === false) { App.toast(r.error || "无法开始下载", "error"); downloading = false; updateDownloadBtn(); }
-        } catch (e) { App.toast("无法开始下载：" + e.message, "error"); downloading = false; updateDownloadBtn(); }
+          if (r && r.ok === false) failedStart(r.error || "无法开始下载");
+        } catch (e) { failedStart("无法开始下载：" + e.message); }
+      });
+
+      $("#meta-download-cancel").addEventListener("click", async () => {
+        const btn = $("#meta-download-cancel");
+        btn.disabled = true; btn.textContent = "取消中…";
+        try {
+          const r = await App.api.meta_download_cancel();
+          if (r && r.ok === false) { App.toast(r.error || "无法取消", "error"); btn.disabled = false; btn.textContent = "取消下载"; }
+        } catch (e) { App.toast("取消失败：" + e.message, "error"); btn.disabled = false; btn.textContent = "取消下载"; }
       });
 
       $("#meta-copy-prompt").addEventListener("click", () => App.copy($("#meta-prompt").value, "已复制正向提示词"));
@@ -508,23 +542,55 @@
         } catch (err) { row.state = row._prevState || "no_hash"; App.toast("选择失败：" + err.message, "error"); }
         renderMissing();
       });
+      App.on("meta", "dl_stage", (e) => {
+        const row = missingRows.find((r) => r.idx === e.idx);
+        if (row && row.state !== "downloading") { row.state = "downloading"; renderMissing(); }
+        if (e.stage !== "download") fileProg.set(0, e.text || "正在处理…");
+      });
       App.on("meta", "dl_progress", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
         if (row && row.state !== "downloading") { row.state = "downloading"; renderMissing(); }
-        const pct = e.total > 0 ? (e.downloaded / e.total * 100) : 0;
-        missingProg.set(pct, `下载中：${App.fmtBytes(e.downloaded)} / ${App.fmtBytes(e.total)}`);
+        const now = performance.now();
+        if (downloadSpeed.idx !== e.idx) downloadSpeed = { at: 0, bytes: 0, value: 0, idx: e.idx };
+        if (downloadSpeed.at && e.downloaded >= downloadSpeed.bytes) {
+          const seconds = (now - downloadSpeed.at) / 1000;
+          if (seconds > 0) {
+            const instant = (e.downloaded - downloadSpeed.bytes) / seconds;
+            downloadSpeed.value = downloadSpeed.value ? downloadSpeed.value * .65 + instant * .35 : instant;
+          }
+        }
+        downloadSpeed.at = now; downloadSpeed.bytes = e.downloaded;
+        const pct = e.total > 0 ? Math.min(100, e.downloaded / e.total * 100) : 0;
+        const speed = downloadSpeed.value > 0 ? ` · ${App.fmtBytes(downloadSpeed.value)}/s` : "";
+        fileProg.set(pct, `${e.name || "当前文件"} ${pct.toFixed(1)}% · ${App.fmtBytes(e.downloaded)} / ${App.fmtBytes(e.total)}${speed}`);
       });
       App.on("meta", "dl_item", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
         if (!row) return;
-        if (e.ok) { row.state = "done"; row.error = null; } else { row.state = "failed"; row.error = e.error; }
+        if (e.ok) {
+          Object.assign(row, { state: "done", error: null, path: e.path,
+            file_name: e.file_name || e.name, size_mb: e.size ? (e.size / 1048576).toFixed(1) : row.size_mb });
+        } else { row.state = "failed"; row.error = e.error; }
         renderMissing();
       });
-      App.on("meta", "dl_overall", (e) =>
-        missingProg.set(e.total > 0 ? (e.done / e.total * 100) : 0, `总体进度 ${e.done}/${e.total}`));
-      App.on("meta", "dl_done", () => {
-        downloading = false; missingProg.hide(); updateDownloadBtn();
-        App.toast("缺失模型下载完成", "ok");
+      App.on("meta", "dl_log", (e) => { if (e.text) App.toast(e.text, "", 5000); });
+      App.on("meta", "dl_overall", (e) => {
+        if (e.bytes_total > 0) {
+          const pct = Math.min(100, e.downloaded / e.bytes_total * 100);
+          missingProg.set(pct, `总体 ${pct.toFixed(1)}% · ${App.fmtBytes(e.downloaded)} / ${App.fmtBytes(e.bytes_total)} · ${e.done}/${e.total} 个`);
+        } else {
+          missingProg.set(e.total > 0 ? (e.done / e.total * 100) : 0, `总体进度 ${e.done}/${e.total} 个`);
+        }
+      });
+      App.on("meta", "dl_done", (e) => {
+        downloading = false; fileProg.hide(); updateDownloadBtn();
+        $("#meta-download-cancel").hidden = true;
+        $("#meta-scan").disabled = cur.refsCount === 0; $("#meta-pick").disabled = false;
+        const summary = `成功 ${e.success || 0} 个，失败 ${e.failed || 0} 个`;
+        missingProg.set(100, (e.cancelled ? "已取消 · " : "下载结束 · ") + summary);
+        if (e.cancelled) App.toast("已取消下载；" + summary + "，未完成部分保留为 .part，下次可续传", "", 6000);
+        else if (e.failed) App.toast("下载结束：" + summary + "。请查看失败行原因和详细日志", "error", 7000);
+        else App.toast(`已下载 ${e.success || 0} 个模型并核对保存路径。模型管理已刷新；WebUI 里请点击模型列表的「刷新」`, "ok", 8000);
       });
 
       resetPage();

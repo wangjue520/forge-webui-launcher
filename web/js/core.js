@@ -25,6 +25,7 @@
         if (h) h(evt);
       } catch (e) {
         console.error("事件处理出错", evt, e);
+        if (App.logFrontend) App.logFrontend("界面错误", `事件 ${evt.scope}/${evt.type}：${e.stack || e.message}`);
       }
     },
   };
@@ -491,6 +492,30 @@
   function registerGlobalEvents() {
     App.on("app", "error", (e) => App.toast(e.text || "发生未知错误", "error", 5000));
 
+    const frontendLog = (category, message) => {
+      try {
+        const p = App.api.log_frontend(category, String(message || "").slice(0, 5000));
+        if (p && p.catch) p.catch(() => {});
+      } catch (e) { /* 日志失败不能影响原按钮 */ }
+    };
+    App.logFrontend = frontendLog;
+    // 捕获阶段记录所有静态/动态按钮；只记按钮名称和位置，不读任何输入框的值。
+    document.addEventListener("click", (e) => {
+      const el = e.target.closest && e.target.closest("button,[role=button],input[type=button],input[type=submit]");
+      if (!el) return;
+      const label = (el.innerText || el.value || el.title || el.dataset.act || "（无文字按钮）")
+        .replace(/\s+/g, " ").trim().slice(0, 160);
+      const id = el.id ? ` #${el.id}` : "";
+      const page = App.currentPage || "启动中";
+      frontendLog("按钮点击", `页面=${page} 按钮=${label}${id}`);
+    }, true);
+    window.addEventListener("error", (e) => {
+      frontendLog("界面错误", `${e.message || "未知错误"} @ ${e.filename || ""}:${e.lineno || 0}`);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      frontendLog("界面错误", `未处理的 Promise：${e.reason && (e.reason.stack || e.reason.message) || e.reason}`);
+    });
+
     // 文件拖放的兜底通道：pywebview 内部结构变了时，Python 侧用旧的 DOM 事件拿路径再推到这里
     App.on("app", "dropped", (e) => {
       const mod = App.pages[App.currentPage];
@@ -539,7 +564,7 @@
   // 下面这些仍然在本机执行：联动本身、开浏览器、本机文件选择 / 拖放、本机启动器的更新和退出
   const LOCAL_API = new Set(["remote_call", "open_url", "exit_app", "request_exit_confirm", "drop_files",
     "drop_debug", "handle_dropped_paths", "launcher_check_update", "launcher_update", "launcher_restart",
-    "choose_files", "choose_images"]);
+    "choose_files", "choose_images", "log_frontend", "activity_entries", "activity_clear", "activity_open"]);
   function makeRemoteApi(local) {
     return new Proxy(local, {
       get(t, name) {

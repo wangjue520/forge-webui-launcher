@@ -149,7 +149,7 @@ def _is_civitai_host(url):
 _REDIRECT_CODES = (301, 302, 303, 307, 308)
 
 
-def _get_civitai_stream(url, headers, api_key, max_hops=10):
+def _get_civitai_stream(url, headers, api_key, max_hops=10, timeout=(15, 45)):
     """
     手动跟随重定向，每一跳按目标主机重新决定带不带 API Key。
 
@@ -157,13 +157,14 @@ def _get_civitai_stream(url, headers, api_key, max_hops=10):
     Civitai 的下载会在 civitai.com / civitai.red 之间互相跳转（视模型分级而定），
     再跳到 CDN 签名地址——中间那一跳丢了 Key，服务器就当成未登录返回 401。
     这里只给 Civitai 自家域名带 Key，跳到 CDN 等站外主机时不带（防泄露）。
+    连接与读取分别限时，避免网络半断开时工作线程无限等待。
     """
     base = {k: v for k, v in headers.items() if k.lower() != "authorization"}
     for _ in range(max_hops):
         h = dict(base)
         if api_key and _is_civitai_host(url):
             h["Authorization"] = f"Bearer {api_key}"
-        resp = requests.get(url, headers=h, stream=True, timeout=60, allow_redirects=False)
+        resp = requests.get(url, headers=h, stream=True, timeout=timeout, allow_redirects=False)
         loc = resp.headers.get("location")
         if resp.status_code in _REDIRECT_CODES and loc:
             resp.close()
@@ -726,7 +727,7 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
         if _is_civitai_host(url):
             resp_ctx = _get_civitai_stream(url, headers, api_key)
         else:
-            resp_ctx = requests.get(url, headers=headers, stream=True, timeout=60,
+            resp_ctx = requests.get(url, headers=headers, stream=True, timeout=(15, 45),
                                     allow_redirects=True)
         if resp_ctx.status_code == 416 and resume_from > 0:
             # 服务端认为范围无效（文件已变/不支持续传），删掉残块重新下
@@ -776,7 +777,9 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
             raise CivitaiError(msg or "服务器返回了错误信息而不是文件（可能需要登录）")
         resumed = resp.status_code == 206 and resume_from > 0
         downloaded = resume_from if resumed else 0
-        total = downloaded + (int(resp.headers.get("content-length", 0))
+        content_length = int(resp.headers.get("content-length", 0) or 0)
+        expected_response = downloaded + content_length if content_length else 0
+        total = downloaded + (content_length
                               or max(0, file_info.get("sizeKB", 0) * 1024 - downloaded))
         sha256 = hashlib.sha256()
         if resumed:
@@ -787,8 +790,8 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
                     if not chunk:
                         break
                     sha256.update(chunk)
-            if progress_cb:
-                progress_cb(downloaded, total)
+        if progress_cb:
+            progress_cb(downloaded, total)
         with open(tmp_path, "ab" if resumed else "wb") as f:
             for chunk in resp.iter_content(chunk_size=1024 * 256):
                 if cancel_flag and cancel_flag():
@@ -802,6 +805,11 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
                 downloaded += len(chunk)
                 if progress_cb:
                     progress_cb(downloaded, total)
+
+    # 没有 SHA256 的文件也要核对服务器声明的长度；短读时保留 .part，绝不冒充完整模型。
+    if expected_response and downloaded != expected_response:
+        raise CivitaiError(
+            f"下载不完整：已接收 {downloaded} / {expected_response} 字节，已保留 .part 供下次续传")
 
     expected_hash = (file_info.get("hashes") or {}).get("SHA256")
     hash_ok = None

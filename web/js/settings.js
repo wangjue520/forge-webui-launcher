@@ -376,6 +376,52 @@
   };
 
   /* =============== 启动器设置（全局） =============== */
+  let activitySeq = 0;
+
+  function activityText(e) {
+    return `${e.time || ""} [${e.level || "INFO"}] [${e.source || "app"}] ${e.message || ""}`;
+  }
+
+  function appendActivity(e) {
+    if (!e || !e.seq || e.seq <= activitySeq) return;
+    activitySeq = e.seq;
+    const box = $("#activity-log");
+    if (!box) return;
+    const line = document.createElement("div");
+    line.className = "activity-line" + (e.level === "ERROR" ? " activity-error" : "");
+    line.textContent = activityText(e);
+    box.appendChild(line);
+    while (box.childElementCount > 1500) box.firstElementChild.remove();
+    if ($("#activity-follow").checked) box.scrollTop = box.scrollHeight;
+  }
+
+  async function loadActivity() {
+    try {
+      const r = await App.api.activity_entries(activitySeq, 1000);
+      if (!r || !r.ok) return;
+      $("#activity-path").textContent = `日志文件：${r.path}（超过 5 MB 自动轮替；不记录输入框内容或 API Key）`;
+      (r.entries || []).forEach(appendActivity);
+    } catch (e) { console.error("读取详细日志失败", e); }
+  }
+
+  function initActivityLog() {
+    App.on("activity", "entries", (e) =>
+      (e.entries || []).forEach(appendActivity));
+    App.on("activity", "cleared", () => {
+      activitySeq = 0;
+      const box = $("#activity-log"); if (box) box.innerHTML = "";
+    });
+    $("#activity-refresh").addEventListener("click", loadActivity);
+    $("#activity-copy").addEventListener("click", () =>
+      App.copy($("#activity-log").innerText, "已复制详细日志"));
+    $("#activity-clear").addEventListener("click", async () => {
+      try { await App.api.activity_clear(); }
+      catch (e) { App.toast("清空日志失败：" + e.message, "error"); }
+    });
+    $("#activity-open").addEventListener("click", () => App.api.activity_open());
+    loadActivity();
+  }
+
   App.pages.launcher = {
     init(state) {
       const ms = state.mirror_status;
@@ -414,6 +460,7 @@
       }
 
       Updater.init(state);
+      initActivityLog();
 
       // 多实例开关
       const multi = $("#s-multi");
@@ -458,6 +505,9 @@
       }));
     },
 
-    onShow() { if (App.pages.launcher.syncMulti) App.pages.launcher.syncMulti(); },
+    onShow() {
+      if (App.pages.launcher.syncMulti) App.pages.launcher.syncMulti();
+      loadActivity();
+    },
   };
 })();

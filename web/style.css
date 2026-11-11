@@ -429,6 +429,9 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 }
 .console::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .22); background-clip: padding-box; }
 .console-sm { height: 150px; }
+.activity-console { height: 280px; margin-top: 8px; white-space: pre-wrap; }
+.activity-console .activity-error { color: #ff9b8f; }
+.activity-console .activity-line { min-height: 1.6em; }
 
 /* ============ 进度条：分段 ============ */
 .progress {

@@ -60,6 +60,7 @@ import amd_rocm
 import netspeed
 import lora_trainer as lt
 import remote_link as rl
+from activity_log import ActivityLog
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
@@ -539,6 +540,11 @@ class LauncherApi:
         self._emit_q = queue.Queue(maxsize=5000)
         self._emit_sender = None
         self._emit_sender_lock = threading.Lock()
+        self._activity = ActivityLog(
+            os.path.join(APP_DIR, "launcher_data", "detailed.log"),
+            listener=lambda entry: self._queue_event(
+                {"scope": "activity", "type": "entry", "entry": entry}))
+        self._activity.add("启动器", "详细日志已启动")
 
         # 一键启动：每个实例一个 InstanceRunner（process_manager.py）
         self._runners = {}
@@ -624,6 +630,7 @@ class LauncherApi:
         self._meta_local = {}            # idx -> 本地已有的文件路径
         self._meta_dl_thread = None
         self._meta_dl_cancel = False
+        self._meta_dl_lock = threading.Lock()
 
         # 性能监控：前端就绪后调 perf_start() 才起采样线程（daemon，随进程退出）
         self._perf_thread = None
@@ -661,13 +668,61 @@ class LauncherApi:
         host = getattr(self, "_link_host", None)
         if host is not None and scope != "link":   # 联动：远程启动器的界面也要收到主机的事件
             host.publish(dict(evt))
+        self._record_activity_event(scope, type_, data)
         self._queue_event(evt)
+
+    def _record_activity_event(self, scope, type_, data):
+        """把关键后台事件抄进详细日志；高频进度只保留阶段，不刷爆日志窗口。"""
+        quiet = {
+            "progress", "sample", "dl_progress", "dl_overall", "update_progress",
+            "lookup_progress", "import_progress", "organize_progress", "batch_progress",
+            "scan_progress", "export_progress", "transfer", "ai_step", "takeover_step",
+        }
+        if scope == "activity" or type_ in quiet:
+            return
+        text = str(data.get("text") or data.get("error") or data.get("name")
+                   or data.get("path") or "").strip()
+        if type_ == "log":
+            message = text
+        else:
+            detail = f"：{text}" if text else ""
+            message = f"事件 {type_}{detail}"
+        if not message:
+            return
+        failed = data.get("ok") is False or bool(data.get("error")) or type_ == "error"
+        self._activity.add(scope, message, "ERROR" if failed else "INFO")
+
+    def activity_entries(self, after=0, limit=1000):
+        return {"ok": True, "entries": self._activity.entries(after, limit),
+                "path": self._activity.path}
+
+    def activity_clear(self):
+        self._activity.clear()
+        self._queue_event({"scope": "activity", "type": "cleared"})
+        return {"ok": True}
+
+    def activity_open(self):
+        return self.reveal_in_explorer(self._activity.path)
+
+    def log_frontend(self, category, message):
+        category = str(category or "界面")[:60]
+        text = str(message or "")[:6000].strip()
+        if text:
+            level = "ERROR" if "错误" in category or "error" in category.lower() else "INFO"
+            self._activity.add(category, text, level)
+        return {"ok": True}
+
+    @staticmethod
+    def _droppable_event(evt):
+        # 详细日志已完整写盘，实时窗口的事件可以丢；稍后打开设置页会按序号补齐。
+        return (evt.get("type") == "log"
+                or (evt.get("scope") == "activity" and evt.get("type") == "entry"))
 
     def _queue_event(self, evt):
         if not self._window:
             return
         self._ensure_emit_sender()
-        if evt.get("type") != "log":
+        if not self._droppable_event(evt):
             # state/ask/progress 等控制事件不允许丢，队列满了就阻塞等 sender 消化
             self._emit_q.put(evt)
             return
@@ -682,13 +737,13 @@ class LauncherApi:
                 pass  # 极端情况下连最旧日志都腾不出位置，只好丢这条新的
 
     def _drop_oldest_log(self):
-        """队列已满时腾位置：移除队列里最旧的一条 log 事件（不碰其他类型）"""
+        """队列已满时腾位置：移除最旧的可丢弃日志，不碰 state/ask 等控制事件。"""
         kept = []
         dropped = False
         try:
             while True:
                 evt = self._emit_q.get_nowait()
-                if not dropped and evt.get("type") == "log":
+                if not dropped and self._droppable_event(evt):
                     dropped = True
                     continue
                 kept.append(evt)
@@ -696,7 +751,7 @@ class LauncherApi:
             pass
         # 回填时非日志事件（ask/state/done 等）排前面：ask 事件丢了，
         # 等待回答的线程会永远卡住；日志丢几条只是显示缺几行
-        kept.sort(key=lambda e: e.get("type") == "log")
+        kept.sort(key=lambda e: self._droppable_event(e))
         for evt in kept:
             try:
                 self._emit_q.put_nowait(evt)
@@ -715,9 +770,8 @@ class LauncherApi:
             self._emit_sender = t
 
     def _emit_sender_loop(self):
-        """唯一给前端发事件的线程：从队列取事件，相邻同 scope 的 log 事件
-        贪心合并成一条再发，降低 evaluate_js 频率（前端日志追加是 O(n²)，
-        发送太密会把渲染进程拖垮）"""
+        """唯一给前端发事件的线程：相邻日志合并成一批再发，降低 evaluate_js
+        频率（前端日志追加是 O(n²)，发送太密会把渲染进程拖垮）。"""
         pending = []  # 合并时取出但不属于本批的事件，按原顺序补发
         while True:
             if pending:
@@ -727,13 +781,32 @@ class LauncherApi:
             if evt is None:
                 break
             try:
-                if evt.get("type") == "log":
+                if evt.get("scope") == "activity" and evt.get("type") == "entry":
+                    entries = [evt["entry"]]
+                    while True:
+                        try:
+                            nxt = self._emit_q.get(timeout=0.05)
+                        except queue.Empty:
+                            break
+                        if nxt is None:
+                            pending.append(None)
+                            break
+                        if nxt.get("scope") == "activity" and nxt.get("type") == "entry":
+                            entries.append(nxt["entry"])
+                        else:
+                            pending.append(nxt)
+                            break
+                    evt = {"scope": "activity", "type": "entries", "entries": entries}
+                elif evt.get("type") == "log":
                     scope = evt.get("scope")
                     text = evt.get("text") or ""
                     while True:
                         try:
                             nxt = self._emit_q.get(timeout=0.05)
                         except queue.Empty:
+                            break
+                        if nxt is None:
+                            pending.append(None)
                             break
                         if (nxt.get("type") == "log" and nxt.get("scope") == scope
                                 and nxt.get("_remote") == evt.get("_remote")):
@@ -3841,8 +3914,12 @@ def _api_civitai_download(self, file_index, dest_dir):
             final_path, hash_ok = cd.download_file(
                 file_info, dest_dir, api_key,
                 progress_cb=lambda d, t: self._emit("civitai", "progress", downloaded=d, total=t))
-            if hash_ok is not False:
-                final_path = _relocate_by_content(self, final_path, file_info.get("_auto_dest"), dest_dir, log)
+            if hash_ok is False:
+                raise cd.CivitaiError(
+                    f"SHA-256 校验未通过，损坏文件已保留为 {final_path}；请删除 .broken 后重试")
+            final_path = _relocate_by_content(self, final_path, file_info.get("_auto_dest"), dest_dir, log)
+            if not os.path.isfile(final_path) or os.path.getsize(final_path) <= 0:
+                raise cd.CivitaiError(f"下载结束后没有找到有效的模型文件：{final_path}")
             cd.save_sidecar_metadata(final_path, info, file_info)
             cd.download_preview_image(final_path, info, api_key)
             log(f"下载完成: {final_path}")
@@ -7680,8 +7757,6 @@ def _api_meta_choose_candidate(self, idx, cand_idx):
 
 
 def _api_meta_download(self, indexes):
-    if self._meta_dl_thread and self._meta_dl_thread.is_alive():
-        return {"ok": False, "error": "已有下载任务在进行中"}
     root = (self.cfg.get("webui_root") or "").strip()
     if not root and not _library_path(self):
         return {"ok": False, "error": "请先在「一键启动」页设置好 WebUI 根目录"}
@@ -7691,6 +7766,8 @@ def _api_meta_download(self, indexes):
         idx = int(idx)
         result = self._meta_lookup_result.get(idx)
         if not result or not result.get("ok"):
+            continue
+        if not (0 <= idx < len(self._meta_refs)):
             continue
         ref = self._meta_refs[idx]
         folder = imc.role_folder(ref["role"], self.cfg.get("webui_branch", "")) or "models/Other"
@@ -7708,41 +7785,107 @@ def _api_meta_download(self, indexes):
         return {"ok": False, "error": "请先在列表里勾选要下载的模型"}
 
     api_key = (self.cfg.get("civitai_api_key") or "").strip() or None
-    self._meta_dl_cancel = False
     total_count = len(items)
+    item_totals = {idx: max(0, int((fi.get("sizeKB") or 0) * 1024))
+                   for idx, _vi, fi, _dest in items}
+    bytes_total = sum(item_totals.values())
 
     def work():
-        done_count = 0
+        done_count = success_count = failed_count = 0
+        received = {idx: 0 for idx, _vi, _fi, _dest in items}
+        success_paths = []
+        last_progress = [0.0]
+
+        def overall():
+            self._emit("meta", "dl_overall", done=done_count, total=total_count,
+                       downloaded=sum(received.values()), bytes_total=bytes_total)
+
         for idx, version_info, file_info, dest_dir in items:
             if self._meta_dl_cancel:
                 break
+            name = file_info.get("name") or "模型"
+
+            def on_progress(downloaded, total, i=idx):
+                received[i] = max(0, int(downloaded or 0))
+                now = time.monotonic()
+                # 每个 256KB 块都 evaluate_js 会让 WebView2 在大模型下载时假死。
+                # 最多每 250ms 刷一次；最后一块始终发送，保证能到 100%。
+                if (not total or downloaded < total) and now - last_progress[0] < 0.25:
+                    return
+                last_progress[0] = now
+                self._emit("meta", "dl_progress", idx=i, downloaded=downloaded, total=total,
+                           name=name)
+                overall()
+
             try:
-                final_path, _hash_ok = cd.download_file(
-                    file_info, dest_dir, api_key,
-                    progress_cb=lambda d, t, i=idx: self._emit(
-                        "meta", "dl_progress", idx=i, downloaded=d, total=t),
+                self._emit("meta", "dl_stage", idx=idx, stage="download",
+                           text=f"开始下载 {name}", path=dest_dir)
+                final_path, hash_ok = cd.download_file(
+                    file_info, dest_dir, api_key, progress_cb=on_progress,
                     cancel_flag=lambda: self._meta_dl_cancel,
                 )
-                if _hash_ok is not False:
-                    # 和模型下载页一样：按文件内容核对类型，放错了就挪到对的分类
-                    final_path = _relocate_by_content(
-                        self, final_path, dest_dir, dest_dir,
-                        lambda t: self._emit("meta", "dl_log", idx=idx, text=t))
-                cd.save_sidecar_metadata(final_path, version_info, file_info)
-                cd.download_preview_image(final_path, version_info, api_key)
+                received[idx] = item_totals[idx]
+                if hash_ok is False:
+                    raise cd.CivitaiError(
+                        f"SHA-256 校验未通过，损坏文件已保留为 {final_path}；请删除 .broken 后重试")
+
+                self._emit("meta", "dl_stage", idx=idx, stage="verify", text="正在核对模型类型")
+                # 和模型下载页一样：按文件内容核对类型，放错了就挪到对的分类。
+                final_path = _relocate_by_content(
+                    self, final_path, dest_dir, dest_dir,
+                    lambda t: self._emit("meta", "dl_log", idx=idx, text=t))
+                if (not final_path or final_path.endswith((".part", ".broken"))
+                        or not os.path.isfile(final_path) or os.path.getsize(final_path) <= 0):
+                    raise cd.CivitaiError(f"下载结束后没有找到有效的模型文件：{final_path or dest_dir}")
+
+                self._emit("meta", "dl_stage", idx=idx, stage="save", text="正在写入模型信息")
+                try:
+                    cd.save_sidecar_metadata(final_path, version_info, file_info)
+                    cd.download_preview_image(final_path, version_info, api_key)
+                except Exception as e:
+                    # 附属信息失败不影响模型本体，必须如实标警告而不是把模型说成没下好。
+                    self._emit("meta", "dl_log", idx=idx,
+                               text=f"模型已保存，但封面或 Civitai 信息写入失败：{e}")
+                self._meta_local[idx] = final_path
+                success_paths.append(final_path)
+                success_count += 1
                 self._emit("meta", "dl_item", idx=idx, ok=True,
-                           name=os.path.basename(final_path))
+                           name=os.path.basename(final_path), file_name=os.path.basename(final_path),
+                           path=final_path, size=os.path.getsize(final_path))
             except cd.CivitaiError as e:
+                failed_count += 1
                 self._emit("meta", "dl_item", idx=idx, ok=False, error=str(e))
             except Exception as e:
+                failed_count += 1
                 self._emit("meta", "dl_item", idx=idx, ok=False,
                            error=f"{type(e).__name__}: {e}")
-            done_count += 1
-            self._emit("meta", "dl_overall", done=done_count, total=total_count)
-        self._emit("meta", "dl_done")
+            finally:
+                done_count += 1
+                overall()
 
-    self._meta_dl_thread = self._spawn(work, name="meta-download")
-    return {"ok": True, "total": total_count}
+        cancelled = bool(self._meta_dl_cancel)
+        if success_paths:
+            self._emit("models", "changed", paths=success_paths)
+        self._emit("meta", "dl_done", ok=not failed_count and not cancelled,
+                   success=success_count, failed=failed_count, cancelled=cancelled,
+                   paths=success_paths)
+
+    # 检查与置位必须原子，连点按钮也不能启动两个写同一文件的线程。
+    with self._meta_dl_lock:
+        if self._meta_dl_thread and self._meta_dl_thread.is_alive():
+            return {"ok": False, "error": "已有下载任务在进行中"}
+        self._meta_dl_cancel = False
+        self._meta_dl_thread = self._spawn(work, name="meta-download")
+    return {"ok": True, "total": total_count, "bytes_total": bytes_total}
+
+
+def _api_meta_download_cancel(self):
+    if self._meta_dl_thread and self._meta_dl_thread.is_alive():
+        self._meta_dl_cancel = True
+        self._emit("meta", "dl_stage", idx=-1, stage="cancelling",
+                   text="正在取消；网络读取最多等待 45 秒，已下载部分会保留供续传")
+        return {"ok": True}
+    return {"ok": False, "error": "当前没有下载任务"}
 
 
 def _api_mirror_status_text(self):
@@ -9341,6 +9484,7 @@ _LINK_DENY = {
     "open_url", "reveal_in_explorer", "drop_files", "drop_debug", "handle_dropped_paths",
     "launcher_update", "launcher_restart", "remote_call", "outputs_reveal", "outputs_open",
     "reveal_image", "open_output_folder", "ver_open_backup", "ext_open_dir", "trainer_open",
+    "log_frontend", "activity_entries", "activity_clear", "activity_open",
 }
 # 远程模式下仍然显示本机事件的 scope（联动自己的状态、本机启动器的自更新）
 _LINK_LOCAL_SCOPES = {"link", "launcher"}
@@ -10027,6 +10171,7 @@ for _name, _fn in {
     "meta_name_search": _api_meta_name_search,
     "meta_choose_candidate": _api_meta_choose_candidate,
     "meta_download": _api_meta_download,
+    "meta_download_cancel": _api_meta_download_cancel,
     "launcher_check_update": _api_launcher_check_update,
     "launcher_update": _api_launcher_update,
     "launcher_restart": _api_launcher_restart,

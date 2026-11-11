@@ -389,6 +389,19 @@
           <div class="hint">开着代理软件、浏览器能上 HuggingFace，但 WD14 还是下不了模型？多半是代理软件没开 TUN/增强模式，命令行程序不走它。在这里填上代理软件的 HTTP 端口即可，效果等同于在 ComfyUI 启动脚本里写 <code>set HTTPS_PROXY=http://127.0.0.1:7890</code>。启动器马上生效；已经在运行的 WebUI / ComfyUI 要重启一次才会用上。</div>
         </div>
 
+        <div class="card" id="activity-settings-card">
+          <div class="card-title">详细日志<span class="card-title-hint">记录每个按钮点击、界面异常、后台任务阶段和错误，便于定位偶发问题</span></div>
+          <div class="row" style="align-items:center">
+            <button class="btn btn-xs" id="activity-refresh">刷新</button>
+            <button class="btn btn-xs" id="activity-copy">复制日志</button>
+            <button class="btn btn-xs" id="activity-clear">清空</button>
+            <button class="btn btn-xs" id="activity-open" data-local-only>打开日志文件</button>
+            <label class="chk-row" style="margin-left:auto"><input type="checkbox" id="activity-follow" checked><i></i><span>自动滚动到底部</span></label>
+          </div>
+          <div class="console console-sm activity-console" id="activity-log" tabindex="0"></div>
+          <div class="hint" id="activity-path">日志同时保存在 launcher_data/detailed.log；超过 5 MB 自动轮替，不会记录输入框内容或 API Key。</div>
+        </div>
+
         <div class="card" id="diag-settings-card">
           <div class="card-title">报错诊断<span class="card-title-hint">一键启动页日志框上的「诊断」、Ctrl+Shift+D 都能打开；本地规则不联网，认不出的交给 AI</span></div>
           <div class="form-grid">
@@ -941,6 +954,7 @@
               <div class="row">
                 <button class="btn" id="meta-scan" disabled>检测缺失模型</button>
                 <button class="btn btn-accent" id="meta-download" disabled>下载勾选项</button>
+                <button class="btn" id="meta-download-cancel" hidden>取消下载</button>
               </div>
               <div class="table-wrap table-wrap-sm">
                 <table class="data-table" id="meta-missing">
@@ -948,6 +962,7 @@
                   <tbody></tbody>
                 </table>
               </div>
+              <div class="progress" id="meta-file-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
               <div class="progress" id="meta-missing-progress" hidden><div class="progress-bar"></div><span class="progress-text"></span></div>
             </div>
             <div class="row">
