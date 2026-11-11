@@ -38,6 +38,7 @@
   let missingProg = null;
   let fileProg = null;
   let downloadSpeed = { at: 0, bytes: 0, value: 0 };
+  let dlResults = {};      // 这一轮下载每个模型的结果 idx → {ok, path, error, …}
   let marks = null;
 
   const STATE_TEXT = {
@@ -45,6 +46,7 @@
     no_hash: { text: "无哈希", cls: "" },
     querying: { text: "查询中…", cls: "" },
     found: { text: "可下载", cls: "ok" },
+    queued: { text: "排队中", cls: "" },
     not_found: { text: "未找到", cls: "bad" },
     downloading: { text: "下载中…", cls: "" },
     done: { text: "已下载", cls: "ok" },
@@ -108,6 +110,8 @@
     if (missingProg) missingProg.hide();
     if (fileProg) fileProg.hide();
     $("#meta-download-cancel").hidden = true;
+    $("#meta-dl-result").hidden = true;
+    dlResults = {};
 
     $("#meta-scan").disabled = true;
     $("#meta-download").disabled = true;
@@ -339,35 +343,49 @@
 
   /* ================= 缺失模型检测 ================= */
 
+  // 状态列只放一行短字；文件名、保存位置、出错原因放在这一行下面的整行说明里。
+  // 以前全塞进窄窄的状态列，出错原因被挤成一个字一行，行高撑到好几百像素，
+  // 名字和勾选框被顶出可视区——用户看不出是哪个模型、为什么失败（群友反馈视频里就是这样）
   function stateHtml(row) {
     const s = STATE_TEXT[row.state] || { text: row.state, cls: "" };
-    let extra = "";
-    if (row.state === "found" || row.state === "done") {
-      extra = `<div class="dim" style="font-size:11px">${App.esc(row.file_name || "")}` +
-        (row.size_mb ? `（${row.size_mb} MB）` : "") + `</div>`;
-      if (row.state === "done" && row.path) {
-        extra += `<div class="dim" style="font-size:11px;word-break:break-all">保存到：${App.esc(row.path)}</div>` +
-          `<button class="btn btn-xs" data-reveal="${App.esc(row.path)}">定位文件</button>`;
-      }
-    } else if (row.error) {
-      extra = `<div class="dim" style="font-size:11px">${App.esc(row.error)}</div>`;
+    let text = s.text;
+    if (row.state === "downloading" && row.pct != null) text = `下载中 ${row.pct.toFixed(0)}%`;
+    if (row.state === "failed" && row.need_key) text = "需要登录";
+    if (row.state === "done" && row.warn) text = "已下载 · 请核对";
+    return `<span${s.cls ? ` style="color:var(--${s.cls})"` : ""}>${App.esc(text)}</span>`;
+  }
+
+  function detailHtml(row) {
+    const bits = [];
+    if (row.state === "found" || row.state === "queued") {
+      if (row.file_name) bits.push(`Civitai 文件：${App.esc(row.file_name)}` + (row.size_mb ? `（${row.size_mb} MB）` : ""));
+    } else if (row.state === "done") {
+      if (row.path) bits.push(`保存到：<span class="meta-path">${App.esc(row.path)}</span>` +
+        ` <button class="btn btn-xs" data-reveal="${App.esc(row.path)}">定位文件</button>`);
+      if (row.renamed_from) bits.push(`已按图里的名字保存（Civitai 上叫 ${App.esc(row.renamed_from)}），WebUI / ComfyUI 按这个名字就能找到`);
+      if (row.warn) bits.push(`<span class="meta-warn">${App.esc(row.warn)}</span>`);
+    } else if (row.state === "failed" || (row.state === "not_found" && row.error)) {
+      bits.push(`<span class="meta-warn">${App.esc(row.error || "下载失败")}</span>` +
+        (row.need_key ? ` <button class="btn btn-xs btn-accent" data-key="${row.idx}">填写 Civitai Key</button>` : "") +
+        (row.state === "failed" ? ` <button class="btn btn-xs" data-retry="${row.idx}">重试</button>` : ""));
     }
-    return `<span${s.cls ? ` style="color:var(--${s.cls})"` : ""}>${s.text}</span>${extra}`;
+    return bits.length ? `<tr class="meta-sub" data-sub="${row.idx}"><td></td><td colspan="3">${bits.join("<br>")}</td></tr>` : "";
   }
 
   function renderMissing() {
     const tb = $("#meta-missing tbody");
     if (!missingRows.length) { tb.innerHTML = ""; updateDownloadBtn(); return; }
     tb.innerHTML = missingRows.map((r) => {
-      const canDl = ["found", "downloading", "done", "failed"].indexOf(r.state) >= 0;
+      const canDl = ["found", "queued", "downloading", "done", "failed"].indexOf(r.state) >= 0;
+      const locked = r.state === "downloading" || r.state === "done" || r.state === "queued";
       // 「按名字搜索」按钮放第一列：之前放在状态列里，行内容一宽状态列就被
       // 挤出可视区（容器横向滚动），用户根本看不到这个入口
       const chk = canDl
-        ? `<input type="checkbox" data-idx="${r.idx}" ${r.checked ? "checked" : ""} ${(r.state === "downloading" || r.state === "done") ? "disabled" : ""}>`
+        ? `<input type="checkbox" data-idx="${r.idx}" ${r.checked ? "checked" : ""} ${locked ? "disabled" : ""}>`
         : (r.state === "no_hash" || r.state === "not_found"
           ? `<button class="btn btn-xs" data-search="${r.idx}">按名字搜索</button>` : "");
-      return `<tr data-idx="${r.idx}"><td>${chk}</td><td class="dim">${App.esc(r.role)}</td>
-        <td>${App.esc(r.name)}</td><td>${stateHtml(r)}</td></tr>`;
+      return `<tr data-idx="${r.idx}"${r.state === "downloading" ? ' class="selected"' : ""}><td>${chk}</td><td class="dim">${App.esc(r.role)}</td>
+        <td>${App.esc(r.name)}</td><td style="white-space:nowrap">${stateHtml(r)}</td></tr>` + detailHtml(r);
     }).join("");
     tb.querySelectorAll("input[type=checkbox]").forEach((c) =>
       c.addEventListener("change", () => {
@@ -378,12 +396,108 @@
     tb.querySelectorAll("[data-search]").forEach((b) =>
       b.addEventListener("click", (e) => { e.stopPropagation(); nameSearch(+b.dataset.search); }));
     tb.querySelectorAll("[data-reveal]").forEach((b) =>
-      b.addEventListener("click", () => App.api.reveal_in_explorer(b.dataset.reveal)));
+      b.addEventListener("click", (e) => { e.stopPropagation(); App.api.reveal_in_explorer(b.dataset.reveal); }));
+    tb.querySelectorAll("[data-key]").forEach((b) =>
+      b.addEventListener("click", (e) => { e.stopPropagation(); askKeyAndRetry(); }));
+    tb.querySelectorAll("[data-retry]").forEach((b) =>
+      b.addEventListener("click", (e) => { e.stopPropagation(); startDownload([+b.dataset.retry]); }));
     updateDownloadBtn();
   }
 
+  // 下载失败的勾上了也能再下（以前只认「可下载」，失败一次就再也点不了下载按钮）
+  const RETRYABLE = ["found", "failed"];
+
   function updateDownloadBtn() {
-    $("#meta-download").disabled = downloading || !missingRows.some((r) => r.checked && r.state === "found");
+    $("#meta-download").disabled = downloading ||
+      !missingRows.some((r) => r.checked && RETRYABLE.indexOf(r.state) >= 0);
+  }
+
+  // 正在下的那一行滚进表格可视区：表格只有一小块，下第二个时第一个早滚出去了
+  function revealRow(idx) {
+    const tr = document.querySelector(`#meta-missing tr[data-idx="${idx}"]`);
+    const wrap = tr && tr.closest(".table-wrap");
+    if (!wrap) return;
+    const top = tr.offsetTop - wrap.querySelector("thead").offsetHeight;
+    if (top < wrap.scrollTop || top + tr.offsetHeight > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = Math.max(0, top - 8);
+  }
+
+  async function startDownload(indexes) {
+    if (downloading || !indexes.length) return;
+    downloading = true;
+    missingRows.forEach((r) => {
+      if (indexes.indexOf(r.idx) >= 0) Object.assign(r, { state: "queued", checked: true, error: null, need_key: false, pct: null });
+    });
+    renderMissing();
+    $("#meta-scan").disabled = true; $("#meta-pick").disabled = true;
+    const cancel = $("#meta-download-cancel");
+    cancel.hidden = false; cancel.disabled = false; cancel.textContent = "取消下载";
+    $("#meta-dl-result").hidden = true;
+    downloadSpeed = { at: 0, bytes: 0, value: 0 };
+    dlResults = {};
+    missingProg.set(0, `准备下载 ${indexes.length} 个模型…`);
+    const failedStart = (msg) => {
+      App.toast(msg, "error"); downloading = false;
+      missingRows.forEach((r) => { if (r.state === "queued") r.state = "found"; });
+      renderMissing();
+      cancel.hidden = true;
+      $("#meta-scan").disabled = cur.refsCount === 0; $("#meta-pick").disabled = false;
+      missingProg.hide(); fileProg.hide();
+    };
+    try {
+      const r = await App.api.meta_download(indexes);
+      if (r && r.ok === false) failedStart(r.error || "无法开始下载");
+    } catch (e) { failedStart("无法开始下载：" + e.message); }
+  }
+
+  // 403 / 401：这个模型要登录才能下。图片信息页没有填 Key 的地方，以前提示「在下方填入 Key」
+  // 用户在这页根本找不到。直接在这里弹框填，存好后把要登录的那几个重新下一遍
+  async function askKeyAndRetry() {
+    if (downloading) return;
+    let key = "";
+    const has = !!(App.cfg.civitai_api_key || "").trim();
+    const v = await App.modal("填写 Civitai API Key",
+      `<div class="dim" style="margin-bottom:8px">${has ? "已经填过 Key 但仍被拒绝：Key 可能失效了，换一个新的；" : ""}` +
+      `这个模型的作者设置了登录后才能下载。到 Civitai 网站右上角头像 → Settings → API Keys 生成一个，粘贴到下面。` +
+      `Key 只保存在本机配置里，和「模型下载」页填的是同一个。</div>
+       <input type="password" id="meta-key-input" style="width:100%" placeholder="粘贴 Civitai API Key" autocomplete="off">`,
+      [{ id: "ok", label: "保存并重试", kind: "primary" }, { id: "open", label: "打开 Civitai 生成 Key" }, { id: "cancel", label: "取消" }],
+      { onOpen(body) { const i = body.querySelector("#meta-key-input"); if (i) i.focus(); },
+        onClose(body, val) { const i = body.querySelector("#meta-key-input"); key = val === "ok" && i ? i.value.trim() : ""; } });
+    if (v === "open") { App.api.open_url("https://civitai.com/user/account"); return; }
+    if (v !== "ok" || !key) return;
+    try {
+      await App.api.update_config({ civitai_api_key: key });
+      App.cfg.civitai_api_key = key;
+      const box = $("#cv-apikey"); if (box) box.value = key;
+    } catch (e) { App.toast("保存 Key 失败：" + e.message, "error"); return; }
+    const idxs = missingRows.filter((r) => r.state === "failed" && r.need_key).map((r) => r.idx);
+    App.toast("Key 已保存" + (idxs.length ? "，正在重新下载" : ""), "ok");
+    if (idxs.length) startDownload(idxs);
+  }
+
+  // 一轮下载结束后的结果清单：表格太小、行会被滚走，结果单独列在进度条下面
+  function renderDlResult(e) {
+    const box = $("#meta-dl-result");
+    const rows = Object.keys(dlResults).map((k) => {
+      const r = dlResults[k];
+      const row = missingRows.find((x) => x.idx === +k) || {};
+      const name = App.esc(row.name || r.file_name || "模型");
+      if (r.ok) {
+        return `<div class="meta-res ok">✓ ${name} → <span class="meta-path">${App.esc(r.path || "")}</span>` +
+          (r.path ? ` <button class="btn btn-xs" data-reveal="${App.esc(r.path)}">定位文件</button>` : "") +
+          (r.warn ? `<div class="meta-warn">${App.esc(r.warn)}</div>` : "") + `</div>`;
+      }
+      return `<div class="meta-res bad">✗ ${name}：${App.esc(r.error || "下载失败")}` +
+        (r.need_key ? ` <button class="btn btn-xs btn-accent" data-key="1">填写 Civitai Key</button>` : "") + `</div>`;
+    });
+    if (!rows.length) { box.hidden = true; return; }
+    const okN = Object.values(dlResults).filter((r) => r.ok).length;
+    const tail = okN ? `<div class="dim" style="margin-top:4px">WebUI 已经开着的话，在 LoRA / 模型列表上点一下「刷新」才看得到新模型；ComfyUI 按 R 刷新节点里的下拉框。</div>` : "";
+    box.innerHTML = `<div class="meta-res-title">${e && e.cancelled ? "已取消" : "下载结果"}</div>` + rows.join("") + tail;
+    box.hidden = false;
+    box.querySelectorAll("[data-reveal]").forEach((b) =>
+      b.addEventListener("click", () => App.api.reveal_in_explorer(b.dataset.reveal)));
+    box.querySelectorAll("[data-key]").forEach((b) => b.addEventListener("click", askKeyAndRetry));
   }
 
   async function nameSearch(idx, allBases) {
@@ -455,27 +569,8 @@
         } catch (e) { App.toast("检测失败：" + e.message, "error"); }
       });
 
-      $("#meta-download").addEventListener("click", async () => {
-        const indexes = missingRows.filter((r) => r.checked && r.state === "found").map((r) => r.idx);
-        if (!indexes.length) return;
-        downloading = true; updateDownloadBtn();
-        $("#meta-scan").disabled = true; $("#meta-pick").disabled = true;
-        $("#meta-download-cancel").hidden = false;
-        $("#meta-download-cancel").disabled = false;
-        $("#meta-download-cancel").textContent = "取消下载";
-        downloadSpeed = { at: 0, bytes: 0, value: 0 };
-        missingProg.set(0, `准备下载 ${indexes.length} 个模型…`);
-        const failedStart = (msg) => {
-          App.toast(msg, "error"); downloading = false; updateDownloadBtn();
-          $("#meta-download-cancel").hidden = true;
-          $("#meta-scan").disabled = cur.refsCount === 0; $("#meta-pick").disabled = false;
-          missingProg.hide(); fileProg.hide();
-        };
-        try {
-          const r = await App.api.meta_download(indexes);
-          if (r && r.ok === false) failedStart(r.error || "无法开始下载");
-        } catch (e) { failedStart("无法开始下载：" + e.message); }
-      });
+      $("#meta-download").addEventListener("click", () =>
+        startDownload(missingRows.filter((r) => r.checked && RETRYABLE.indexOf(r.state) >= 0).map((r) => r.idx)));
 
       $("#meta-download-cancel").addEventListener("click", async () => {
         const btn = $("#meta-download-cancel");
@@ -544,12 +639,23 @@
       });
       App.on("meta", "dl_stage", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
-        if (row && row.state !== "downloading") { row.state = "downloading"; renderMissing(); }
-        if (e.stage !== "download") fileProg.set(0, e.text || "正在处理…");
+        if (row && row.state !== "downloading") { row.state = "downloading"; row.pct = null; renderMissing(); revealRow(row.idx); }
+        if (e.stage === "download") fileProg.set(0, e.text || "正在连接…");
+        else fileProg.set(100, e.text || "正在处理…");
       });
       App.on("meta", "dl_progress", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
-        if (row && row.state !== "downloading") { row.state = "downloading"; renderMissing(); }
+        const rowPct = e.total > 0 ? Math.min(100, e.downloaded / e.total * 100) : null;
+        if (row && (row.state !== "downloading" || Math.floor(rowPct || 0) !== Math.floor(row.pct || 0))) {
+          const first = row.state !== "downloading";
+          row.state = "downloading"; row.pct = rowPct;
+          // 整表重画只在百分比的整数变了时做（一秒最多几次），不随每条进度重画
+          if (first) { renderMissing(); revealRow(row.idx); }
+          else {
+            const cell = document.querySelector(`#meta-missing tr[data-idx="${row.idx}"] td:last-child`);
+            if (cell) cell.innerHTML = stateHtml(row); else renderMissing();
+          }
+        }
         const now = performance.now();
         if (downloadSpeed.idx !== e.idx) downloadSpeed = { at: 0, bytes: 0, value: 0, idx: e.idx };
         if (downloadSpeed.at && e.downloaded >= downloadSpeed.bytes) {
@@ -567,10 +673,14 @@
       App.on("meta", "dl_item", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
         if (!row) return;
+        dlResults[e.idx] = e;
         if (e.ok) {
-          Object.assign(row, { state: "done", error: null, path: e.path,
+          Object.assign(row, { state: "done", error: null, need_key: false, path: e.path, warn: e.warn || "",
+            renamed_from: e.renamed_from || "", checked: false,
             file_name: e.file_name || e.name, size_mb: e.size ? (e.size / 1048576).toFixed(1) : row.size_mb });
-        } else { row.state = "failed"; row.error = e.error; }
+        } else {
+          Object.assign(row, { state: "failed", error: e.error, need_key: !!e.need_key, checked: true });
+        }
         renderMissing();
       });
       App.on("meta", "dl_log", (e) => { if (e.text) App.toast(e.text, "", 5000); });
@@ -583,14 +693,20 @@
         }
       });
       App.on("meta", "dl_done", (e) => {
-        downloading = false; fileProg.hide(); updateDownloadBtn();
+        downloading = false; fileProg.hide();
+        // 取消时还排着没轮到的，退回「可下载」
+        missingRows.forEach((r) => { if (r.state === "queued" || r.state === "downloading") { r.state = "found"; r.pct = null; } });
+        renderMissing();
         $("#meta-download-cancel").hidden = true;
         $("#meta-scan").disabled = cur.refsCount === 0; $("#meta-pick").disabled = false;
         const summary = `成功 ${e.success || 0} 个，失败 ${e.failed || 0} 个`;
         missingProg.set(100, (e.cancelled ? "已取消 · " : "下载结束 · ") + summary);
+        renderDlResult(e);
+        // 以前不管成没成功都弹「缺失模型下载完成」，失败的那个被当成下好了
         if (e.cancelled) App.toast("已取消下载；" + summary + "，未完成部分保留为 .part，下次可续传", "", 6000);
-        else if (e.failed) App.toast("下载结束：" + summary + "。请查看失败行原因和详细日志", "error", 7000);
-        else App.toast(`已下载 ${e.success || 0} 个模型并核对保存路径。模型管理已刷新；WebUI 里请点击模型列表的「刷新」`, "ok", 8000);
+        else if (e.failed && !e.success) App.toast("下载失败：" + summary + "。原因见进度条下面的下载结果", "error", 8000);
+        else if (e.failed) App.toast("部分下载失败：" + summary + "。原因见进度条下面的下载结果", "error", 8000);
+        else App.toast(`已下载 ${e.success || 0} 个模型，保存位置见下载结果。WebUI 里要在模型列表上点「刷新」才看得到`, "ok", 8000);
       });
 
       resetPage();

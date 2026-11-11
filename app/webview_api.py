@@ -540,6 +540,9 @@ class LauncherApi:
         self._emit_q = queue.Queue(maxsize=5000)
         self._emit_sender = None
         self._emit_sender_lock = threading.Lock()
+        self._prog_lock = threading.Lock()   # 下载进度限流，见 _progress_hold
+        self._prog_last = {}
+        self._prog_pending = {}
         self._activity = ActivityLog(
             os.path.join(APP_DIR, "launcher_data", "detailed.log"),
             listener=lambda entry: self._queue_event(
@@ -659,6 +662,50 @@ class LauncherApi:
     def _emit(self, scope, type_, **data):
         """推送事件给前端：只放进发送队列，由 sender 线程统一 evaluate_js。
         worker 线程从此不会因渲染进程阻塞而产生背压。"""
+        if "downloaded" in data and "total" in data:
+            if self._progress_hold(scope, type_, data):
+                return
+        elif self._prog_pending:
+            self._progress_flush(scope)      # 同一页面的「完成 / 出错」之前，先把压着的最后一条进度发掉
+        self._emit_now(scope, type_, data)
+
+    # 下载进度（带 downloaded / total 的事件）限流间隔。下载每 256KB 回调一次，网速快时一秒
+    # 几百次，每次都要到界面线程上跑一段 JS，窗口会卡到点不动。同一路进度最多这么久发一条，
+    # 中间被压下的只留最新一条，没有新进度时由 sender 线程补发（进度条不会停在旧数字上）
+    PROGRESS_GAP = 0.2
+
+    def _progress_hold(self, scope, type_, data):
+        """返回 True = 这条先压着（只留最新）；False = 现在就发"""
+        key = (scope, type_, data.get("idx"), data.get("id"), data.get("iid"))
+        now = time.monotonic()
+        try:
+            finished = bool(data["total"]) and data["downloaded"] >= data["total"]
+        except TypeError:
+            finished = False
+        with self._prog_lock:
+            if finished or now - self._prog_last.get(key, 0.0) >= self.PROGRESS_GAP:
+                self._prog_last[key] = now
+                self._prog_pending.pop(key, None)
+                return False
+            self._prog_pending[key] = (scope, type_, data)
+            return True
+
+    def _progress_flush(self, scope=None, direct=False):
+        """补发被压下的进度：给了 scope 就立刻发这个页面的；没给就只发已经到时间的"""
+        now = time.monotonic()
+        with self._prog_lock:
+            if not self._prog_pending:
+                return
+            keys = [k for k in self._prog_pending
+                    if (k[0] == scope if scope is not None
+                        else now - self._prog_last.get(k, 0.0) >= self.PROGRESS_GAP)]
+            todo = [self._prog_pending.pop(k) for k in keys]
+            for k in keys:
+                self._prog_last[k] = now
+        for sc, tp, data in todo:
+            self._emit_now(sc, tp, data, direct=direct)
+
+    def _emit_now(self, scope, type_, data, direct=False):
         if scope != "diag":
             try:
                 _diag_hook(self, scope, type_, data)   # 日志抄一份给报错诊断
@@ -668,8 +715,14 @@ class LauncherApi:
         host = getattr(self, "_link_host", None)
         if host is not None and scope != "link":   # 联动：远程启动器的界面也要收到主机的事件
             host.publish(dict(evt))
-        self._record_activity_event(scope, type_, data)
-        self._queue_event(evt)
+        try:
+            self._record_activity_event(scope, type_, data)
+        except Exception:
+            pass
+        if direct:
+            self._send_event(evt)    # sender 线程自己补发：不能往自己消费的队列里阻塞着塞
+        else:
+            self._queue_event(evt)
 
     def _record_activity_event(self, scope, type_, data):
         """把关键后台事件抄进详细日志；高频进度只保留阶段，不刷爆日志窗口。"""
@@ -682,6 +735,10 @@ class LauncherApi:
             return
         text = str(data.get("text") or data.get("error") or data.get("name")
                    or data.get("path") or "").strip()
+        if type_ == "log" and scope == "launch":
+            # WebUI / ComfyUI 自己的输出已经在「运行日志」里，装依赖时一秒几百行，全抄进来
+            # 会把点击记录淹掉、还要多发一倍事件。只留启动器自己的话和报错
+            text = "\n".join(ln for ln in text.splitlines() if _ACTIVITY_LAUNCH_KEEP.search(ln)).strip()
         if type_ == "log":
             message = text
         else:
@@ -777,7 +834,14 @@ class LauncherApi:
             if pending:
                 evt = pending.pop(0)
             else:
-                evt = self._emit_q.get()
+                try:
+                    evt = self._emit_q.get(timeout=0.25)
+                except queue.Empty:
+                    try:    # 一阵子没有新事件：把限流压下的最后一条进度补发出去
+                        self._progress_flush(direct=True)
+                    except Exception:
+                        pass
+                    continue
             if evt is None:
                 break
             try:
@@ -831,11 +895,20 @@ class LauncherApi:
         if not _link_should_show(self, evt):
             return
         evt.pop("_remote", None)
+        t0 = time.monotonic()
         try:
             payload = json.dumps(evt, ensure_ascii=False)
             window.evaluate_js(f"window.App && window.App.onEvent({payload})")
         except Exception:
             pass
+        cost = time.monotonic() - t0
+        if cost >= 2.0 and evt.get("scope") != "activity":
+            # 界面线程这么久才处理完一条事件 = 这段时间窗口是卡住的；记下来，事后能对上时间
+            try:
+                self._activity.add("界面卡顿", f"界面 {cost:.1f} 秒没有响应"
+                                   f"（当时在处理 {evt.get('scope')}/{evt.get('type')}）", "WARN")
+            except Exception:
+                pass
 
     def _ask(self, scope, title, body, buttons, cancel_event=None):
         """给前端弹一个选择框，阻塞当前工作线程直到用户点了某个按钮。
@@ -7639,13 +7712,7 @@ def _api_meta_scan_missing(self):
     lookups = []
     for idx, ref in enumerate(self._meta_refs):
         row = {"idx": idx, "role": ref["role"], "name": ref["name"]}
-        lib_key = ml.ROLE_TO_LIBRARY_KEY.get(ref["role"]) if lib else None
-        extra = ml.library_dir_variants(lib, lib_key) if lib_key else []
-        if lib and ref["role"] == "Checkpoint":
-            extra = extra + ml.library_dir_variants(lib, "diffusion_models")   # 只有 DiT 的主模型
-        local_path = imc.find_local_model_file(
-            _models_root(self.cfg), ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
-            extra_dirs=extra)
+        local_path = _meta_find_local(self, ref)
         if local_path:
             row["state"] = "local"
             self._meta_local[idx] = local_path
@@ -7684,6 +7751,35 @@ def _api_meta_scan_missing(self):
 
         self._spawn(work, name="meta-lookup")
     return {"ok": True, "rows": rows, "querying": len(lookups)}
+
+
+def _meta_find_local(self, ref):
+    """图里引用的模型在本机（当前实例 + 共享模型库）哪里；没有返回 None"""
+    lib = _library_path(self)
+    lib_key = ml.ROLE_TO_LIBRARY_KEY.get(ref["role"]) if lib else None
+    extra = ml.library_dir_variants(lib, lib_key) if lib_key else []
+    if lib and ref["role"] == "Checkpoint":
+        extra = extra + ml.library_dir_variants(lib, "diffusion_models")   # 只有 DiT 的主模型
+    return imc.find_local_model_file(
+        _models_root(self.cfg), ref["role"], ref["name"], self.cfg.get("webui_branch", ""),
+        extra_dirs=extra)
+
+
+def _meta_save_name(ref_name, file_name):
+    """
+    缺失模型存成什么文件名：图里写的名字（只取文件名部分）+ 下载文件的扩展名。
+    图里的名字没法当文件名（空、含非法字符）时退回 Civitai 上的原名。
+    """
+    file_name = os.path.basename(str(file_name or "").replace("\\", "/")).strip()
+    base = os.path.basename(str(ref_name or "").replace("\\", "/")).strip()
+    ext = os.path.splitext(file_name)[1]
+    stem, ref_ext = os.path.splitext(base)
+    if ref_ext.lower() not in imc._MODEL_FILE_EXTS:
+        stem = base          # 图里的名字不带扩展名，但本身可能带点（anime.v2）
+    stem = stem.strip().rstrip(".")
+    if not stem or not ext or stem in (".", "..") or re.search(r'[<>:"/\\|?*\x00-\x1f]', stem):
+        return file_name
+    return stem + ext
 
 
 def _meta_image_base(self):
@@ -7780,6 +7876,12 @@ def _api_meta_download(self, indexes):
                             else _download_dest(self, folder))
         if not dest_dir or not os.path.isabs(dest_dir):
             continue   # 没开库、也没设根目录的类型：无处可放
+        # 按图片里写的名字存：Civitai 上的文件名常和图里不一样（作者改过名、按名字搜到的是
+        # 别的写法），按原名存下来，WebUI 的 <lora:名字> 和 ComfyUI 工作流照样找不到，
+        # 看起来就是「下载完成了但模型没出现」
+        save_name = _meta_save_name(ref["name"], fi.get("name"))
+        if save_name and save_name != fi.get("name"):
+            fi = dict(fi, name=save_name, original_name=fi.get("name"))
         items.append((idx, vi, fi, dest_dir))
     if not items:
         return {"ok": False, "error": "请先在列表里勾选要下载的模型"}
@@ -7819,7 +7921,7 @@ def _api_meta_download(self, indexes):
 
             try:
                 self._emit("meta", "dl_stage", idx=idx, stage="download",
-                           text=f"开始下载 {name}", path=dest_dir)
+                           text=f"开始下载 {name} → {dest_dir}", path=dest_dir)
                 final_path, hash_ok = cd.download_file(
                     file_info, dest_dir, api_key, progress_cb=on_progress,
                     cancel_flag=lambda: self._meta_dl_cancel,
@@ -7849,12 +7951,28 @@ def _api_meta_download(self, indexes):
                 self._meta_local[idx] = final_path
                 success_paths.append(final_path)
                 success_count += 1
+                # 再按「检测缺失模型」同样的规则找一遍：找不到说明放的位置这台实例不读
+                warn = ""
+                if not _meta_find_local(self, self._meta_refs[idx]):
+                    warn = ("文件已保存，但按这张图里的名字在当前实例的模型目录里找不到它"
+                            "（可能被挪到了别的分类）。请点「定位文件」确认位置")
+                renamed = file_info.get("original_name") or ""
                 self._emit("meta", "dl_item", idx=idx, ok=True,
                            name=os.path.basename(final_path), file_name=os.path.basename(final_path),
-                           path=final_path, size=os.path.getsize(final_path))
+                           path=final_path, size=os.path.getsize(final_path),
+                           renamed_from=renamed, warn=warn)
             except cd.CivitaiError as e:
                 failed_count += 1
-                self._emit("meta", "dl_item", idx=idx, ok=False, error=str(e))
+                status = getattr(e, "status", None)
+                need_key = status in (401, 403)
+                error = str(e)
+                if need_key:
+                    error = (f"Civitai 拒绝下载（{status}）：这个模型要登录后才能下载，"
+                             "点「填写 Civitai Key」填上后重试" if getattr(e, "need_login", False) else
+                             f"Civitai 拒绝下载（{status}）：已带上 API Key 仍被拒，可能 Key 已失效，"
+                             "或这是抢先体验 / 付费才能下的版本")
+                self._emit("meta", "dl_item", idx=idx, ok=False, error=error,
+                           need_key=need_key, has_key=bool(api_key), status=status)
             except Exception as e:
                 failed_count += 1
                 self._emit("meta", "dl_item", idx=idx, ok=False,
@@ -8572,6 +8690,8 @@ def _api_perf_start(self):
 # ============================================================
 
 _DIAG_DONE_TYPES = ("done", "update_done", "switch_done")
+# 实例输出里抄进详细日志的行：启动器自己的话和报错（其余的在「运行日志」里）
+_ACTIVITY_LAUNCH_KEEP = re.compile(r"^\s*\[(启动器|诊断)\]|Traceback|Error|Exception|错误|失败")
 
 
 def _diag_hook(self, scope, type_, data):

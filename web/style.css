@@ -433,6 +433,22 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .activity-console .activity-error { color: #ff9b8f; }
 .activity-console .activity-line { min-height: 1.6em; }
 
+/* 图片信息页 · 缺失模型：表格加高、详情占整行；下载结果单独列出 */
+.meta-missing-wrap { max-height: 320px; }
+.meta-missing-wrap .data-table { table-layout: fixed; }
+.meta-missing-wrap td { overflow-wrap: anywhere; }
+.data-table tr.meta-sub td { padding-top: 0; font-size: 11.5px; color: var(--text-faint); cursor: default; }
+.data-table tr.meta-sub { cursor: default; }
+.data-table tr:has(+ tr.meta-sub) td { border-bottom: none; }
+.meta-path { word-break: break-all; color: var(--ink); }
+.meta-warn { color: var(--bad); }
+.meta-dl-result { margin: 8px 0; padding: 10px 12px; border: 1px solid var(--line-strong); background: var(--input-bg); font-size: 12.5px; line-height: 1.7; }
+.meta-dl-result[hidden] { display: none; }
+.meta-res-title { font-weight: 700; margin-bottom: 4px; }
+.meta-res.ok { color: var(--ok); }
+.meta-res.bad { color: var(--bad); }
+.meta-res .meta-warn { margin-left: 1.3em; }
+
 /* ============ 进度条：分段 ============ */
 .progress {
   position: relative; height: 20px;

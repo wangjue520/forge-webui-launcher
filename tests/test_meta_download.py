@@ -104,6 +104,86 @@ class MetaDownloadTests(unittest.TestCase):
         self.assertIn("没有找到有效的模型文件", self.events_of("dl_item")[-1]["error"])
         self.assertEqual(self.events_of("dl_done")[-1]["failed"], 1)
 
+    def fake_download(self, saved):
+        def download(info, dest, _key, progress_cb, cancel_flag):
+            os.makedirs(dest, exist_ok=True)
+            path = os.path.join(dest, info["name"])
+            saved.append(info["name"])
+            with open(path, "wb") as f:
+                f.write(b"model")
+            progress_cb(5, 5)
+            return path, None
+        return download
+
+    def test_saved_under_the_name_the_image_uses(self):
+        # 群友视频：按名字搜到的文件名和图里不一样，下完了 WebUI / 工作流按图里的名字还是找不到
+        self.api._meta_refs = [{"role": "LoRA", "name": "loras/krea2filterbypass3.safetensors"}]
+        self.api._meta_lookup_result[0]["file_info"]["name"] = "krea2_filter_bypass_v3.safetensors"
+        saved = []
+        with mock.patch.object(cd, "download_file", side_effect=self.fake_download(saved)), \
+                mock.patch.object(wa, "_relocate_by_content", side_effect=lambda _api, path, *args: path), \
+                mock.patch.object(cd, "save_sidecar_metadata"), \
+                mock.patch.object(cd, "download_preview_image"):
+            wa._api_meta_download(self.api, [0])
+        item = self.events_of("dl_item")[-1]
+        self.assertEqual(saved, ["krea2filterbypass3.safetensors"])
+        self.assertTrue(item["ok"])
+        self.assertEqual(item["renamed_from"], "krea2_filter_bypass_v3.safetensors")
+        self.assertEqual(item["warn"], "")         # 再检测一遍能找到
+        # 下载线程里用的是副本，查到的原始信息不被改掉（重试时还要用）
+        self.assertEqual(self.api._meta_lookup_result[0]["file_info"]["name"], "krea2_filter_bypass_v3.safetensors")
+
+    def test_file_moved_out_of_sight_is_flagged(self):
+        other = os.path.join(self.tmp.name, "elsewhere")
+
+        def relocate(_api, path, *args):
+            os.makedirs(other, exist_ok=True)
+            new = os.path.join(other, os.path.basename(path))
+            os.replace(path, new)
+            return new
+        with mock.patch.object(cd, "download_file", side_effect=self.fake_download([])), \
+                mock.patch.object(wa, "_relocate_by_content", side_effect=relocate), \
+                mock.patch.object(cd, "save_sidecar_metadata"), \
+                mock.patch.object(cd, "download_preview_image"):
+            wa._api_meta_download(self.api, [0])
+        item = self.events_of("dl_item")[-1]
+        self.assertTrue(item["ok"])
+        self.assertIn("找不到", item["warn"])
+
+    def test_login_required_asks_for_key(self):
+        err = cd.CivitaiError("下载被 civitai.com 拒绝（403）。该文件需要登录才能下载，请在下方「Civitai API Key」里填入 Key")
+        err.status, err.need_login = 403, True
+        with mock.patch.object(cd, "download_file", side_effect=err):
+            wa._api_meta_download(self.api, [0])
+        item = self.events_of("dl_item")[-1]
+        done = self.events_of("dl_done")[-1]
+        self.assertFalse(item["ok"])
+        self.assertTrue(item["need_key"])
+        self.assertIn("填写 Civitai Key", item["error"])
+        self.assertNotIn("下方", item["error"])     # 图片信息页下方没有填 Key 的地方
+        self.assertFalse(done["ok"])
+
+    def test_save_name_rules(self):
+        self.assertEqual(wa._meta_save_name("char\\Foo Bar.safetensors", "x.safetensors"), "Foo Bar.safetensors")
+        self.assertEqual(wa._meta_save_name("anime.v2", "a.safetensors"), "anime.v2.safetensors")
+        self.assertEqual(wa._meta_save_name("demo", "demo.safetensors"), "demo.safetensors")
+        self.assertEqual(wa._meta_save_name("", "x.safetensors"), "x.safetensors")
+        self.assertEqual(wa._meta_save_name('bad:name', "x.safetensors"), "x.safetensors")
+        self.assertEqual(wa._meta_save_name("q.gguf", "q.safetensors"), "q.safetensors")
+
+
+class DownloaderLoginTests(unittest.TestCase):
+    def test_403_carries_status_for_callers(self):
+        class Denied(IncompleteResponse):
+            status_code = 403
+        with tempfile.TemporaryDirectory(prefix="denied_") as tmp:
+            info = {"name": "x.safetensors", "downloadUrl": "https://example.invalid/x", "sizeKB": 1, "hashes": {}}
+            with mock.patch.object(cd.requests, "get", return_value=Denied()):
+                with self.assertRaises(cd.CivitaiError) as ctx:
+                    cd.download_file(info, tmp)
+        self.assertEqual(ctx.exception.status, 403)
+        self.assertTrue(ctx.exception.need_login)
+
 
 class IncompleteResponse:
     status_code = 200

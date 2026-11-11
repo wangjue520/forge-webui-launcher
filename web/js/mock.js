@@ -454,6 +454,59 @@
         loras: [], characters: [], civitai: [], raw_text: "", refs_count: 0,
         timing: { parse: 0.4, mode: "前端直读" } }),
       meta_deep: () => ok({ ok: true, has_meta: false }),
+      // 缺失模型：照群友反馈视频里的情形——一个能下（Civitai 文件名和图里不同），一个要登录（403）
+      meta_scan_missing: () => {
+        setTimeout(() => window.App.onEvent({ scope: "meta", type: "missing_row", idx: 1, state: "found",
+          file_name: "z3zz4_krea2_c1_st2000.safetensors", size_mb: 447.6 }), 300);
+        setTimeout(() => window.App.onEvent({ scope: "meta", type: "missing_row", idx: 2, state: "found",
+          file_name: "krea2filterbypass3.safetensors", size_mb: 218.1 }), 400);
+        setTimeout(() => window.App.onEvent({ scope: "meta", type: "scan_done", has_downloadable: true }), 450);
+        return ok({ ok: true, querying: 2, rows: [
+          { idx: 0, role: "LoRA", name: "awa_subaru_krea2_c1-st5000", state: "local" },
+          { idx: 1, role: "LoRA", name: "z3zz4-k2-4_c1-st2000", state: "querying" },
+          { idx: 2, role: "LoRA", name: "krea2filterbypass3", state: "querying" },
+          { idx: 3, role: "LoRA", name: "Krea_2_in_real_krea2_3320272_epoch_20", state: "no_hash" },
+          { idx: 4, role: "VAE", name: "qwen_image_vae.safetensors", state: "local" },
+          { idx: 5, role: "TextEncoder", name: "qwen3vl_4b_uncensored_int8_convrot.safetensors", state: "no_hash" },
+        ] });
+      },
+      meta_download: (indexes) => {
+        const ev = (type, d) => window.App.onEvent(Object.assign({ scope: "meta", type }, d));
+        const total = 447.6 * 1048576;
+        const queue = indexes.slice();
+        let done = 0, success = 0, failed = 0;
+        const next = () => {
+          const idx = queue.shift();
+          if (idx == null) { ev("dl_done", { ok: !failed, success, failed, cancelled: false }); return; }
+          ev("dl_stage", { idx, stage: "download", text: "开始下载 → D:\\wwy\\1\\models\\Lora" });
+          if (idx === 2 && !(window.App.cfg.civitai_api_key || "")) {
+            setTimeout(() => {
+              failed++; done++;
+              ev("dl_item", { idx, ok: false, need_key: true, status: 403,
+                error: "Civitai 拒绝下载（403）：这个模型要登录后才能下载，点「填写 Civitai Key」填上后重试" });
+              ev("dl_overall", { done, total: indexes.length, downloaded: 0, bytes_total: 0 });
+              next();
+            }, 600);
+            return;
+          }
+          let got = 0;
+          const t = setInterval(() => {
+            got = Math.min(total, got + total / 12);
+            ev("dl_progress", { idx, downloaded: got, total, name: "z3zz4-k2-4_c1-st2000.safetensors" });
+            if (got >= total) {
+              clearInterval(t); success++; done++;
+              ev("dl_item", { idx, ok: true, path: "D:\\wwy\\1\\models\\Lora\\z3zz4-k2-4_c1-st2000.safetensors",
+                file_name: "z3zz4-k2-4_c1-st2000.safetensors", size: total,
+                renamed_from: idx === 1 ? "z3zz4_krea2_c1_st2000.safetensors" : "", warn: "" });
+              ev("dl_overall", { done, total: indexes.length, downloaded: 0, bytes_total: 0 });
+              next();
+            }
+          }, 250);
+        };
+        setTimeout(next, 100);
+        return ok({ ok: true, total: indexes.length });
+      },
+      meta_download_cancel: () => ok({ ok: true }),
       reveal_image: () => ok({ ok: true }),
       meta_load: () => ok({
         ok: true, path: "（预览环境假数据）example.png",

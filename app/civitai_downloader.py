@@ -745,19 +745,26 @@ def download_file(file_info, dest_dir, api_key=None, progress_cb=None, cancel_fl
             resp.close()
             where = _host_of(resp.url or url) or "服务器"
             if api_key:
-                raise CivitaiError(
+                err = CivitaiError(
                     f"下载被 {where} 拒绝（{resp.status_code}）。已带上 API Key 仍被拒，"
                     "可能是 Key 已失效/被删除（去 Civitai 账号设置页重新生成一个），"
                     "或该模型是抢先体验/仅限付费用户的版本")
-            raise CivitaiError(
-                f"下载被 {where} 拒绝（{resp.status_code}）。该文件需要登录才能下载，"
-                "请在下方「Civitai API Key」里填入 Key")
+            else:
+                err = CivitaiError(
+                    f"下载被 {where} 拒绝（{resp.status_code}）。该文件需要登录才能下载，"
+                    "请在下方「Civitai API Key」里填入 Key")
+            # 调用方据此判断「要填 Key」，不用去解析中文提示
+            err.status = resp.status_code
+            err.need_login = not api_key
+            raise err
         resp.raise_for_status()
         # 被重定向到登录页时是 200 + 网页，不拦就会把 HTML 当成模型写下去
         if _is_civitai_host(resp.url or "") and "text/html" in (resp.headers.get("content-type") or "").lower():
             resp.close()
-            raise CivitaiError("Civitai 返回了网页而不是模型文件（通常是跳到了登录页）。"
+            err = CivitaiError("Civitai 返回了网页而不是模型文件（通常是跳到了登录页）。"
                                "请检查 API Key 是否填写正确、是否已失效")
+            err.status, err.need_login = 401, True
+            raise err
         # liblib 的下载端点出错时返回的是 200 + JSON 错误体（如"用户未登录"），
         # 不拦一下的话会把这段 JSON 当成模型文件写进 .part，最后变成莫名其妙的
         # 「哈希校验失败」。
