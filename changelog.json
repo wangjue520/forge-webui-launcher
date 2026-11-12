@@ -1,6 +1,19 @@
 {
   "entries": [
     {
+      "version": "3.1.021",
+      "count": 199,
+      "date": "2026-11-12",
+      "title": "图片信息 / 输出管理一键「发送到 WebUI / ComfyUI」",
+      "items": [
+        "图片信息页和输出管理器新增「发送到 WebUI」：提示词、LoRA、采样参数、高清修复和插件参数一键套到正在运行的 WebUI 文生图；ComfyUI / NovelAI 的图会自动提取 tag、LoRA 和参数",
+        "新增「发送到 ComfyUI」：ComfyUI 的图在新标签页载入原工作流；WebUI 的图自动生成默认工作流，模型 / LoRA 按 ComfyUI 里的实际文件名填，找不到的会列出来",
+        "网页没打开会自动打开，加载完自动套用；好几个实例同时在运行时可以挑发给哪一个",
+        "LoRA 调用格式只保留文件名（带子文件夹的 WebUI 认不出），并新增「全部复制调用」一次复制所有 LoRA",
+        "更新后要把 WebUI / ComfyUI 重启一次：启动时启动器会自动放入桥接插件（wwy_launcher_bridge），发送功能靠它"
+      ]
+    },
+    {
       "version": "3.1.019",
       "count": 197,
       "date": "2026-11-11",
