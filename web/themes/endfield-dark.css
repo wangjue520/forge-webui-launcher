@@ -1,0 +1,140 @@
+/* ============================================================
+   终末地 · 深色（data-ui-theme="terminal" + data-ui-tone="dark"）
+   叠在 themes/endfield.css 后面加载，只换颜色：结构、切角、动效全部沿用浅色版。
+   规则不变——墨色 + 唯一的黄色；深色版里「纸面」变成近黑、「墨色」变成近白，
+   黄色仍然只配深色字（--ef-on-signal），墨色块上的字跟着变深（--ef-on-ink）。
+
+   可读性（WCAG AA，正文 ≥ 4.5:1，大字 / 图形 ≥ 3:1），用无头 Chrome 逐页实测过，主要几组：
+     正文 #ececea      on 面板 #1e1e1e ≈ 14.1:1   on 纸面 #151515 ≈ 15.4:1   on 按钮底 #2e2e2c ≈ 11.5:1
+     次要 #a8a8a4      on 面板         ≈ 7.0:1    on 纸面 ≈ 7.7:1            on 按钮底 ≈ 5.7:1
+     占位 #9c9c98      on 输入框 #171717 ≈ 6.5:1
+     禁用 #aaaaa6      on 斜线纹最亮处 #3a3a38 ≈ 4.9:1（纹线之间 #262624 ≈ 6.5:1）
+     深色字 #161616    on 黄 #fffa00   ≈ 16.3:1   on 浅色主按钮 #ececea ≈ 15.3:1
+     删除红 #ff8a7f    on 面板 ≈ 7.3:1；删除按钮实底 #b3261e 配白字 ≈ 6.5:1
+     侧栏字 #bdbdb9 on #0d0d0d ≈ 10.3:1；日志 #dcdcd8 on #0f0f0f ≈ 13.9:1；表格选中行（20% 黄）≈ 7.8:1
+   新增界面时：深底上的字别直接写死 #fff / #161616，用 --ef-ink / --ef-on-ink / --ef-on-signal。
+   ============================================================ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] {
+  color-scheme: dark;
+  --ef-paper: #151515;
+  --ef-panel: #1e1e1e;
+  --ef-ink: #ececea;
+  --ef-ink-2: #a8a8a4;
+  --ef-rule: #383836;
+  --ef-chip: #2e2e2c;
+  --ef-on-ink: #161616;
+  --ef-trace: var(--ef-signal);
+  --ef-danger: #ff8a7f;
+  --ef-mark: rgba(255, 250, 0, .2);
+  --ef-hatch: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(236, 236, 234, .13) 5px 6.5px);
+  --ef-hatch-dark: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(236, 236, 234, .13) 5px 6.5px);
+  /* 侧栏比纸面再深一档，和主区分开 */
+  --ef-bar: #0d0d0d;
+  --ef-bar-2: #1c1c1c;
+  --ef-bar-3: #2a2a2a;
+  --ef-bar-text: #bdbdb9;
+  --ef-faint: #9c9c98;            /* 占位符 */
+  --ef-disabled: #aaaaa6;         /* 禁用按钮的字（斜线纹上） */
+  --ef-dash: #5c5c59;             /* 虚线框、勾选框边 */
+
+  --paper-2: #111111;
+  --panel-2: #1a1a1a;
+  --ink-2: #d6d6d2;
+  --ink-3: #bdbdb9;
+  --line-2: #2c2c2a;
+  --line-strong: #5c5c59;
+  --input-bg: #171717;
+  --text-dim: #cfcfcb;
+  --text-faint: var(--ef-ink-2);
+  --warn: var(--ef-ink);
+  --bad: var(--ef-ink);
+  --blue: var(--ef-ink);
+  --green: var(--ef-ink);
+}
+
+/* ============ 基础 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] ::-webkit-scrollbar-thumb { background: rgba(236, 236, 234, .22); background-clip: padding-box; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] ::-webkit-scrollbar-thumb:hover { background: rgba(236, 236, 234, .45); background-clip: padding-box; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #main::before { background: rgba(236, 236, 234, .05); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .brand { border-bottom-color: #222220; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .sidebar-footer { border-top-color: #222220; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #sidebar { border-right: 1px solid #222220; }
+
+/* 侧栏：序号、性能监控读数、「启动 ▶」提示在近黑底上原本偏暗，提亮到 ≥ 4.5:1 */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .nav-item::after { color: #8c8c88; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .nav-item.active::after { color: var(--ef-on-signal); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .perf-mon { --pm-text: #a3a39f; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #global-status-act { opacity: .8; }
+/* 停用的插件行：仍然显得淡，但字够看清 */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .ext-ver.is-off .ext-ver-txt { opacity: .8; }
+
+/* ============ 表单 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(input[type="text"], input[type="password"], input[type="number"], select, textarea) {
+  background-color: var(--input-bg); color: var(--ef-ink);
+}
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(input, select, textarea):disabled { background-color: var(--ef-paper); color: var(--ef-faint); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] input::placeholder,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] textarea::placeholder { color: var(--ef-faint); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] select option { background: var(--ef-panel); color: var(--ef-ink); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .chk-row i { border-color: var(--ef-dash); background: var(--input-bg); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .chk-row:hover i { border-color: var(--ef-ink); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] input[type="range"] { background: var(--ef-dash); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] input[type="range"]::-webkit-slider-thumb { border-color: var(--ef-on-signal); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .radio-dot { border-color: var(--ef-dash); }
+
+/* ============ 按钮 ============ */
+/* 删除：深色底上红字用浅一档的红；擦入 / 实底仍是深红配白字 */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .btn-danger-text { --wipe: #b3261e; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(#modal-buttons, #diag-drawer) .btn-danger { --fill: #b3261e; --wipe: #7d1a14; color: #fff; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .btn:disabled,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.btn-primary, .btn-accent, .btn-success):disabled {
+  color: var(--ef-disabled);
+  background: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(236, 236, 234, .1) 5px 6.5px), #262624;
+}
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.console-head, .out-selbar, .link-banner) .btn:disabled { background: var(--ef-hatch-dark), var(--ef-bar-2); color: var(--ef-disabled); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .btn:focus-visible { outline-color: var(--ef-signal); }
+
+/* ============ 状态 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .status-pill { border-color: var(--ef-dash); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .status-pill .dot { background: var(--ef-ink-2); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #sidebar .status-pill { border-color: #444442; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #sidebar .status-pill .dot { background: #7a7a77; }
+
+/* ============ 日志 / 代码块：比面板再深一档，和看板分开 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .console-wrap { border-color: var(--ef-rule); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .console { background: #0f0f0f; color: #dcdcd8; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .console-head { background: var(--ef-bar); border-bottom-color: var(--ef-rule); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .code-box { background: #0f0f0f; border-color: var(--ef-rule); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .dg-evidence { background: #0f0f0f; color: #dcdcd8; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .pv-list { background: #0f0f0f; color: #dcdcd8; border: 1px solid var(--ef-rule); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .activity-console .activity-error { color: #ff9b8f; }
+
+/* ============ 黄块上的字一律深色（深色版里继承下来的字是浅色，要显式写） ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.facet, .col-item).on,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.facet, .col-item).on *,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .cat-item.active *,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .chip:is(:hover, .on) *,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .choice-item:hover *,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #page-models.drag-active .drop-banner,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #page-models.drag-active .drop-banner *:not(.db-mark),
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .pm-row.hot .pm-val,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .nav-item.active *,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .ext-status:not(.ext-rec):not(.ext-off),
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.db-target em, .radio-row .primary-tag, .pv-dup, .col-ops button:hover, .chk-row .tag) { color: var(--ef-on-signal); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.facet, .col-item).on { box-shadow: inset 3px 0 0 var(--ef-on-signal); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.ext-upd-err, .dg-act-err)::before,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .pv-warn::before { color: var(--ef-on-signal); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .data-table tbody tr.selected { box-shadow: inset 4px 0 0 var(--ef-signal); }
+
+/* ============ 虚线框 / 拖放区 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .inst-card.remote-add,
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.drop-area, .drop-list, .drop-banner),
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.dg-empty, .dg-memo) { border-color: var(--ef-dash); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .drop-list .item:hover { background: var(--ef-ink); color: var(--ef-on-ink); }
+
+/* ============ 弹窗 / 提示条 ============ */
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #modal-mask { background: rgba(0, 0, 0, .62); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] #modal { outline: 1px solid var(--ef-rule); }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .toast { background: #2a2a28; border-left-color: #7a7a77; color: #ededed; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] .toast.error { color: #ededed; }
+:root[data-ui-theme="terminal"][data-ui-tone="dark"] :is(.out-detail, #diag-drawer) { border-left-color: var(--ef-rule); }

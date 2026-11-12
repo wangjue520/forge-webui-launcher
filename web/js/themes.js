@@ -6,7 +6,8 @@
  *   2. 在下面 THEMES 里加一条：
  *        { id: "xxx", label: "显示名", css: "themes/xxx.css", splash: "xxx" }
  *      css 留空 = 界面沿用默认样式、只换开屏；splash: "none" = 跳过开屏直接进界面；
- *      css 也可以是数组（按顺序叠加）；base: "minimal" = 复用极简那套结构规则
+ *      css 也可以是数组（按顺序叠加）；base: "minimal" = 复用极简那套结构规则；
+ *      skin: "xxx" = 整套沿用 xxx 的样式和脚本（data-ui-theme 写 xxx），tone: "dark" = 它的深色变体
  *      切换风格时会派发 window 事件 "wwy-theme"（detail 为该风格条目）
  *   3. 界面里要覆盖的样式写 [data-ui-theme="xxx"] 选择器（style.css 是基底）
  *
@@ -20,6 +21,9 @@
     // 终末地（默认）：按 endfield-ui 规则重做——纸面 + 墨色 + 唯一的黄色、切角 = 可以按、宽体英文配粗体中文；
     // 结构仍是 style.css，themes/endfield.css 换皮，界面动效 js/endfield.js，开屏 js/endfield-splash.js
     { id: "terminal", label: "终末地 · 工业终端（默认）", css: "themes/endfield.css", splash: "terminal" },
+    // 终末地 · 深色：同一套结构和动效（skin: "terminal" → data-ui-theme 仍是 terminal，endfield.js 照常生效），
+    // tone: "dark" → <html data-ui-tone="dark">，themes/endfield-dark.css 只换颜色；开屏同样跟着变深
+    { id: "terminal-dark", label: "终末地 · 深色", css: ["themes/endfield.css", "themes/endfield-dark.css"], splash: "terminal", skin: "terminal", tone: "dark" },
     // 构型 · BAUFORM（机能包豪斯，深色）：结构沿用默认（style.css），themes/bauform.css 全面改皮，
     // 动效 / 背景由 js/bauform.js 负责，数字翻牌是 js/bauform-flap.js，
     // 西文装饰字体是自制的 WWY Bauform（tools/build_bauform_font.py）
@@ -66,7 +70,10 @@
     var t = find(id);
     applied = t.id;
     var root = document.documentElement;
-    root.dataset.uiTheme = t.id;
+    // skin：和别的条目共用一套样式时，data-ui-theme 写那一套的 id（选择器、各风格脚本的判断都不用改）；
+    // tone：同一套的明暗变体，写进 data-ui-tone
+    root.dataset.uiTheme = t.skin || t.id;
+    if (t.tone) root.dataset.uiTone = t.tone; else delete root.dataset.uiTone;
     // base：结构共用的那一套（极简 / 液态玻璃都用 minimal 的结构规则，
     // 选择器写 [data-ui-base="minimal"]，配色各自出变量）
     if (t.base) root.dataset.uiBase = t.base; else delete root.dataset.uiBase;
