@@ -94,14 +94,23 @@ CATALOG = [
     {"id": "neo-sampler", "name": "ComfyUI-Neo-Sampler", "group": "author",
      "desc": "把 Forge Neo 的采样流程搬进 ComfyUI：同样的参数出和 Neo 一样的图（文本编码 / 初始噪声 / 采样器全复刻）。",
      "url": "https://github.com/wangjue520/ComfyUI-Neo-Sampler.git", "folder": "ComfyUI-Neo-Sampler"},
-    {"id": "inpaint-webui-style", "name": "ComfyUI-Inpaint-WebUI-Style", "group": "author",
-     "desc": "WebUI 风格的局部重绘：蒙版羽化、四种蒙版内容模式、只改蒙版区域不偏色。",
+    {"id": "inpaint-webui-style", "name": "WebUI 式局部重绘（Inpaint WebUI Style）", "group": "author",
+     "desc": "照 WebUI 的局部重绘来：「Load Image (Inpaint WebUI Style)」一个节点读图 + 画蒙版，"
+             "蒙版模糊、重绘蒙版内 / 外、四种蒙版区域内容（原图 / 填充 / 潜空间噪声 / 空白）都和 WebUI 一样；"
+             "出图后接「Inpaint Composite」贴回原图，蒙版外一个像素都不变、不偏色。SD1.5 / SDXL / Anima 都能用。",
      "url": "https://github.com/wangjue520/ComfyUI-Inpaint-WebUI-Style.git", "folder": "ComfyUI-Inpaint-WebUI-Style"},
     {"id": "zh-tag-autocomplete", "name": "中文标签补全（zh Tag Autocomplete）", "group": "author",
      "desc": "在任意节点的提示词框里直接打中文，弹出对应的 Danbooru 英文标签；打下逗号时前一段中文原地变成英文，"
              "变完可以直接手改；Alt+T 一键转换整框。字典没有的说法和整句描述用谷歌 / DeepSeek 翻译，适合 Anima。"
              "还带「CLIP 文本编码（中文）」节点和 Anima 示例工作流（含 ControlNet-LLLite）。不需要额外的 Python 依赖。",
      "url": "https://github.com/wangjue520/comfyui-zh-tag-autocomplete.git", "folder": "comfyui-zh-tag-autocomplete"},
+    {"id": "wwy-caption", "name": "WWY 反推（comfyui-wwy-caption）", "group": "author",
+     "desc": "把启动器「图片反推」页搬进 ComfyUI：WD14 标签反推、标签筛选（去画师 / 角色名 / 发色瞳色等）、"
+             "自然语言反推（ToriiGate / JoyCaption / Qwen3-VL / API）、合并提示词、AI 优化提示词（Anima / 纯自然语言写法，"
+             "可关掉补外貌、补服装等，装了中文标签补全还会查字典核对标签）。双击画布搜「反推」就能找到。"
+             "反推模型和 AI 接口设置与启动器、LoRA 训练器共用，下过的模型不用再下；"
+             "AI 接口填在启动器「设置 → 报错诊断」里。WD14 节点要 ComfyUI 环境里有 onnxruntime。",
+     "url": "https://github.com/wangjue520/comfyui-wwy-caption.git", "folder": "comfyui-wwy-caption"},
 ]
 
 GROUP_LABELS = {"core": "推荐（部署 ComfyUI 时默认安装）", "extra": "按需安装", "author": "作者自制"}

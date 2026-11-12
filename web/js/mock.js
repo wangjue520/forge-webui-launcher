@@ -368,11 +368,14 @@
           commits: [{ commit: "9z9z9z9", short: "9z9z9z9", date: "2026-10-08 18:00", subject: "（演示）最新提交" }, { commit: "1a2b3c4", short: "1a2b3c4", date: "2026-09-01 08:00", subject: "（演示）update" }],
           tags: [], branches: [{ name: "neo", commit: "9z9z9z9" }, { name: "classic", commit: "abc" }] } }),
       ver_check: () => ok({ ok: true }),
-      comfy_node_catalog: () => ok({ ok: true, selected: ["comfyui-manager", "rgthree-comfy"], groups: { core: "推荐（部署 ComfyUI 时默认安装）", extra: "按需安装" },
+      comfy_node_catalog: () => ok({ ok: true, selected: ["comfyui-manager", "rgthree-comfy"], groups: { core: "推荐（部署 ComfyUI 时默认安装）", extra: "按需安装", author: "作者自制" },
         items: [
           { id: "comfyui-manager", name: "ComfyUI-Manager（节点管理器）", desc: "（演示）节点管理器", group: "core", default: true },
           { id: "rgthree-comfy", name: "rgthree-comfy", desc: "（演示）工作流整理", group: "core", default: true },
           { id: "gguf", name: "ComfyUI-GGUF", desc: "（演示）GGUF 量化模型", group: "extra", default: false },
+          { id: "inpaint-webui-style", name: "WebUI 式局部重绘（Inpaint WebUI Style）", desc: "（演示）Load Image (Inpaint WebUI Style) + Inpaint Composite", group: "author", default: false },
+          { id: "zh-tag-autocomplete", name: "中文标签补全（zh Tag Autocomplete）", desc: "（演示）打中文出英文标签", group: "author", default: false },
+          { id: "wwy-caption", name: "WWY 反推（comfyui-wwy-caption）", desc: "（演示）WD14 / 自然语言反推、标签筛选、合并提示词、AI 优化提示词", group: "author", default: false },
         ] }),
       wd14_models: () => ok({ ok: true, model_ready: false, models: [
         { key: "wd-vit-tagger-v3", label: "wd-vit-tagger-v3（默认，速度快，~380MB）", cached: false,

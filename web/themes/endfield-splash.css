@@ -23,6 +23,19 @@
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
+/* 终末地 · 深色（themes.js 的 terminal-dark 写 data-ui-tone="dark"）：开屏也换成深色纸面 */
+:root[data-ui-tone="dark"] #splash.efs {
+  --ef-paper: #151515;
+  --ef-panel: #1e1e1e;
+  --ef-ink: #ececea;
+  --ef-ink-2: #a8a8a4;
+  --ef-rule: #383836;
+  --ef-chip: #2e2e2c;
+  --ef-on-ink: #161616;
+  --ef-hatch: repeating-linear-gradient(-45deg, transparent 0 5px, rgba(236, 236, 234, .13) 5px 6.5px);
+  background: #0d0d0d;
+}
+:root[data-ui-tone="dark"] #splash.efs .efs-paper::before { background: rgba(236, 236, 234, .05); }
 #splash.efs.efs-ready { cursor: pointer; }
 #splash.efs.efs-out2 { background: transparent; }
 
@@ -97,6 +110,7 @@
   display: inline-block; padding: 2px 12px 3px;
   font-size: clamp(17px, 1.7vw, 22px); font-weight: 800; letter-spacing: .02em;
   background: linear-gradient(var(--ef-signal), var(--ef-signal)) left / 100% 100% no-repeat;
+  color: var(--ef-on-signal, #161616);
 }
 .efs-lede { margin: 12px 0 0; font-size: 14px; line-height: 1.75; color: var(--ef-ink-2); }
 
@@ -134,7 +148,7 @@
 .efs-tag {
   padding: 1px 14px 1px 8px;
   font-size: 12px; font-weight: 500; font-stretch: 112%; font-variant-numeric: tabular-nums;
-  color: #fff; background: linear-gradient(-45deg, transparent 6.5px, var(--ef-ink) 7px);
+  color: var(--ef-on-ink, #fff); background: linear-gradient(-45deg, transparent 6.5px, var(--ef-ink) 7px);
 }
 .efs-rows .nm { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .efs-rows .st {
@@ -163,9 +177,9 @@
   max-width: 80%; margin: 0;
   padding: 9px 26px 10px 16px;
   background: linear-gradient(-45deg, transparent 10px, var(--ef-ink) 10.5px);
-  color: #fff; font-size: 14px; font-weight: 700;
+  color: var(--ef-on-ink, #fff); font-size: 14px; font-weight: 700;
 }
-.efs-ready .efs-plate { background: linear-gradient(-45deg, transparent 10px, var(--ef-signal) 10.5px); color: var(--ef-ink); }
+.efs-ready .efs-plate { background: linear-gradient(-45deg, transparent 10px, var(--ef-signal) 10.5px); color: var(--ef-on-signal, #161616); }
 
 /* 底部：斜线纹带 */
 .efs-band {
@@ -180,7 +194,7 @@
   background: var(--ef-signal);
   transform: translateX(-101%);
 }
-.efs-wipe::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 6px; background: var(--ef-ink); }
+.efs-wipe::after { content: ""; position: absolute; top: 0; bottom: 0; right: 0; width: 6px; background: var(--ef-on-signal, #161616); }
 .efs-out1 .efs-wipe { transform: none; transition: transform .28s var(--ef-mech); }
 .efs-out2 .efs-wipe { transform: translateX(101%); transition: transform .22s var(--ef-mech); }
 .efs-out2 .efs-wipe::after { right: auto; left: 0; }
