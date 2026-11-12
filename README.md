@@ -41,6 +41,7 @@
 - **WD14 反推**：图片自动打标签，独立环境不污染主环境
 - **LoRA 训练器**：[WWY LoRA 训练器](https://github.com/wangjue520/wwy-lora-trainer) 在「环境部署」一键部署（便携 Python + Git + PyTorch + 训练引擎全自动），在「一键启动」页像实例一样启动 / 停止，自动沿用启动器的网络设置和共享模型库
 - **图片信息**：读取/编辑 A1111、ComfyUI、NovelAI 等来源的生成参数，可检测并补齐缺失模型
+- **一键发送到 WebUI / ComfyUI**：图片信息页和输出管理器里的图，提示词、LoRA、采样参数、高清修复和插件参数一键套到正在运行的 WebUI 文生图；发到 ComfyUI 时 ComfyUI 的图载入原工作流，WebUI 的图自动生成默认工作流（模型 / LoRA 按 ComfyUI 里的实际文件名填）。ComfyUI 的图发到 WebUI 会自动提取 tag、LoRA 和参数。实例启动时启动器自动放入桥接插件（ComfyUI：custom_nodes\\wwy_launcher_bridge；WebUI：extensions\\wwy_launcher_bridge）
 - **常用插件一键安装与版本管理**：按分支自动适配兼容版本；自己以前装的插件（文件夹名不同、zip 下载、另一个分支的版本）也能认出来；已装插件可检查更新、一键全部更新、换任意版本或回滚；ComfyUI 实例装专用节点并自动装依赖，部署 ComfyUI 时推荐节点随部署自动安装
 - **国内网络优化**：按 IP 归属地自动判断走 GitHub 加速代理 / PyPI 镜像 / HF 镜像，失败自动回退官方源
 

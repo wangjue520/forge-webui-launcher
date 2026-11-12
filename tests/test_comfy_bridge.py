@@ -53,12 +53,30 @@ class EnsureTest(_Base):
         self.assertEqual(comfy_bridge.ensure(os.path.join(self.tmp, "nope")), "no_comfy")
 
     def test_launch_extras_respects_switch(self):
+        # 诊断和「发送到 ComfyUI」都用这个插件：两个开关都关了才不放
         self.api.cfg["diag_comfy_bridge"] = False
+        self.api.cfg["send_bridge"] = False
         self.api._instance_launch_extras("cf", self.api.instance_cfg("cf"), lambda m: None)
         self.assertEqual(comfy_bridge.status(self.comfy), "missing")
-        self.api.cfg["diag_comfy_bridge"] = True
+        self.api.cfg["send_bridge"] = True
         self.api._instance_launch_extras("cf", self.api.instance_cfg("cf"), lambda m: None)
         self.assertEqual(comfy_bridge.status(self.comfy), "ok")
+
+    def test_launch_extras_webui_extension(self):
+        ext = os.path.join(self.neo, "extensions", comfy_bridge.NAME)
+        self.api.cfg["send_bridge"] = False
+        self.api._instance_launch_extras("neo", self.api.instance_cfg("neo"), lambda m: None)
+        self.assertFalse(os.path.isdir(ext))
+        self.api.cfg["send_bridge"] = True
+        self.api._instance_launch_extras("neo", self.api.instance_cfg("neo"), lambda m: None)
+        self.assertTrue(os.path.isfile(os.path.join(ext, "scripts", "wwy_launcher_bridge.py")))
+        self.assertTrue(os.path.isfile(os.path.join(ext, "javascript", "wwy_launcher_bridge.js")))
+        self.assertEqual(comfy_bridge.webui_status(self.neo), "ok")
+        # 用户停用了（改名 .disabled）就不再放回去
+        os.rename(ext, ext + ".disabled")
+        self.assertEqual(comfy_bridge.ensure_webui(self.neo), "disabled")
+        self.assertFalse(os.path.isdir(ext))
+        self.assertEqual(comfy_bridge.ensure_webui(os.path.join(self.tmp, "nope")), "no_webui")
 
 
 class PluginTest(_Base):

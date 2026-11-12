@@ -8,6 +8,8 @@ WWY 启动器桥接插件（由启动器自动放进 custom_nodes，启动器更
 · 不加任何节点；接口：/wwy_bridge/report（网页报检查结果）、/wwy_bridge/command + ack（启动器的诊断
   让网页改当前工作流：绕过 / 静音 / 恢复节点、改节点参数，用户点了「执行修复」才会发）
 · 当前工作流另存一份到 user/wwy_bridge/current_workflow.json，给启动器的 AI 诊断读
+· /wwy_bridge/load：启动器「发送到 ComfyUI」—— 在网页里新开一个标签页载入工作流；
+  网页没打开就先存着，网页一打开（/wwy_bridge/pending）自动载入
 · 不想要：在 ComfyUI-Manager 里停用，或把文件夹改名成 wwy_launcher_bridge.disabled（启动器不会再放回来）
 """
 import json
@@ -18,7 +20,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {}
 WEB_DIRECTORY = "./web"
 __all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
-VERSION = 2
+VERSION = 3
 
 # 下拉框里的模型找不到对应目录时，按输入名猜
 _INPUT_FOLDERS = {
@@ -148,6 +150,25 @@ def store_ack(data):
         _acks.pop(next(iter(_acks)))
 
 
+# 「发送到 ComfyUI」：网页没打开时先存在这里，网页打开后来取（只存最新的一个，2 分钟过期）
+_pending = {"item": None, "ts": 0.0}
+PENDING_TTL = 120
+
+
+def put_pending(item, now=None):
+    import time
+    _pending["item"], _pending["ts"] = item, (now or time.time())
+
+
+def take_pending(now=None):
+    import time
+    item, ts = _pending["item"], _pending["ts"]
+    _pending["item"] = None
+    if item and (now or time.time()) - ts <= PENDING_TTL:
+        return item
+    return None
+
+
 try:
     from aiohttp import web
     from server import PromptServer
@@ -171,6 +192,25 @@ try:
         if clients:
             await PromptServer.instance.send("wwy_bridge_command", data)
         return web.json_response({"ok": True, "clients": clients, "version": VERSION})
+
+    @PromptServer.instance.routes.post("/wwy_bridge/load")
+    async def _load(request):
+        """启动器 → 网页：载入一个工作流（UI 格式 workflow 或 API 格式 api）。
+        只发给最近连上的那个标签页（开了好几个标签页时不会每个都弹一份）；一个都没有就先存着"""
+        data = await request.json()
+        if not isinstance(data, dict) or not data.get("id") or not (data.get("workflow") or data.get("api")):
+            return web.json_response({"ok": False, "error": "格式不对"}, status=400)
+        sockets = getattr(PromptServer.instance, "sockets", {}) or {}
+        sids = list(sockets.keys())
+        if sids:
+            await PromptServer.instance.send("wwy_bridge_load", data, sids[-1])
+            return web.json_response({"ok": True, "clients": len(sids), "queued": False, "version": VERSION})
+        put_pending(data)
+        return web.json_response({"ok": True, "clients": 0, "queued": True, "version": VERSION})
+
+    @PromptServer.instance.routes.get("/wwy_bridge/pending")
+    async def _get_pending(request):
+        return web.json_response({"ok": True, "item": take_pending()})
 
     @PromptServer.instance.routes.post("/wwy_bridge/ack")
     async def _ack(request):

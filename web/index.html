@@ -922,6 +922,11 @@
           <div class="meta-right">
             <div class="meta-source-bar" id="meta-source" hidden></div>
             <div class="meta-timing" id="meta-timing"></div>
+            <div class="row meta-send-row" data-local-only>
+              <button class="btn btn-sm btn-accent" id="meta-send-webui" disabled title="提示词、LoRA、采样参数、高清修复和插件参数一起套到正在运行的 WebUI 文生图（ComfyUI 的图会自动提取）">发送到 WebUI</button>
+              <button class="btn btn-sm btn-accent" id="meta-send-comfy" disabled title="ComfyUI 的图载入原工作流；WebUI / NovelAI 的图按参数生成一个默认工作流">发送到 ComfyUI</button>
+              <span class="hint">实例要先在「一键启动」里运行起来；网页没打开会自动打开</span>
+            </div>
             <div class="card">
               <div class="card-title">正向提示词</div>
               <textarea id="meta-prompt" readonly class="ta-prompt"></textarea>
@@ -935,7 +940,8 @@
               <div id="meta-chars"></div>
             </div>
             <div class="card" id="meta-lora-card" hidden>
-              <div class="card-title">LoRA<span class="card-title-hint">带哈希的能被「缺失模型检测」精确匹配</span></div>
+              <div class="card-title">LoRA<span class="card-title-hint">带哈希的能被「缺失模型检测」精确匹配</span>
+                <button class="btn btn-xs" id="meta-lora-copy-all" title="把所有 LoRA 按 &lt;lora:名字:权重&gt; 一次复制，粘进 WebUI 提示词就能全部调用">全部复制调用</button></div>
               <div id="meta-loras"></div>
             </div>
             <div class="card" id="meta-civitai-card" hidden>
@@ -1098,6 +1104,8 @@
             <button class="btn btn-xs" id="od-reveal" data-local-only>定位</button>
             <button class="btn btn-xs btn-accent" id="od-dl" data-remote-only>下载到本机</button>
             <button class="btn btn-xs" id="od-meta" data-local-only>发送到图片信息</button>
+            <button class="btn btn-xs btn-accent" id="od-send-webui" data-local-only title="提示词、LoRA、参数和插件状态套到正在运行的 WebUI 文生图">发送到 WebUI</button>
+            <button class="btn btn-xs btn-accent" id="od-send-comfy" data-local-only title="ComfyUI 的图载入原工作流；WebUI 的图生成默认工作流">发送到 ComfyUI</button>
             <button class="btn btn-xs btn-danger-text" id="od-del">删除</button>
           </div>
           <div class="od-cols" id="od-cols"></div>
@@ -1187,6 +1195,7 @@
 <script src="js/wd14.js"></script>
 <script src="js/trainer.js"></script>
 <script src="js/imgcontainer.js"></script>
+<script src="js/send.js"></script>
 <script src="js/meta.js"></script>
 <script src="js/instances.js"></script>
 <script src="js/link.js"></script>

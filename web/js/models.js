@@ -83,7 +83,8 @@
     const stem = f.rel.replace(/\.[^.]+$/, "");
     if (act === "reveal") App.api.reveal_in_explorer(f.path);
     else if (act === "copy") App.copy(stem, "已复制文件名");
-    else if (act === "lora") App.copy(`<lora:${stem}:1>`, "已复制 LoRA 调用格式");
+    // 子文件夹里的 LoRA：<lora:Anima\画风\xxx:1> WebUI 认不出，只要文件名
+    else if (act === "lora") App.copy(App.loraTag(f.rel, 1), "已复制 LoRA 调用格式");
   }
 
   async function selectRow(path, tr) {
@@ -643,7 +644,7 @@
       });
       $("#md-copy-lora").addEventListener("click", () => {
         if (!selected) return;
-        App.copy(`<lora:${selected.rel.replace(/\.[^.]+$/, "")}:1>`, "已复制 LoRA 调用格式");
+        App.copy(App.loraTag(selected.rel, 1), "已复制 LoRA 调用格式");
       });
 
       $("#md-hash-lookup").addEventListener("click", async () => {

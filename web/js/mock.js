@@ -447,6 +447,12 @@
       trainer_set_root: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       trainer_remove: () => ok({ ok: false, error: "预览模式：未连接后端" }),
       meta_preview: () => ok({ ok: true, preview: null }),
+      send_targets: () => ok({ ok: true, targets: [] }),
+      send_to: (kind) => ok(kind === "comfy"
+        ? { ok: true, text: "（预览）已在 ComfyUI 新开工作流「WWY-demo」", mode: "built",
+            notes: ["WebUI 插件的设置没有转换：ADetailer 修脸（ComfyUI 里对应 Impact Pack 的 FaceDetailer），需要的话自己加节点"],
+            missing: ["waiNSFW_v140"] }
+        : { ok: true, text: "（预览）已套用到 WebUI 的文生图", notes: [], missing: [] }),
       meta_parse: () => ok({ ok: true, source: "WebUI (Forge)", tone: "webui",
         file_info: "1408×960　·　PNG　·　1512 KB", has_meta: true, from_sidecar: false,
         prompt: "（预览环境假数据）masterpiece, 1girl", negative: "lowres",

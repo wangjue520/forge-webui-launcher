@@ -596,7 +596,7 @@
       kv("模型", d.model) + kv("种子", d.seed) + kv("采样器", d.sampler) + kv("来源", d.source) +
       `</div>` +
       (d.chars.length ? `<div class="od-sect">角色</div><div class="chips">${chips(d.chars, "data-fchar")}</div>` : "") +
-      (d.loras.length ? `<div class="od-sect">LoRA</div><div class="chips">${d.loras.map((l) =>
+      (d.loras.length ? `<div class="od-sect">LoRA<button class="btn btn-xs" data-lora-all>全部复制调用</button></div><div class="chips">${d.loras.map((l) =>
         `<button class="chip" data-flora="${App.esc(l.name)}">${App.esc(l.name)}${l.weight ? " · " + App.esc(l.weight) : ""}</button>`).join("")}</div>` : "") +
       (d.prompt ? `<div class="od-sect">正向提示词<button class="btn btn-xs" data-copy="prompt">复制</button></div><div class="od-text">${App.esc(d.prompt)}</div>` : "") +
       (d.negative ? `<div class="od-sect">反向提示词<button class="btn btn-xs" data-copy="negative">复制</button></div><div class="od-text dim">${App.esc(d.negative)}</div>` : "") +
@@ -612,6 +612,8 @@
     $$("#od-body [data-ftag]").forEach((b) => b.addEventListener("click", () => {
       if (!filters.tags.includes(b.dataset.ftag)) toggleArr("tags", b.dataset.ftag);
     }));
+    $$("#od-body [data-lora-all]").forEach((b) => b.addEventListener("click", () =>
+      App.copy(App.loraTags(detail.loras), `已复制 ${detail.loras.length} 个 LoRA 的调用格式`)));
     $$("#od-body [data-copy]").forEach((b) => b.addEventListener("click", () =>
       App.copy(detail[b.dataset.copy] || "", "已复制")));
     renderDetailCollections();
@@ -861,6 +863,10 @@
       $("#od-dl").addEventListener("click", () => detail && downloadIds([detail.id]));
       $("#out-sel-dl").addEventListener("click", () => downloadIds(Array.from(selected)));
       $("#od-del").addEventListener("click", () => detail && deleteIds([detail.id]));
+      $("#od-send-webui").addEventListener("click", (e) =>
+        detail && App.sendTo("webui", { from: "output", id: detail.id }, e.currentTarget));
+      $("#od-send-comfy").addEventListener("click", (e) =>
+        detail && App.sendTo("comfy", { from: "output", id: detail.id }, e.currentTarget));
       $("#od-meta").addEventListener("click", () => {
         if (!detail || !App.pages.meta) return;
         const p = detail.path;

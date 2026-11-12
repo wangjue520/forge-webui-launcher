@@ -1460,3 +1460,9 @@ body:not(.remote-mode) [data-remote-only] { display: none !important; }
 .link-xfer[hidden] { display: none; }
 .link-xfer .lx-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 12.5px; }
 .link-xfer .progress { margin: 0; }
+
+/* 发送到 WebUI / ComfyUI */
+.meta-send-row { align-items: center; }
+.meta-send-row .hint { margin: 0; }
+#meta-lora-copy-all { margin-left: auto; }
+.send-notes { margin: 0 0 4px; padding-left: 18px; line-height: 1.7; font-size: 12.5px; }

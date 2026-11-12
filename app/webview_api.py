@@ -51,6 +51,7 @@ import model_library as ml
 import output_index as oi
 import comfy_nodes
 import comfy_bridge
+import send_bridge as sb
 import diagnose as dg
 import diagnose_llm as dl
 import version_manager as vm
@@ -1252,8 +1253,15 @@ class LauncherApi:
             comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
             if comfy_dir:
                 comfy_nodes.fix_rgthree_compat(comfy_dir, log)
-                if self.cfg.get("diag_comfy_bridge", True):
+                # 桥接插件管两件事：报错诊断看网页里的缺节点 / 缺模型，「发送到 ComfyUI」载入工作流；
+                # 两个开关都关了才不放
+                if self.cfg.get("diag_comfy_bridge", True) or self.cfg.get("send_bridge", True):
                     comfy_bridge.ensure(comfy_dir, log)
+        elif self.cfg.get("send_bridge", True):
+            # WebUI / Forge：「发送到 WebUI」用的桥接扩展
+            root = (cfg.get("webui_root") or "").strip()
+            if root:
+                comfy_bridge.ensure_webui(root, log)
 
     # 以下几个是 V2 的接口，iid 省略 = 当前实例；前端启动页照旧调用
     def launch_status(self, iid=None):
@@ -8464,6 +8472,168 @@ def _api_meta_deep(self, path):
     return _api_meta_load(self, path)
 
 
+# ============================================================
+# 发送到 WebUI / ComfyUI（转换和送达在 send_bridge.py，这里挑实例、取元数据、给用户说人话）
+# ============================================================
+
+def _send_log(self, text, failed=False):
+    act = getattr(self, "_activity", None)
+    if act is not None:
+        try:
+            act.add("发送参数", text, "ERROR" if failed else "INFO")
+        except Exception:
+            pass
+
+
+def _send_meta(self, src):
+    """要发送的那张图的 ImageMetadata：图片信息页当前这张 / 输出管理器某条记录 / 任意路径"""
+    src = src or {}
+    frm = src.get("from")
+    if frm == "meta":
+        m = getattr(self, "_meta_meta", None)
+        if m is None:
+            raise ValueError("先在图片信息页打开一张图")
+        return m
+    if frm == "output":
+        path, _mt = _outidx(self).path_of(int(src.get("id") or 0))
+    else:
+        path = src.get("path")
+    if not path or not os.path.isfile(path):
+        raise ValueError("文件已不存在（被移动或删除了）")
+    if path.lower().endswith(".json"):
+        return me.parse_workflow_json(path)
+    return me.read_metadata(path, _safe_size(path))
+
+
+def _send_targets(self, kind):
+    """kind="comfy" / "webui"：这类实例各自的运行状态"""
+    out = []
+    for iid, name, c in _all_instance_cfgs(self):
+        if bool(cm.is_comfy(c)) != (kind == "comfy"):
+            continue
+        r = self._runners.get(iid)
+        st = r.status() if r else {}
+        out.append({"id": iid, "name": name or iid, "running": bool(st.get("running")),
+                    "ready": st.get("state") == "ready", "url": st.get("url") or "",
+                    "active": iid == self.cfg.get("active_instance")})
+    return out
+
+
+def _send_bases(self, iid, default_port):
+    """实例网址候选：运行中的地址（0.0.0.0 换成本机）→ 端口 → 配置的端口 → 默认端口"""
+    r = self._runner(iid)
+    port = str((self.instance_cfg(iid) or {}).get("port") or "").strip()
+    out = []
+    if r.url:
+        out.append(re.sub(r"//(0\.0\.0\.0|\[::\]|localhost)(?=[:/]|$)", "//127.0.0.1", r.url.split("?")[0]))
+    out += [f"http://127.0.0.1:{p}" for p in (r.port, port, default_port) if str(p or "").isdigit()]
+    return [u.rstrip("/") for u in dict.fromkeys(out)]
+
+
+def _api_send_targets(self, kind):
+    return {"ok": True, "targets": _send_targets(self, "comfy" if kind == "comfy" else "webui")}
+
+
+def _api_send_to(self, kind, src=None, iid=None, tab="txt2img"):
+    """
+    把一张图的参数发送到正在运行的 WebUI（文生图）或 ComfyUI（新开一个工作流）。
+    kind: "webui" / "comfy"；src: {"from": "meta"} / {"from": "output", "id": 记录号} / {"path": 文件}
+    iid 不给：只有一个在运行就发给它，好几个在运行就返回 choose 让用户挑。
+    """
+    kind = "comfy" if kind == "comfy" else "webui"
+    label = "ComfyUI" if kind == "comfy" else "WebUI"
+    targets = _send_targets(self, kind)
+    if not targets:
+        return {"ok": False, "error": f"还没有 {label} 实例：先在「环境部署」部署一个，或在实例管理里添加已有的"}
+    if iid:
+        t = next((x for x in targets if x["id"] == iid), None)
+        if t is None:
+            return {"ok": False, "error": "这个实例已经不在了"}
+    else:
+        running = [x for x in targets if x["running"]]
+        if len(running) > 1:
+            return {"ok": False, "choose": running, "kind": kind}
+        if not running:
+            names = "、".join(f"「{x['name']}」" for x in targets[:3])
+            return {"ok": False, "not_running": True,
+                    "error": f"{label} 没在运行：先在「一键启动」页启动{names if len(targets) > 1 else ''}，网页能打开了再发送"}
+        t = running[0]
+    if not t["running"]:
+        return {"ok": False, "not_running": True, "error": f"「{t['name']}」没在运行：先在「一键启动」页启动它"}
+    if not t["ready"]:
+        return {"ok": False, "error": f"「{t['name']}」还在启动中，等网页能打开了再发送"}
+
+    try:
+        m = _send_meta(self, src)
+    except (ValueError, OSError) as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"读取图片参数失败：{type(e).__name__}: {e}"}
+    title = os.path.basename(getattr(m, "file_path", "") or (src or {}).get("name") or "")
+    sess = sb._session()
+    bases = _send_bases(self, t["id"], 8188 if kind == "comfy" else 7860)
+
+    if kind == "webui":
+        try:
+            conv = sb.to_infotext(m)
+        except Exception as e:
+            return {"ok": False, "error": f"转换参数失败：{type(e).__name__}: {e}"}
+        if not conv["text"].strip():
+            return {"ok": False, "error": "这张图里没有生成参数"}
+        item = {"id": sb.new_id(), "infotext": conv["text"], "tab": "img2img" if tab == "img2img" else "txt2img",
+                "title": title}
+        post, wait_text = sb.post_webui, "WebUI"
+    else:
+        lists = None
+        try:
+            if sb.needs_lists(m):
+                lists = sb.comfy_lists(bases[0], sess) if bases else None
+            conv = sb.comfy_payload(m, lists, mc.load())
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:
+            return {"ok": False, "error": f"生成工作流失败：{type(e).__name__}: {e}"}
+        name = os.path.splitext(title)[0] or "WWY"
+        item = {"id": sb.new_id(), "name": ("WWY-" + name) if conv["mode"] == "built" else name}
+        item["workflow" if "workflow" in conv else "api"] = conv.get("workflow") or conv.get("api")
+        post, wait_text = sb.post_comfy, "ComfyUI"
+
+    last = f"连不上「{t['name']}」：确认它在运行、网页能打开"
+    for base in bases:
+        try:
+            reply = post(base, item, sess)
+        except sb.BridgeError as e:
+            if e.code == "old_plugin":
+                last = (f"「{t['name']}」里还没有启动器桥接{'插件' if kind == 'comfy' else '扩展'}"
+                        f"（它是在这次更新之前启动的）：在「一键启动」页重启一次{label}再发送")
+                if kind == "comfy" and self.cfg.get("send_bridge", True) is False:
+                    last = "「发送到 ComfyUI」需要启动器桥接插件，配置里 send_bridge 被关掉了"
+                break
+            if e.code == "unreachable":
+                continue
+            last = f"{label} 回复异常：{e}"
+            continue
+        if not reply.get("ok"):
+            last = f"{label} 没收下：{reply.get('error') or '未知原因'}"
+            break
+        base_note = {"notes": conv.get("notes") or [], "missing": conv.get("missing") or [],
+                     "mode": conv.get("mode"), "instance": t["name"]}
+        if reply.get("queued") or not reply.get("clients"):
+            self.open_url(base)
+            _send_log(self, f"→ {t['name']}：网页没开，已打开浏览器，网页加载完自动载入（{title}）")
+            return {"ok": True, "queued": True, **base_note,
+                    "text": f"{label} 的网页没打开，已经帮你打开：加载完会自动{'载入工作流' if kind == 'comfy' else '套用参数'}"}
+        ack = sb.wait_ack(base, item["id"], 8.0 if kind == "webui" else 10.0, sess)
+        if ack and not ack.get("ok"):
+            _send_log(self, f"→ {t['name']} 失败：{ack.get('text')}", failed=True)
+            return {"ok": False, "error": f"{wait_text} 网页里没套上：{ack.get('text') or '未知原因'}", **base_note}
+        text = (ack or {}).get("text") or f"已发送到 {label}，切到浏览器查看（网页没反应的话刷新一下网页再发）"
+        _send_log(self, f"→ {t['name']}：{text}（{title}）")
+        return {"ok": True, "text": text, **base_note}
+    _send_log(self, f"→ {t['name']} 失败：{last}", failed=True)
+    return {"ok": False, "error": last}
+
+
 
 # ============================================================
 # 启动器自更新（updater.py 干重活，这里只做线程调度和事件推送）
@@ -10292,6 +10462,8 @@ for _name, _fn in {
     "meta_choose_candidate": _api_meta_choose_candidate,
     "meta_download": _api_meta_download,
     "meta_download_cancel": _api_meta_download_cancel,
+    "send_targets": _api_send_targets,
+    "send_to": _api_send_to,
     "launcher_check_update": _api_launcher_check_update,
     "launcher_update": _api_launcher_update,
     "launcher_restart": _api_launcher_restart,

@@ -28,7 +28,7 @@
   const App = window.App;
   const $ = (s) => document.querySelector(s);
 
-  let cur = { path: "", name: "", objectUrl: null, rawText: "", refsCount: 0 };
+  let cur = { path: "", name: "", objectUrl: null, rawText: "", refsCount: 0, loras: [] };
 
   // 加载序号。连着拖好几张时，先发出去的可能后回来，序号对不上一律丢弃。
   let seq = 0;
@@ -91,7 +91,7 @@
     }
     drop.innerHTML = `<span>${App.esc(placeholder || "把图片或视频拖到这里")}</span>`;
 
-    cur.path = ""; cur.name = ""; cur.rawText = ""; cur.refsCount = 0;
+    cur.path = ""; cur.name = ""; cur.rawText = ""; cur.refsCount = 0; cur.loras = [];
 
     $("#meta-file").textContent = "";
     const tm = $("#meta-timing"); if (tm) tm.textContent = "";
@@ -115,7 +115,8 @@
 
     $("#meta-scan").disabled = true;
     $("#meta-download").disabled = true;
-    ["#meta-copy-prompt", "#meta-copy-neg", "#meta-copy-all"].forEach((s) => ($(s).disabled = true));
+    ["#meta-copy-prompt", "#meta-copy-neg", "#meta-copy-all", "#meta-send-webui", "#meta-send-comfy"]
+      .forEach((s) => ($(s).disabled = true));
   }
 
   /* 预览区：图片用 <img>，视频用 <video>（静音循环自动播放，带控制条，想听声音点一下即可） */
@@ -241,6 +242,7 @@
 
     $("#meta-scan").disabled = cur.refsCount === 0;
     ["#meta-copy-prompt", "#meta-copy-neg", "#meta-copy-all"].forEach((s) => ($(s).disabled = false));
+    ["#meta-send-webui", "#meta-send-comfy"].forEach((s) => ($(s).disabled = !r.has_meta));
   }
 
   /* ================= 按路径打开（选择图片按钮） ================= */
@@ -310,6 +312,7 @@
 
   function renderLoras(loras) {
     const card = $("#meta-lora-card"), box = $("#meta-loras");
+    cur.loras = loras || [];
     if (!loras || !loras.length) { card.hidden = true; box.innerHTML = ""; return; }
     card.hidden = false;
     box.innerHTML = loras.map((l, i) => {
@@ -320,9 +323,9 @@
     }).join("");
     box.querySelectorAll("[data-lora-copy]").forEach((b) =>
       b.addEventListener("click", () => {
+        // ComfyUI 的图里 LoRA 名带着子文件夹（Anima\画风\xxx.safetensors），WebUI 只认文件名
         const l = loras[+b.dataset.loraCopy];
-        const name = String(l.name || "").replace(/\.[^.]+$/, "");
-        App.copy(`<lora:${name}:${l.weight == null ? 1 : l.weight}>`, "已复制 LoRA 调用格式");
+        App.copy(App.loraTag(l.name, l.weight), "已复制 LoRA 调用格式");
       }));
   }
 
@@ -584,6 +587,15 @@
       $("#meta-copy-prompt").addEventListener("click", () => App.copy($("#meta-prompt").value, "已复制正向提示词"));
       $("#meta-copy-neg").addEventListener("click", () => App.copy($("#meta-neg").value, "已复制负向提示词"));
       $("#meta-copy-all").addEventListener("click", () => App.copy(cur.rawText, "已复制全部原始参数"));
+      $("#meta-lora-copy-all").addEventListener("click", () => {
+        const text = App.loraTags(cur.loras);
+        if (!text) { App.toast("这张图没有 LoRA", "error"); return; }
+        App.copy(text, `已复制 ${cur.loras.length} 个 LoRA 的调用格式，粘进 WebUI 提示词即可全部调用`);
+      });
+      $("#meta-send-webui").addEventListener("click", (e) =>
+        App.sendTo("webui", { from: "meta", name: cur.name || "" }, e.currentTarget));
+      $("#meta-send-comfy").addEventListener("click", (e) =>
+        App.sendTo("comfy", { from: "meta", name: cur.name || "" }, e.currentTarget));
 
       /* ---- 后端推来的事件 ---- */
       App.on("meta", "missing_row", (e) => {

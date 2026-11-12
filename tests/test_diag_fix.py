@@ -190,7 +190,7 @@ class BridgeAckTest(unittest.TestCase):
         m.store_ack({"id": "a", "ok": True, "text": "已绕过", "prev": {"23": "enable"}})
         m.store_ack({"id": "a", "ok": False, "text": "又一个标签页"})
         self.assertEqual(m._acks["a"], {"ok": True, "text": "已绕过", "prev": {"23": "enable"}})
-        self.assertEqual(m.VERSION, 2)
+        self.assertEqual(m.VERSION, 3)
 
 
 if __name__ == "__main__":

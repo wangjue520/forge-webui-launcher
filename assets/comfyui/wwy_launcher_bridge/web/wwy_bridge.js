@@ -139,8 +139,44 @@ api.addEventListener("wwy_bridge_command", (e) => {
     if (res.ok) report([]);
 });
 
+// ---- 启动器「发送到 ComfyUI」：新开一个工作流标签页载入，不动用户当前打开的工作流 ----
+async function loadItem(item) {
+    const name = String(item.name || "WWY启动器").replace(/[\\/:*?"<>|]/g, "_");
+    if (item.workflow) {
+        await app.loadGraphData(item.workflow, true, true, name);
+    } else if (item.api) {
+        if (typeof app.loadApiJson !== "function") throw new Error("这个 ComfyUI 版本太旧，载入不了 API 格式的工作流，更新一下 ComfyUI");
+        await app.loadApiJson(item.api, name);
+    } else {
+        throw new Error("没有收到工作流");
+    }
+    return { ok: true, text: `已在 ComfyUI 新开工作流「${name}」` };
+}
+
+async function handleLoad(item) {
+    if (!item || !item.id) return;
+    let res;
+    try { res = await loadItem(item); } catch (err) { res = { ok: false, text: String(err?.message || err) }; }
+    if (res.ok) {
+        try { app.extensionManager?.toast?.add?.({ severity: "success", summary: "WWY 启动器", detail: res.text, life: 4000 }); } catch (e) { /* 老版本没有 toast */ }
+    }
+    api.fetchApi("/wwy_bridge/ack", { method: "POST", body: JSON.stringify({ id: item.id, ...res }) }).catch(() => {});
+}
+
+api.addEventListener("wwy_bridge_load", (e) => handleLoad(e.detail || {}));
+
 app.registerExtension({
     name: "wwy.launcher.bridge",
+    async setup() {
+        // 启动器发过来时网页还没打开：等网页把上次的工作流恢复完再载入
+        setTimeout(async () => {
+            try {
+                const r = await api.fetchApi("/wwy_bridge/pending");
+                const d = await r.json();
+                if (d?.item) handleLoad(d.item);
+            } catch (e) { /* 插件是旧版 / 没有待载入的 */ }
+        }, 800);
+    },
     async afterConfigureGraph(missingNodeTypes) {
         report(missingNodeTypes);
     },
