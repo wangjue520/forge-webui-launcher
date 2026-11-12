@@ -69,7 +69,7 @@ from process_manager import (  # noqa: E402  进程工具与常量（V3 搬到 p
     WEBUI_ENTRY_SCRIPT, _NO_WINDOW, _URL_RE, _BIND_ERROR_RE, _OVERRIDE_VAR_PATTERN,
     kill_process_tree, _probe_executable, find_listening_pid, process_name_of,
     _find_webui_user_bat_overrides, _clear_webui_user_bat_overrides, InstanceRunner,
-    _non_ascii_or_space_issues,
+    _non_ascii_or_space_issues, port_in_use,
 )
 
 MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf")
@@ -2246,6 +2246,36 @@ def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
     return proc.wait()
 
 
+def _deploy_verify_port(cfg_port, in_use=None):
+    """首次运行验证用的端口：配置的端口空着就用它，否则（没配 / 被占）从 7860 往上找一个空闲的。
+    以前不指定端口、探测 7860–7869，用户自己开着的 WebUI 占着 7860 时会被当成刚装好的这个，
+    验证「通过」、临时进程被提前杀掉，依赖其实没装完。"""
+    in_use = in_use or port_in_use
+    cfg_port = str(cfg_port or "").strip()
+    if cfg_port.isdigit() and not in_use(int(cfg_port)):
+        return int(cfg_port)
+    for p in range(7860, 7960):
+        if not in_use(p):
+            return p
+    return int(cfg_port) if cfg_port.isdigit() else 7860
+
+
+def _with_port_arg(args, port):
+    """COMMANDLINE_ARGS 里换上 --port（原来有就替换掉）"""
+    out, skip = [], False
+    for a in (args or "").split():
+        if skip:
+            skip = False
+            continue
+        if a == "--port":
+            skip = True
+            continue
+        if a.startswith("--port="):
+            continue
+        out.append(a)
+    return " ".join(out + ["--port", str(port)])
+
+
 def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     """
     首次运行 webui.bat：装依赖（建 venv 或直接装进便携 Python，取决于
@@ -2265,6 +2295,11 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     """
     program = "cmd.exe" if os.name == "nt" else "sh"
     args = ["/c", "webui.bat"] if os.name == "nt" else ["webui.sh"]
+    # 验证只认自己拉起的这个 WebUI：显式指定一个空闲端口，端口探测也只探它
+    verify_port = _deploy_verify_port(self._deploy_cfg.get("port", ""))
+    env = dict(env)
+    env["COMMANDLINE_ARGS"] = _with_port_arg(env.get("COMMANDLINE_ARGS", ""), verify_port)
+    log(f"\n[部署] 首次运行验证使用端口 {verify_port}")
     log(f"\n[部署] 执行: {program} {' '.join(args)}  (工作目录: {target})\n\n")
     try:
         self._deploy_proc = subprocess.Popen(
@@ -2300,9 +2335,8 @@ def _deploy_run_webui_until_ready(self, target, log, env, timeout=5400):
     threading.Thread(target=_reader, daemon=True, name="deploy-webui-reader").start()
     # 端口兜底（跟 _launch_port_watcher 同一思路）：输出被重定向时靠
     # TCP 探测判定就绪。必须至少先见过一行输出再探，否则可能连上的
-    # 是上一次没退干净的残留服务。探的配置端口，没配就探 7860-7869。
-    cfg_port = str(self._deploy_cfg.get("port", "")).strip()
-    probe_ports = [int(cfg_port)] if cfg_port.isdigit() else list(range(7860, 7870))
+    # 是上一次没退干净的残留服务。只探上面指定给这次运行的空闲端口。
+    probe_ports = [verify_port]
     tail = ""
     ready = False
     saw_output = False
