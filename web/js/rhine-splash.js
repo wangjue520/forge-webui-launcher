@@ -28,7 +28,7 @@
     var MAX = 9000;
     var ready = false, minDone = false, out = false, done = false, tms = [], rafs = [];
     host.className = "sp-rhine4";
-    host.style.background = "#e9e6e1";
+    host.style.background = document.documentElement.dataset.uiTone === "dark" ? "#1e2420" : "#f1f0e7";
 
     var sub = "WWY·LAB".split("").map(function (c) { return "<span>" + c + "</span>"; }).join("");
     host.innerHTML =

@@ -11,6 +11,11 @@
  *      切换风格时会派发 window 事件 "wwy-theme"（detail 为该风格条目）
  *   3. 界面里要覆盖的样式写 [data-ui-theme="xxx"] 选择器（style.css 是基底）
  *
+ * "auto" 不是一套风格，只是「还没选过」的标记：首次启动时后端按系统的深 / 浅色模式
+ * 定成 terminal-dark 或 terminal 并存盘（config_manager.resolve_ui_theme，只判断这一次，
+ * 之后不再跟随系统）；这里遇到 auto 时按 prefers-color-scheme 做同样的判断，
+ * 作为预览 / 后端没来得及解析时的兜底。
+ *
  * 选择存在 launcher_config.json 的 ui_theme（全局设置，不属于任何实例），
  * 保存/启动时由后端生成 js/current_theme.js——开屏动画在后端应答之前、
  * 且 pywebview 每次启动端口都变（localStorage 跨启动拿不到），只能走文件。
@@ -40,7 +45,10 @@
     { id: "vector", label: "矢量突破 · 青色拟生态", css: "themes/vector.css", splash: "vector" },
     // 莱茵 · 分析终端：结构沿用终末地（不设 base），暖灰研究纸 + 墨色 + 黄铜；三维档案库背景见 js/rhine-field.js，
     // 界面编排 js/rhine.js，开屏 js/rhine-splash.js，音效 js/rhine-sfx.js
-    { id: "rhine", label: "莱茵 · 分析终端（研究档案）", css: "themes/rhine.css", splash: "rhine" },
+    { id: "rhine", label: "莱茵 · 分析终端 · 浅色", css: "themes/rhine.css", splash: "rhine" },
+    // 莱茵 · 深色：同一份样式和脚本（skin: "rhine"），tone: "dark" → rhine.css 里换一组颜色变量，
+    // 三维档案阵列换成深色板 + 选中档案处一盏暖光（rhine-field.js 的调色板），开屏同样跟着变深
+    { id: "rhine-dark", label: "莱茵 · 分析终端 · 深色", css: "themes/rhine.css", splash: "rhine", skin: "rhine", tone: "dark" },
     // 离解 · 黑白构成：结构沿用终末地（不设 base），白纸细网格 + 黑白大渐变 + 荧光黄绿点缀；
     // 背景装饰和动效见 js/dissoc.js，开屏 js/dissoc-splash.js（样式在 splash.css 末尾）
     { id: "dissoc", label: "离解 · 黑白构成", css: "themes/dissoc.css", splash: "dissoc" },
@@ -50,8 +58,14 @@
   // 旧 id 的去处：极简（含更早只叫 "minimal" 的版本）已由新拟物取代；blueprint = 构型的内测名
   var ALIAS = { minimal: "neu-light", "minimal-light": "neu-light", "minimal-dark": "neu-dark", blueprint: "bauform" };
 
+  // 系统现在是不是深色模式（WebView2 / 浏览器的 prefers-color-scheme 跟着系统的应用模式走）
+  function systemDark() {
+    try { return !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches); } catch (e) { return false; }
+  }
+
   function find(id) {
     id = ALIAS[id] || id;
+    if (!id || id === "auto") id = systemDark() ? "terminal-dark" : "terminal";
     for (var i = 0; i < THEMES.length; i++) if (THEMES[i].id === id) return THEMES[i];
     return THEMES[0];
   }
@@ -99,7 +113,7 @@
   window.WWYThemes = {
     list: function () { return THEMES.slice(); },
     current: function () { return find(applied || currentId()); },
-    find: find,   // 旧 id / 别名 → 实际的风格条目（设置页下拉框回填用）
+    find: find,   // 旧 id / 别名 / "auto" → 实际的风格条目（设置页下拉框回填用）
     apply: apply,
   };
 

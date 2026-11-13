@@ -390,11 +390,11 @@
    相位：p-on → p-draw → p-drawn → p-welcome → p-name → p-redact → p-db →（p-hold）→ p-flash → p-out
    ============================================================ */
 #splash.sp-rhine4 {
-  --r4-ink: #0b0c0a; --r4-brass: #a67d48;
+  --r4-ink: #1a211c; --r4-brass: #d5a348;
   --r4-sans: "WWY Inter", "WWY Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
   --r4-ease: cubic-bezier(.22, 1, .36, 1);
   --r4-m: clamp(170px, 17vmin, 230px);
-  background: radial-gradient(ellipse at 50% 46%, #f0eeea, #e8e5e0 70%, #e1ddd7) !important;
+  background: radial-gradient(ellipse at 50% 46%, #f8f7ee, #f1f0e7 70%, #e8e8dc) !important;
   color: var(--r4-ink); font-family: var(--r4-sans); overflow: hidden;
 }
 #splash.sp-rhine4.p-out { background: transparent !important; pointer-events: none; }
@@ -403,7 +403,7 @@
 /* 背景：两道极淡的巨大徽记曲线，缓慢漂移 */
 .sp-rhine4 .r4-bg { position: absolute; width: 95vmax; left: -32vmax; top: -22vmax; opacity: 0; transition: opacity 1s; animation: r4Drift 16s ease-in-out infinite alternate; }
 .sp-rhine4 .r4-bg2 { left: auto; top: auto; right: -40vmax; bottom: -30vmax; width: 115vmax; transform: rotate(180deg); animation-name: r4Drift2; }
-.sp-rhine4 .r4-bg path { fill: none; stroke: rgba(60, 54, 42, .035); stroke-width: 1.3; }
+.sp-rhine4 .r4-bg path { fill: none; stroke: rgba(34, 42, 37, .04); stroke-width: 1.3; }
 .sp-rhine4.p-on .r4-bg { opacity: 1; }
 .sp-rhine4.p-out .r4-bg { opacity: 0; transition: opacity .3s; }
 @keyframes r4Drift { to { translate: 2.5vmax 1.5vmax; } }
@@ -446,7 +446,7 @@
 .sp-rhine4.p-name .r4-w2 .n0 { visibility: visible; }
 /* 反白：一块黑色从左往右扫过，扫过的部分变成黑底白字 */
 .sp-rhine4 .r4-w2 .n1 {
-  position: absolute; left: 0; top: 0; padding: 1px 9px 2px; background: var(--r4-ink); color: #ece9e4;
+  position: absolute; left: 0; top: 0; padding: 1px 9px 2px; background: var(--r4-ink); color: #f4f3ea;
   clip-path: inset(0 100% 0 0);
 }
 .sp-rhine4.p-redact .r4-w2 .n1 { clip-path: inset(0 0 0 0); transition: clip-path .28s cubic-bezier(.65, 0, .35, 1); }
@@ -483,6 +483,23 @@
 .sp-rhine4.r-ready .r4-skip:hover { opacity: 1; }
 .sp-rhine4.p-flash .r4-skip { opacity: 0; }
 @media (prefers-reduced-motion: reduce) { .sp-rhine4 .r4-bg { animation: none; } }
+
+/* 莱茵 · 深色（themes.js 的 rhine-dark）：同一条时间轴，深绿黑底 + 暖白笔触；
+   「过曝」不再是一片白光（夜里太刺眼），换成屏幕中间亮起一盏暖灯，随后淡出、交给主界面里那份发亮的档案。
+   写在这里而不是 themes/rhine.css：主题样式表是脚本后插的，开屏第一帧就要用到这些颜色 */
+[data-ui-theme="rhine"][data-ui-tone="dark"] #splash.sp-rhine4 {
+  --r4-ink: #edf0df; --r4-brass: #d5a348;
+  background: radial-gradient(ellipse at 50% 46%, #262d27, #1e2420 70%, #181d1c) !important;
+}
+[data-ui-theme="rhine"][data-ui-tone="dark"] #splash.sp-rhine4.p-out { background: transparent !important; }
+[data-ui-theme="rhine"][data-ui-tone="dark"] .sp-rhine4 .r4-bg path { stroke: rgba(237, 240, 223, .04); }
+[data-ui-theme="rhine"][data-ui-tone="dark"] .sp-rhine4 .r4-w2 .n1 { color: #1c221d; }
+[data-ui-theme="rhine"][data-ui-tone="dark"] .sp-rhine4 .r4-bloom {
+  background: radial-gradient(ellipse at 50% 50%, rgba(255, 226, 168, .9) 0, rgba(214, 160, 78, .55) 22%, rgba(70, 56, 34, .82) 52%, #181d1c 82%);
+}
+[data-ui-theme="rhine"][data-ui-tone="dark"] .sp-rhine4.p-flash :is(.r4-stack, .r4-logo) {
+  filter: blur(1.6px) drop-shadow(-4px 0 0 rgba(255, 190, 90, .5)) drop-shadow(4px 0 0 rgba(255, 110, 60, .3));
+}
 
 /* ============================================================
    离解 · 黑白构成 开屏（js/dissoc-splash.js）：离解 → 复合

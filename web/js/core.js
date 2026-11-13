@@ -628,7 +628,7 @@
     App.refreshConfigControls();
     App.refreshCmdPreview(App.state.cmd_args);
     // 界面风格：后端配置为准，同步进 localStorage（开屏动画下次启动读它）
-    if (window.WWYThemes) window.WWYThemes.apply(App.cfg.ui_theme || "terminal", true);
+    if (window.WWYThemes) window.WWYThemes.apply(App.cfg.ui_theme || "auto", true);
 
     // 初始化各页面模块
     for (const [name, mod] of Object.entries(App.pages)) {

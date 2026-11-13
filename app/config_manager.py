@@ -116,7 +116,9 @@ DEFAULT_CONFIG = {
     "active_instance": "",
     "multi_instance_ui": False,   # 手动打开多实例模式（实例数 ≥ 2 时自动打开）
     "hidden_pages": [],           # 从侧栏藏掉的页面
-    "ui_theme": "terminal",       # 界面风格（web/js/themes.js 的注册表，含开屏变体）
+    # 界面风格（web/js/themes.js 的注册表，含开屏变体）。"auto" = 还没选过：
+    # 首次启动时按系统的深 / 浅色模式定成 terminal-dark / terminal（见 resolve_ui_theme）
+    "ui_theme": "auto",
     # 共享模型库
     "model_library_enabled": False,
     "model_library_path": "",
@@ -484,10 +486,58 @@ def load_config():
                 pass
     project_active(cfg)
     adapt_to_machine(cfg, loaded)
+    resolve_ui_theme(cfg)
     # 报错诊断的 AI 设置和 LoRA 训练器同步（训练器里填过 Key 的，这里直接能用）
     import ai_api_sync
     ai_api_sync.sync(cfg, local_mtime=os.path.getmtime(CONFIG_PATH) if loaded else 0)
     return cfg
+
+
+# ============================================================
+# 界面风格：首次启动跟随系统深 / 浅色
+# ============================================================
+_DEFAULT_UI_THEMES = ("terminal", "terminal-dark")   # 默认风格「终末地」的浅 / 深两个版本
+
+
+def system_prefers_dark():
+    """系统的「应用模式」是不是深色（Windows 设置 → 个性化 → 颜色 → 选择默认应用模式）。
+    读不到（老系统 / 非 Windows）一律当浅色。"""
+    try:
+        import winreg
+        k = winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                           r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
+        try:
+            return int(winreg.QueryValueEx(k, "AppsUseLightTheme")[0]) == 0
+        finally:
+            winreg.CloseKey(k)
+    except Exception:
+        return False
+
+
+def resolve_ui_theme(cfg):
+    """首次启动时，把默认风格「终末地」按系统深 / 浅色定成深色版或浅色版并存盘。
+
+    「首次」指两种情况：
+      1. ui_theme 还是 "auto"（全新安装，或很老的配置里根本没有这一项）；
+      2. 配置是从别的电脑带过来的（adapt_to_machine 标了 _new_machine），并且带来的
+         就是默认风格——整包发给别人时，对方第一次打开同样跟他自己的系统走。
+         打包的人特意选了别的风格（莱茵、构型……）则原样保留。
+    只判断这一次：存下来的是具体的风格 id，之后系统再切深浅色、或者用户在设置里
+    另选了风格，都不会再被自动改动。
+    """
+    cur = str(cfg.get("ui_theme") or "").strip()
+    first = (not cur) or cur == "auto" or (cfg.get("_new_machine") and cur in _DEFAULT_UI_THEMES)
+    if not first:
+        return False
+    want = "terminal-dark" if system_prefers_dark() else "terminal"
+    if want == cur:
+        return False
+    cfg["ui_theme"] = want
+    try:
+        save_config(cfg)
+    except OSError:
+        pass   # 存不下来也照常用这次判断的结果；下次启动会再判断一遍
+    return True
 
 
 # ============================================================
@@ -676,7 +726,7 @@ def write_theme_file(cfg):
     都随机，localStorage 按 origin（含端口）隔离、跨启动根本拿不到——所以
     风格走磁盘文件。每次保存配置和启动时都重写，ZIP 覆盖更新也冲不掉。
     """
-    theme = str(cfg.get("ui_theme") or "terminal")
+    theme = str(cfg.get("ui_theme") or "auto")   # "auto" 由前端按 prefers-color-scheme 兜底
     content = ("/* 由启动器按当前配置自动生成，请勿手改（改了也会被覆盖） */\n"
                f"window.WWY_THEME_ID = {json.dumps(theme)};\n")
     path = os.path.join(os.path.dirname(CONFIG_PATH), "web", "js", "current_theme.js")

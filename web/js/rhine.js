@@ -8,7 +8,11 @@
  *          装饰区永久保留，不再延伸。
  *          抬头浮在内容上方，往下滚时折叠成一行（淡入一条通栏底色），内容从它下面滚过、位置不受影响。
  *  装饰全屏（<html>.rh-ov）：点中间装饰区进入，目录和功能页都收起来；滚轮 / 拖动 / 方向键切换档案，
- *          点升起的那块档案板（或 Enter）进入对应功能页；Esc 返回。
+ *          点升起的那块档案板、右侧信息区的「打开档案」（或 Enter）进入对应功能页；Esc 返回。
+ *          右侧信息区照 Rhine Music Database 的编排：小号标注 → 粗体档案名 → 带小方点的细线 → 编号 / 部门 → 动作。
+ *  明暗：themes.js 的 rhine / rhine-dark 共用这份脚本，<html data-ui-tone="dark"> 时换深色
+ *          （样式走 rhine.css 的变量，三维阵列走 RhineField.setTone）。
+ *  性能：没有自己的每帧循环——板面贴图在三维阵列「画完一帧」的回调里更新，阵列静止时什么都不跑。
  *  索引：Ctrl+K / 右上「ARCHIVE INDEX」打开档案索引（可搜索的页面列表）。
  *  内容跟着 core.js 写进 #page-title 的文字走（MutationObserver），不改导航逻辑。
  *  音效：js/rhine-sfx.js（合成音效，不放音乐），底栏可开关。
@@ -37,6 +41,7 @@
   var PLATE_W = 300;                      // 板面标签的 CSS 宽度（再透视变换贴到板上）
 
   function isRhine() { return root.dataset.uiTheme === "rhine"; }
+  function isDark() { return root.dataset.uiTone === "dark"; }
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, html, parent) {
     var n = document.createElement(tag);
@@ -117,11 +122,13 @@
     function on(target, ev, fn, opt) { target.addEventListener(ev, fn, opt); b.off.push(function () { target.removeEventListener(ev, fn, opt); }); }
 
     /* 世界：画布 + 景深叠层 */
-    b.world = el("div", null, '<canvas id="rh-gl"></canvas><div class="rh-dof"></div><div class="rh-veil"></div>');
+    b.world = el("div", null, '<canvas id="rh-gl"></canvas><div class="rh-glow"></div><div class="rh-veil"></div>');
+    b.glow = b.world.querySelector(".rh-glow");
     b.world.id = "rh-world";
     document.body.insertBefore(b.world, document.body.firstChild);
-    try { b.field = window.RhineField ? RhineField(b.world.querySelector("canvas")) : null; } catch (e) { console.warn(e); b.field = null; }
+    try { b.field = window.RhineField ? RhineField(b.world.querySelector("canvas"), { onFrame: tick }) : null; } catch (e) { console.warn(e); b.field = null; }
     if (!b.field) root.classList.add("rh-nogl");
+    else if (b.field.setTone) b.field.setTone(isDark(), true);
 
     /* 装饰区：拖拽 / 点击面 */
     b.zone = el("div", null, '<div class="rz-hint"><span>CLICK TO EXPAND</span><i></i><span>DRAG TO INSPECT</span></div>');
@@ -152,7 +159,18 @@
         '<div class="rs-n"><b class="rs-i">01</b><i>/</i><span class="rs-t">10</span></div>' +
         '<div class="rs-ctl"><button type="button" class="rs-up">↑</button><div class="rs-ticks"></div><button type="button" class="rs-dn">↓</button></div>' +
       '</div>' +
-      '<div class="rh-hint"><span><kbd>WHEEL</kbd><kbd>DRAG</kbd> 切换档案</span><span><kbd>CLICK</kbd> 点档案板进入</span><span><kbd>ESC</kbd> 返回</span></div>');
+      '<div class="rh-info">' +
+        '<div class="rn-k"><span>ARCHIVE</span><i>/</i><span class="rn-col">核心档案</span></div>' +
+        '<div class="rn-t">一键启动</div>' +
+        '<div class="rn-rule"><i></i></div>' +
+        '<div class="rn-meta"><span>FILE <b class="rn-no">X-001</b><i>/</i><span class="rn-dept">运行控制科</span><i>/</i><span class="rn-en">LAUNCH CONTROL</span></span><em class="rn-st">FILE</em></div>' +
+        '<button type="button" class="rn-go">打开档案 <span>→</span></button>' +
+        '<div class="rn-tip">点击打开 · ENTER 键也可打开</div>' +
+      '</div>' +
+      '<div class="rh-col"><button type="button" class="rc-prev" aria-label="上一份档案">←</button>' +
+        '<span>FILE COLUMN <b class="rc-i">01</b> / <b class="rc-t">10</b></span>' +
+        '<button type="button" class="rc-next" aria-label="下一份档案">→</button></div>' +
+      '<div class="rh-hint"><span><kbd>WHEEL</kbd><kbd>DRAG</kbd> 切换档案</span><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>ENTER</kbd> 打开</span><span><kbd>ESC</kbd> 返回</span></div>');
     b.ov.id = "rh-ov";
     document.body.appendChild(b.ov);
 
@@ -217,6 +235,9 @@
     b.ov.querySelector(".rh-ovback").addEventListener("click", function () { setOverview(false); });
     b.ov.querySelector(".rs-up").addEventListener("click", function () { moveSel(-1); });
     b.ov.querySelector(".rs-dn").addEventListener("click", function () { moveSel(1); });
+    b.ov.querySelector(".rc-prev").addEventListener("click", function () { moveSel(-1); });
+    b.ov.querySelector(".rc-next").addEventListener("click", function () { moveSel(1); });
+    b.ov.querySelector(".rn-go").addEventListener("click", openSel);
     b.foot.querySelector(".rf-sfx").addEventListener("click", function () { syncSfx(window.RhineSfx ? RhineSfx.toggle() : false); });
     syncSfx(window.RhineSfx ? RhineSfx.enabled() : false);
     b.idx.querySelector(".ri-close").addEventListener("click", closeIndex);
@@ -282,7 +303,7 @@
       if (t && t !== b.lastHover) { b.lastHover = t; sfx("tick", 0, Array.prototype.indexOf.call(t.parentNode.children, t) + 3); }
     });
     on(document, "pointerdown", function (e) {
-      var btn = e.target.closest && e.target.closest(".btn, .rh-back, .rh-find, .rh-ovback, .rs-ctl button, .chip, .cat-item");
+      var btn = e.target.closest && e.target.closest(".btn, .rh-back, .rh-find, .rh-ovback, .rs-ctl button, .rh-col button, .rn-go, .chip, .cat-item");
       if (!btn || btn.disabled) return;
       sfx("press");
       if (reduce) return;
@@ -328,9 +349,7 @@
         root.classList.toggle("rh-focus", v);
         if (b.slide > 1) sfx(v ? "open" : "close");     // 窗口够宽、功能页本来就整块露着时不出声
         syncPause();
-        syncPause();
-        syncPause();
-      }, v ? 90 : 90);
+      }, 90);
     }
     if (mainEl) on(mainEl, "pointerenter", function () { setFocusMode(true); });
     if (sbEl) on(sbEl, "pointerenter", function () { setFocusMode(false); });
@@ -346,8 +365,11 @@
     }
 
     /* ---------- 鼠标视差 ---------- */
+    // 鼠标在功能页 / 弹层里（用户在干活）时不算：否则每动一下鼠标整座阵列都要重画一轮
     on(window, "pointermove", function (e) {
-      if (b.field) b.field.pointer(e.clientX / window.innerWidth * 2 - 1, e.clientY / window.innerHeight * 2 - 1);
+      if (!b.field) return;
+      if (!isOv() && e.target && e.target.closest && e.target.closest("#main, #modal-mask, #rh-index, .lightbox")) return;
+      b.field.pointer(e.clientX / window.innerWidth * 2 - 1, e.clientY / window.innerHeight * 2 - 1);
     }, { passive: true });
 
     /* 翻页：跟着 #page-title */
@@ -377,8 +399,8 @@
     measureFold();
     turn(true);
     measureHead();
-    b.loop = requestAnimationFrame(tick);
     b.clockT = setInterval(function () {
+      if (document.hidden) return;
       var d = new Date(), c = b.foot.querySelector(".rf-clock");
       if (c) c.textContent = pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
     }, 1000);
@@ -397,6 +419,7 @@
     if (b.field) b.field.setFiles(list.length);
     var c = b.navHead.querySelector(".rh-navcount"); if (c) c.textContent = pad(list.length);
     var t = b.ov.querySelector(".rs-t"); if (t) t.textContent = pad(list.length);
+    var ct = b.ov.querySelector(".rc-t"); if (ct) ct.textContent = pad(list.length);
     var ticks = b.ov.querySelector(".rs-ticks");
     ticks.innerHTML = "";
     list.forEach(function (p, i) {
@@ -454,45 +477,30 @@
     root.style.setProperty("--rh-zl", left + "px");
     root.style.setProperty("--rh-zr", (W - right) + "px");
     if (b.field) {
-      b.field.setFocus(ov ? .5 : (left + right) / 2 / W);
+      // 总览：选中的档案放在偏左的位置，右边留给档案信息（窗口窄、信息区收起时回到正中）
+      b.field.setFocus(ov ? (W >= 1100 ? .33 : .5) : (left + right) / 2 / W);
       b.field.setLow(!ov && right - left < 120);
     }
   }
 
-  /* ---------- 每帧：板面信息贴图 + 景深焦点 ---------- */
+  /* ---------- 板面信息贴图：三维阵列每画完一帧调用一次（阵列静止时不会被调用，贴图也就不用动） ---------- */
   function tick() {
-    var b = built; if (!b) return;
-    b.loop = requestAnimationFrame(tick);
-    if (!b.field || document.hidden) return;
+    var b = built; if (!b || !b.field) return;
+    // 深色里选中档案周围的一圈光晕（一张径向渐变，跟着档案走；只动 transform）
     var a = b.field.anchor();
-    if (a) {
-      root.style.setProperty("--rh-fx", a.x.toFixed(1) + "px");
-      root.style.setProperty("--rh-fy", a.y.toFixed(1) + "px");
+    if (a && b.glow) {
+      var g = "translate3d(" + a.x.toFixed(1) + "px," + a.y.toFixed(1) + "px,0)";
+      if (g !== b.glowM) { b.glowM = g; b.glow.style.transform = g; }
     }
     var q = b.field.plateQuad();
     if (!q) { b.plate.style.visibility = "hidden"; return; }
     b.plate.style.visibility = "";
     var h = Math.round(PLATE_W * q.aspect);
     if (h !== b.plateH) { b.plateH = h; b.plate.style.height = h + "px"; b.plate.classList.toggle("short", h < 300); }
-    b.plate.style.transform = quadMatrix(PLATE_W, h, q);
+    var m = quadMatrix(PLATE_W, h, q);
+    if (m !== b.plateM) { b.plateM = m; b.plate.style.transform = m; }
   }
 
-  // 3D 阵列被功能页完全盖住（延伸状态且装饰区不留）时暂停渲染；平移动画走完再停，揭开时立刻恢复
-  function syncPause() {
-    var b = built; if (!b || !b.field) return;
-    var covered = root.classList.contains("rh-focus") && b.slide > 1 && !isOv();
-    clearTimeout(b.pauseT);
-    if (!covered) b.field.setPaused(false);
-    else b.pauseT = setTimeout(function () { b.field.setPaused(true); }, 500);
-  }
-  // 3D 阵列被功能页完全盖住（延伸状态且装饰区不留）时暂停渲染；平移动画走完再停，揭开时立刻恢复
-  function syncPause() {
-    var b = built; if (!b || !b.field) return;
-    var covered = root.classList.contains("rh-focus") && b.slide > 1 && !isOv();
-    clearTimeout(b.pauseT);
-    if (!covered) b.field.setPaused(false);
-    else b.pauseT = setTimeout(function () { b.field.setPaused(true); }, 500);
-  }
   // 3D 阵列被功能页完全盖住（延伸状态且装饰区不留）时暂停渲染；平移动画走完再停，揭开时立刻恢复
   function syncPause() {
     var b = built; if (!b || !b.field) return;
@@ -619,6 +627,17 @@
     var b = built;
     decode(b.ov.querySelector(".rs-i"), pad(i + 1), 300);
     Array.prototype.forEach.call(b.ov.querySelectorAll(".rs-ticks button"), function (x, k) { x.classList.toggle("on", k === i); });
+    // 右侧信息区 + 右下「FILE COLUMN」
+    var list = b.list || pages(), p = list[i] || { id: "launch", cn: "" }, m = META[p.id] || { en: p.id.toUpperCase() };
+    var info = b.ov.querySelector(".rh-info");
+    b.ov.querySelector(".rc-i").textContent = pad(i + 1);
+    info.querySelector(".rn-col").textContent = m.col || "—";
+    info.querySelector(".rn-t").textContent = p.cn;
+    decode(info.querySelector(".rn-no"), fileNo(i), 320);
+    info.querySelector(".rn-dept").textContent = m.dept || "—";
+    info.querySelector(".rn-en").textContent = m.en || "";
+    info.querySelector(".rn-st").textContent = p.id === curPage() ? "OPEN" : "FILE";
+    replay(info, "rn-in");
   }
   function setSel(i) {
     var b = built; if (!b) return;
@@ -645,8 +664,6 @@
     root.classList.toggle("rh-ov", v);
     kickResize();
     if (!v && b.ovSel !== b.sel) { b.ovSel = b.sel; syncSel(b.sel); fillPlate(b.sel, true); }
-    syncPause();
-    syncPause();
     syncPause();
     if (b.field) {
       b.field.setMode(v ? "overview" : "detail");
@@ -719,7 +736,7 @@
     b.obs.forEach(function (o) { o.disconnect(); });
     if (b.ro) b.ro.disconnect();
     b.off.forEach(function (f) { f(); });
-    cancelAnimationFrame(b.loop); clearInterval(b.clockT);
+    clearInterval(b.clockT);
     [b.inT, b.plateT, b.focusT, b.rsT, b.unfoldT, b.foldT, b.pauseT].forEach(clearTimeout);
     if (b.field) b.field.destroy();
     [b.world, b.zone, b.plateLayer, b.ov, b.foot, b.idx, b.brand, b.navHead, b.phNav, b.kick, b.en, b.meta, b.meas].forEach(function (n) { if (n) n.remove(); });
@@ -727,11 +744,17 @@
     clearTimeout(b.enterT);
     root.classList.remove("rh-enter", "rh-ov", "rh-wide", "rh-nogl", "rh-intro", "rh-focus", "rh-dragging", "rh-roomy");
     var tb = $("topbar"); if (tb) tb.classList.remove("rh-fold", "rh-turn", "rh-scrolled");
-    ["--rh-zl", "--rh-zr", "--rh-fx", "--rh-fy", "--rh-head-h", "--rh-fold-h"].forEach(function (k) { root.style.removeProperty(k); });
+    ["--rh-zl", "--rh-zr", "--rh-head-h", "--rh-fold-h"].forEach(function (k) { root.style.removeProperty(k); });
     Array.prototype.forEach.call(document.querySelectorAll("#nav .nav-item"), function (n) { delete n.dataset.rhNo; n.style.removeProperty("--n"); resetTilt(n); });
   }
 
-  function sync() { if (isRhine()) build(); else teardown(); }
+  function sync() {
+    if (!isRhine()) { teardown(); return; }
+    var fresh = !built;
+    build();
+    // rhine ↔ rhine-dark 互相切换时场景不重建，只让三维阵列换一组灯（带渐变）
+    if (!fresh && built && built.field && built.field.setTone) built.field.setTone(isDark(), false);
+  }
   window.addEventListener("wwy-theme", function () { setTimeout(sync, 0); });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", sync); else sync();
 
