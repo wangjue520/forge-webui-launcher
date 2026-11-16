@@ -1273,12 +1273,15 @@ def _final_report(c, report):
     for n in report.get("notes") or []:
         L("[整合包] " + n)
     bad = report.get("pip_failed") or []
-    L(f"[整合包] pip 包：{'全部对齐' if not bad else f'{len(bad)} 个没对齐（多半是这台电脑上装不了的包，一般不影响使用）'}")
+    L(f"[整合包] pip 包：{'全部对齐' if not bad else f'{len(bad)} 个没对齐：'}")
+    for b in bad[:50]:
+        L(f"         · {b}")
     if "models_ok" in report:
         L(f"[整合包] 底模：下好 {len(report['models_ok'])} 个，本来就有 {len(report.get('models_have') or [])} 个，"
           f"没下好 {len(report.get('models_failed') or [])} 个")
         for name, why in report.get("models_failed") or []:
             L(f"         · {name}：{why}")
+    report["kind"] = c.kind   # 完成弹窗按它说「插件」还是「训练引擎」
     c.api._emit("deploy", "pack_report", report=_jsonable(report))
 
 

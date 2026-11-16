@@ -269,10 +269,15 @@
     if (r.torch) out.push("torch：" + r.torch);
     if (r.plugins_ok) {
       const bad = r.plugins_failed || [];
-      out.push(`插件：装好 ${r.plugins_ok.length} 个` + (bad.length ? `，没装上 ${bad.length} 个：` + bad.map((x) => x[0]).join("、") : ""));
+      const what = r.kind === "lora_trainer" ? "训练引擎" : "插件";
+      out.push(`${what}：装好 ${r.plugins_ok.length} 个` + (bad.length ? `，没装上 ${bad.length} 个：` : ""));
+      bad.slice(0, 8).forEach((x) => out.push(`    ${x[0]}（${x[1]}）`));
+      if (bad.length > 8) out.push(`    ……共 ${bad.length} 个，详情见运行日志`);
     }
     const pf = r.pip_failed || [];
-    out.push(pf.length ? `pip 包：${pf.length} 个没对齐（多半是这台电脑上装不了的包，详情见运行日志）` : "pip 包：全部和整合包一致");
+    if (!pf.length) out.push("pip 包：全部和整合包一致");
+    else if (pf.length <= 5) out.push(`pip 包：${pf.length} 个没对齐：${pf.join("、")}`);
+    else out.push(`pip 包：${pf.length} 个没对齐（多半是这台电脑上装不了的包，详情见运行日志）`);
     if (r.models_ok) {
       const bad = r.models_failed || [], have = r.models_have || [];
       const parts = [];
@@ -281,7 +286,7 @@
       if (bad.length) parts.push(`没下好 ${bad.length} 个：` + bad.map((x) => x[0]).join("、"));
       out.push("底模：" + (parts.join("，") || "没有要下的"));
     }
-    return "\n\n整合包还原结果：\n" + out.map((x) => "· " + x).join("\n");
+    return "\n\n整合包还原结果：\n" + out.map((x) => (x.startsWith("    ") ? x : "· " + x)).join("\n");
   };
 
   App.pages.pack = {
