@@ -423,6 +423,31 @@ class LlmTest(_Base):
         self.assertTrue(ok)
         self.assertIn("正常", text)
 
+    def test_reasoning_model_forced_finish_and_truncation(self):
+        """DeepSeek V4 这类推理模型：查询用完还在查时强制调用 finish；思考占满长度、正文为空时报「被截断」而不是没结论"""
+        sent = []
+
+        def keeps_looking(url, headers, body, timeout):
+            sent.append(body)
+            if body.get("tool_choice"):
+                return _openai_reply("", [("finish", {"summary": "缺 cv2", "cause": "c", "steps": []})])
+            return _openai_reply("我先看看……", [("list_dir", {"path": self.neo})])
+        res = dl.run(self.api, dg.launcher_ctx(self.api), "", post=keeps_looking)
+        self.assertEqual(res["summary"], "缺 cv2")
+        self.assertEqual(len(sent), dl.MAX_STEPS + 1)
+        self.assertEqual(sent[-1]["tool_choice"], {"type": "function", "function": {"name": "finish"}})
+        self.assertIn("查询次数已经用完", sent[-1]["messages"][-1]["content"])
+        self.assertGreaterEqual(sent[0]["max_tokens"], 8192)
+
+        truncated = lambda *a: (200, {"choices": [{"message": {"content": "", "reasoning_content": "嗯……"},
+                                                   "finish_reason": "length"}]}, "")
+        with self.assertRaises(dl.LlmError) as e:
+            dl.run(self.api, dg.launcher_ctx(self.api), "", post=truncated)
+        self.assertIn("截断", str(e.exception))
+        ok, text = dl.ping(self.api.cfg, post=truncated)   # 测试按钮：接口是通的，只是推理模型没来得及回答
+        self.assertTrue(ok)
+        self.assertIn("推理模型", text)
+
     def test_system_prompt_has_knowledge_and_actions(self):
         sp = dl.system_prompt(self.api, dg.launcher_ctx(self.api))
         self.assertIn("ComfyUI", sp)

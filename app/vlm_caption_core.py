@@ -492,6 +492,10 @@ def api_call(api, img_path, prompt, max_tokens, post=None):
     if isinstance(c, list):
         c = " ".join(x.get("text", "") for x in c if isinstance(x, dict))
     c = re.sub(r"<think>.*?</think>", "", c or "", flags=re.S).strip()
+    if not c and str(ch.get("finish_reason") or "").lower() in ("length", "max_tokens"):
+        # 推理模型先「思考」，思考把 max_tokens 用完了正文就是空的：不是拒答，是长度不够
+        raise RuntimeError(f"回复被长度上限（{body['max_tokens']}）截断，没有正文：这个模型会先思考，"
+                           "把「最多输出」调大，或者换不带思考的模型")
     why = refusal_reason(c, ch.get("finish_reason"), msg.get("refusal"))
     if why:
         raise Refused(why)
