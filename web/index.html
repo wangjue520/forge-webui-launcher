@@ -441,6 +441,17 @@
           <span class="hint">已经装好的 WebUI / ComfyUI 要更新、切换或回滚版本，点这里（不用重新部署）</span>
         </div>
 
+        <div class="card" id="pack-card">
+          <div class="card-title">整合包<span class="card-title-hint">把装好的 WebUI / ComfyUI / 训练器记成一个 txt，别人拿它一键部署出一样的环境（模型除外，底模可选带上）</span></div>
+          <div class="action-row pack-actions">
+            <button class="btn" id="pack-export">制作整合包…</button>
+            <button class="btn btn-primary" id="pack-deploy">部署整合包…</button>
+            <button class="btn" id="pack-cancel" hidden>取消制作</button>
+          </div>
+          <div class="hint" id="pack-hint">记下程序版本、每个插件 / 节点的版本和所有 pip 包的版本。查不到来源的插件（没有 git 地址、只在本地的提交、本地改过的文件）会连文件一起打成 .zip，部署时 .txt 和 .zip 都能用。</div>
+          <div class="progress" id="pack-progress"><div class="progress-bar"></div><span class="progress-text"></span></div>
+        </div>
+
         <div class="card">
           <div class="card-title">环境检测</div>
           <div class="env-grid">
@@ -453,7 +464,7 @@
         <div class="card">
           <div class="card-title">选择要部署的程序<span class="card-title-hint">WebUI Forge（Neo / H3 视频版 / Classic）或 ComfyUI，装到新目录会自动添加为新实例；也可以部署 WWY LoRA 训练器</span></div>
           <select id="deploy-branch"></select>
-          <div class="hint" id="deploy-trainer-hint" hidden>WWY LoRA 训练器：训练 Anima / SDXL / Krea 2 / MOSS-Image 的 LoRA，自带爬图、反推、标签编辑。装在自己的文件夹里（默认在启动器旁边的 WWY-LoRA-Trainer），不会添加为实例。装好后在「一键启动」页顶部的训练器卡片上启动 / 停止。</div>
+          <div class="hint" id="deploy-trainer-hint" hidden>WWY LoRA 训练器：训练 Anima / SDXL / Krea 2 / MOSS-Image / MiniMax H3（视频、单帧、参考图、H3-Image）/ Qwen-Image（含 Edit 2511、2.1）/ Z-Image / FLUX.2 Klein 的 LoRA，自带爬图、反推、标签编辑；可选的 DiffSynth-Studio / AI Toolkit 引擎在训练器的设置里按需安装。装在自己的文件夹里（默认在启动器旁边的 WWY-LoRA-Trainer），不会添加为实例。装好后在「一键启动」页顶部的训练器卡片上启动 / 停止。</div>
           <div class="hint" id="deploy-branch-hint" data-status="warn" hidden>H3 视频版是新分支，还在快速迭代，原来的 Neo 照常可用、互不影响。跑视频生成需要显卡 ≥ 12GB 显存；内存 GGUF Q4 一套约占 33GB，建议 48GB 以上，64GB 最稳；部署完到「模型下载」页的「H3 视频模型一键下载」把模型配齐。</div>
         </div>
 
@@ -1187,6 +1198,7 @@
 <script src="js/launch.js"></script>
 <script src="js/settings.js"></script>
 <script src="js/deploy.js"></script>
+<script src="js/pack.js"></script>
 <script src="js/catalog.js"></script>
 <script src="js/civitai.js"></script>
 <script src="js/models.js"></script>

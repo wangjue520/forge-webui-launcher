@@ -302,6 +302,38 @@
       launch_precheck: () => ok({ ok: false, issues: [{ level: "error", text: "预览模式：未连接后端，无法检测" }] }),
       choose_directory: () => ok({ ok: true, path: "" }),
       choose_images: () => ok({ ok: true, paths: [] }),
+      // 整合包（pack.js）
+      pack_sources: () => ok({ ok: true, out_dir: "D:\\AI\\WWY启动器\\整合包", busy: false, items: [
+        { id: "inst:demo", name: "ComfyUI", label: "ComfyUI", root: "F:\\ComfyUI-aki-v3", ok: true, reason: "", running: true },
+        { id: "inst:neo", name: "Forge Neo", label: "Forge Neo", root: "D:\\AI\\forge-neo", ok: true, reason: "", running: false },
+        { id: "inst:a1111", name: "A1111", label: "A1111", root: "D:\\AI\\sd-webui-aki", ok: false, reason: "A1111 原版 WebUI 不能用启动器部署，做不了整合包" },
+        { id: "trainer", name: "WWY LoRA 训练器", label: "LoRA 训练器", root: "D:\\AI\\WWY-LoRA-Trainer", ok: true, reason: "" }] }),
+      pack_models: () => ok({ ok: true, items: [
+        { path: "a", key: "checkpoints", name: "waiNSFWIllustrious_v140.safetensors", where: "models/checkpoints", size: 6938040682 },
+        { path: "b", key: "diffusion_models", name: "H3/minimax_h3_fl2va_int8_convrot.safetensors", where: "共享模型库/diffusion_models", size: 23950000000 },
+        { path: "c", key: "text_encoders", name: "qwen3_vl_32b_nvfp4_awq.safetensors", where: "共享模型库/text_encoders", size: 21474836480 },
+        { path: "d", key: "vae", name: "ae.safetensors", where: "models/vae", size: 335304388 }] }),
+      pack_export: () => {
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "pack", type, ...data }), ms);
+        [[5, "读取本体版本"], [30, "检查插件 / 节点（20/53）comfyui-penna"], [55, "记录 pip 包版本"], [92, "写出整合包"]]
+          .forEach(([pct, text], i) => send("step", { pct, text }, 400 * (i + 1)));
+        send("done", { ok: true, zip: true, path: "D:\\AI\\WWY启动器\\整合包\\ComfyUI_20261116-2049.zip",
+          packed: ["comfyui-penna", "comfyui-teach-stage", "zml-image", "random_prompt_node.py"],
+          summary: { kind: "comfyui", label: "ComfyUI", main: { label: "master @ fd7639f47" }, plugins: { git: 24, cnr: 14, zip: 13, missing: 0 },
+            pip: { "主环境": 311 }, models: [] } }, 2000);
+        return ok({ ok: true });
+      },
+      pack_cancel: () => ok({ ok: true }),
+      pack_choose_file: () => ok({ ok: true, paths: ["D:\\下载\\ComfyUI_20261116-2049.zip"] }),
+      pack_load: () => ok({ ok: true, summary: { kind: "comfyui", label: "ComfyUI", name: "群主的 ComfyUI 视频工作流", created: "2026-11-16 20:48",
+        gpu: "NVIDIA GeForce RTX 3090", python: "3.13.11", torch: "2.9.1+cu130", zip: true,
+        main: { label: "master @ fd7639f47" }, plugins: { git: 24, cnr: 14, zip: 12, missing: 1 }, missing: ["tag_profiles_v12"],
+        pip: { "主环境": 311 }, engines: [],
+        models: [{ key: "diffusion_models", name: "minimax_h3_fl2va_int8_convrot.safetensors", size: 23950000000, hf: "x:y", civitai: "1" },
+          { key: "checkpoints", name: "waiNSFWIllustrious_v140.safetensors", size: 6938040682, civitai: "123", liblib: "u/v" },
+          { key: "vae", name: "我自己的 vae.safetensors", size: 335304388 }] } }),
+      pack_deploy: () => ok({ ok: false, error: "预览模式：未连接后端" }),
+      deploy_precheck: () => ok({ ok: true, issues: [] }),
       models_categories: () => ok({ ok: true, root: "", categories: [
         { label: "Stable-diffusion", is_lora: false, path: "D:\\AI\\webui\\models\\Stable-diffusion（演示）" },
         { label: "Lora", is_lora: true, path: "D:\\AI\\webui\\models\\Lora（演示）" },

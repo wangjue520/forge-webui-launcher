@@ -1466,3 +1466,27 @@ body:not(.remote-mode) [data-remote-only] { display: none !important; }
 .meta-send-row .hint { margin: 0; }
 #meta-lora-copy-all { margin-left: auto; }
 .send-notes { margin: 0 0 4px; padding-left: 18px; line-height: 1.7; font-size: 12.5px; }
+
+/* ============ 整合包（环境部署页 pack.js） ============ */
+#pack-card .pack-actions { margin: 4px 0 6px; }
+.pk-form { white-space: normal; display: flex; flex-direction: column; gap: 4px; }
+.pk-form select, .pk-form input[type="text"] { width: 100%; }
+.pk-form .row { display: flex; gap: 8px; align-items: center; }
+.pk-form .row input { flex: 1; min-width: 0; margin-top: 0; }
+.pk-label { margin-top: 10px; font-weight: 700; color: var(--text); font-size: 12.5px; }
+.pk-title { font-weight: 700; color: var(--text); font-size: 14px; }
+.pk-models {
+  max-height: 32vh; overflow: auto; border: 1px solid var(--card-border);
+  background: var(--input-bg); padding: 4px 8px; margin-top: 2px;
+}
+.pk-models .hint { margin: 4px 0; }
+.pk-group { margin: 6px 0 2px; font-size: 11.5px; color: var(--text-faint); font-family: var(--mono); }
+.pk-model { padding: 3px 2px; align-items: center; }
+.pk-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.pk-size { flex: none; color: var(--text-faint); font: 11.5px var(--mono); }
+.pk-mrow { display: grid; grid-template-columns: minmax(0, 1fr) auto 140px; gap: 8px; align-items: center; padding: 3px 0; }
+.pk-mrow select { width: 100%; }
+.pk-sum { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 12px; margin-top: 4px; }
+.pk-sum span { word-break: break-word; }
+.pk-k { color: var(--text-faint); white-space: nowrap; }
+.pk-warn { border-left: 4px solid var(--warn); padding: 6px 10px; margin-top: 8px; color: var(--text); background: var(--input-bg); }

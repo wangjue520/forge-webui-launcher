@@ -719,6 +719,32 @@ H3 = m("minimax_h3", "MiniMax H3", "video",
        tips="Forge Neo 要用 H3 版（环境部署里选 Forge Neo H3）；官方 Neo 不支持 H3",
        link="https://huggingface.co/Comfy-Org/MiniMax-H3")
 
+H3_IMAGE = m("minimax_h3_image", "MiniMax H3-Image", "image",
+             "MiniMax H3 的出图版：和 H3 视频同一个 Qwen3-VL 32B 文本编码器，中文提示词、写字和多图参考都强",
+             [v("pruned", "H3-Image（剪枝版）", [
+                 c("dit", "主模型", "DiffusionModel", [
+                     o("bf16", hf("Comfy-Org/MiniMax-H3-Image",
+                                  "diffusion_models/minimax_h3_image_pruned_bf16.safetensors")),
+                     o("int8", hf("Comfy-Org/MiniMax-H3-Image",
+                                  "diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors")),
+                     o("w4a8", hf("Comfy-Org/MiniMax-H3-Image",
+                                  "diffusion_models/minimax_h3_image_pruned_w4a8.safetensors")),
+                 ]),
+                 c("te", "文本编码器 Qwen3-VL 32B（和 H3 视频共用）", "TextEncoder", [
+                     o("bf16", hf("Comfy-Org/MiniMax-H3", "text_encoders/qwen3vl_32b_minimax_h3_bf16.safetensors")),
+                     o("int8", hf("Comfy-Org/MiniMax-H3-Image",
+                                  "text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors")),
+                     o("nvfp4", hf("Comfy-Org/MiniMax-H3-Image",
+                                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"), label="nvfp4 AWQ"),
+                 ]),
+                 c("vae", "VAE（H3-Image）", "VAE",
+                   [o("fp16", hf("Comfy-Org/MiniMax-H3-Image", "vae/minimax_h3_image_vae_fp16.safetensors"),
+                      label="原版")]),
+             ], default=True)],
+             ui=["comfyui"], license="MiniMax H3 社区许可",
+             tips="ComfyUI 新版自带 H3-Image 节点；LoRA 训练器也能练（训练推荐 int8 ConvRot 版）",
+             link="https://huggingface.co/Comfy-Org/MiniMax-H3-Image")
+
 SDXL_BASE = m("sdxl", "SDXL 1.0", "classic", "Stability AI 的 SDXL 官方底模",
               [v("base", "Base 1.0", [sdxl_ckpt(o("fp16", hf("stabilityai/stable-diffusion-xl-base-1.0",
                                                           "sd_xl_base_1.0.safetensors"), label="fp16 原版")),
@@ -741,7 +767,7 @@ SPEC = {
         {"id": "classic", "label": "SDXL / SD1.5 底模"},
     ],
     "models": [ANIMA, WAI, NOOBAI, ILLUSTRIOUS, PONY, ANIMAGINE, NETAYUME,
-               ZIMAGE, KREA2, MOSS, QWEN_IMAGE_21, QWEN_IMAGE, FLUX2_KLEIN, FLUX1, FLUX2_DEV, ERNIE, CHROMA,
+               ZIMAGE, KREA2, MOSS, QWEN_IMAGE_21, QWEN_IMAGE, H3_IMAGE, FLUX2_KLEIN, FLUX1, FLUX2_DEV, ERNIE, CHROMA,
                QWEN_EDIT, FLUX_KONTEXT,
                WAN22, H3,
                SDXL_BASE, SD15],
