@@ -1095,10 +1095,12 @@ def _pip_bisect(c, py, specs):
 
 def _pip(c, py, args, sources=None):
     base = ["-s", "-m", "pip", "install", "--disable-pip-version-check", "--no-deps"]
+    # 要现场编译的包（git+ 直链等）的 setup.py 常用默认编码读 README：中文 Windows 是 GBK，读 UTF-8 文件直接报错
+    env = dict(c.env or os.environ, PYTHONUTF8="1")
     rc = 1
     for extra in (sources if sources is not None else [list(a) for a in c.mirrors] + [[]]):
         c.check()
-        rc = c.run(py, base + list(args) + list(extra), os.path.dirname(py), timeout=3600)
+        rc = c.run(py, base + list(args) + list(extra), os.path.dirname(py), env=env, timeout=3600)
         if rc == 0:
             break
     return rc
