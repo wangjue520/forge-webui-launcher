@@ -274,6 +274,8 @@ def deploy_flow(api, root, torch_variant):
             raise _Cancelled()
         if rc != 0:
             raise RuntimeError(f"训练环境没有装好（退出码 {rc}），详见上面的日志。网络问题的话重新点「一键部署」会接着装")
+        import pack_manager   # 按整合包部署：钉版本、装可选引擎、对齐 pip 包（不是整合包部署时什么都不做）
+        pack_manager.after_deploy(api, "lora_trainer", root, log, env)
         ok = True
         step(100, "部署完成")
         log("\n[训练器] 部署完成，到「一键启动」页点训练器卡片上的「启动」就能用了\n")
@@ -286,6 +288,7 @@ def deploy_flow(api, root, torch_variant):
             log(traceback.format_exc()[-1500:] + "\n")
         api._emit(DEPLOY_SCOPE, "error", title="训练器部署失败", text=str(e))
     finally:
+        api._deploy_pack = None
         api._deploy_running = False
         api._trainer_deploying = False
         api._emit(DEPLOY_SCOPE, "state", running=False)

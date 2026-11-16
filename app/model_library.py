@@ -849,7 +849,21 @@ def run_merge(plan, lib_path, progress=None, cancelled=lambda: False):
 # LoRA 自动整理
 # ============================================================
 
+# 按顺序找第一个匹配的：具体的写前面（H3-Image 在 H3 前、Qwen-Image-2.1 / Edit 在 qwen 前、Klein / FLUX.2 / Krea 2 在 flux 前）。
+# 分类名和 LoRA 训练器送过来的 baseModel 一致（训练器 app/models/*.py 的 base_label），
+# 训练器直接放进库里的、Civitai 下的、自动整理挪的，同一个底模才会落进同一个文件夹；
+# 这些底模之间的 LoRA 不通用（Klein ≠ Flux.1，Qwen-Image-2.1 / Edit ≠ Qwen-Image），所以分开放
 _BASE_ALIASES = [
+    (("h3 image", "h3-image", "h3_image", "h3image"), "MiniMax H3 Image"),
+    (("minimax h3", "minimax-h3", "minimax_h3", "minimaxh3", "minimax"), "MiniMax H3"),
+    (("qwen-image-2.1", "qwen image 2.1", "qwen_image_2.1", "qwen-image 2.1", "qwen_image_21", "qwen 2.1"),
+     "Qwen-Image-2.1"),
+    (("qwen-image-edit", "qwen image edit", "qwen_image_edit", "qwen edit"), "Qwen-Image-Edit"),
+    (("z-image", "z image", "z_image", "zimage"), "Z-Image"),
+    (("klein",), "FLUX.2 Klein"),
+    (("flux.2", "flux 2", "flux-2", "flux2"), "FLUX.2"),
+    (("krea 2", "krea-2", "krea2"), "Krea 2"),
+    (("moss",), "MOSS"),
     (("illustrious",), "Illustrious"),
     (("noobai", "noob ai"), "NoobAI"),
     (("pony",), "Pony"),
@@ -861,7 +875,7 @@ _BASE_ALIASES = [
     (("anima",), "Anima"),
     (("wan video", "wan 2", "wan2", "wan"), "Wan"),
     (("hunyuan",), "Hunyuan"),
-    (("qwen",), "Qwen"),
+    (("qwen",), "Qwen-Image"),   # Civitai 上 Qwen-Image 的底模就叫「Qwen」；和训练器一样放 Qwen-Image
     (("lumina",), "Lumina"),
     (("chroma",), "Chroma"),
     (("hidream",), "HiDream"),

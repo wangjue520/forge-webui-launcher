@@ -13,6 +13,7 @@
     $("#deploy-start").disabled = v;
     $("#deploy-cancel").disabled = !v;
     $("#deploy-gpu-switch").disabled = v;
+    if ($("#pack-deploy")) $("#pack-deploy").disabled = v;   // 整合包部署也走这条部署线，同一时间只能一个
   }
 
   /* ---------- 显卡类型（N 卡 CUDA / A 卡 ROCm） ---------- */
@@ -281,6 +282,13 @@
     } catch (e) { out.textContent = "失败：" + e.message; out.dataset.status = "bad"; }
   }
 
+  // 整合包（pack.js）用：部署页选的显卡类型、是否正在部署
+  App.deployGpu = () => ({ backend: gpuSel(), gfx: gfxSel() });
+  App.deployRunning = () => running;
+  // 多实例时侧栏没有「环境部署」（从实例管理页的「部署新的实例…」进来）：侧栏高亮和页头编号跟实例管理，
+  // 不然页头显示「00 // DEPLOY」
+  App.navParent.deploy = () => (App.instances && App.instances.multi ? "instances" : "deploy");
+
   App.pages.deploy = {
     // 一键启动页训练器卡片上的「补齐环境」：切到训练器这一项
     selectTrainer() { $("#deploy-branch").value = TRAINER; syncNodesCard(); syncGpu(); syncTrainer(); },
@@ -362,11 +370,12 @@
         } catch (err) { console.error(err); }
         $("#deploy-target").value = e.target;
         const name = e.branch === "comfyui" ? "ComfyUI" : "Forge WebUI";
+        const packNote = App.takePackReport ? App.takePackReport() : "";   // 按整合包部署时的还原结果
         const other = st && st.instances && st.instances.instances.find((i) =>
           i.root && i.root.toLowerCase() === String(e.target).toLowerCase() && !i.active);
         if (other) {
           const v = await App.modal("部署完成",
-            App.esc(`${name} 已部署到：\n${e.target}\n\n它被添加为新实例「${other.name}」。要切换过去并启动吗？`),
+            App.esc(`${name} 已部署到：\n${e.target}\n\n它被添加为新实例「${other.name}」。要切换过去并启动吗？` + packNote),
             [{ id: "go", label: "切换到新实例", kind: "primary" }, { id: "stay", label: "留在这里" }]);
           if (v === "go" && App.switchInstance) {
             try { sessionStorage.setItem("return-page", "launch"); } catch (err) {}
@@ -375,7 +384,7 @@
           return;
         }
         await App.modal("部署完成",
-          App.esc(`${name} 已部署到：\n${e.target}\n\n现在可以直接去「一键启动」页启动了。`),
+          App.esc(`${name} 已部署到：\n${e.target}\n\n现在可以直接去「一键启动」页启动了。` + packNote),
           [{ id: "go", label: "去一键启动", kind: "primary" }, { id: "stay", label: "留在这里" }]
         ).then((v) => { if (v === "go") App.showPage("launch"); });
       });
@@ -385,7 +394,8 @@
         setRunning(false);
         if (!e.ok) { prog.hide(); return; }
         prog.set(100, "部署完成");
-        const v = await App.modal("部署完成", App.esc(`WWY LoRA 训练器已部署到：\n${e.target}\n\n现在启动吗？启动好会自动在浏览器里打开。以后在「一键启动」页顶部的训练器卡片上启动 / 停止。`),
+        const packNote = App.takePackReport ? App.takePackReport() : "";
+        const v = await App.modal("部署完成", App.esc(`WWY LoRA 训练器已部署到：\n${e.target}\n\n现在启动吗？启动好会自动在浏览器里打开。以后在「一键启动」页顶部的训练器卡片上启动 / 停止。` + packNote),
           [{ id: "start", label: "启动训练器", kind: "primary" }, { id: "stay", label: "稍后" }]);
         if (v !== "start") return;
         App.showPage("launch");   // 训练器的启动日志在一键启动页的运行日志里

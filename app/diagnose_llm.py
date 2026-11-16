@@ -69,6 +69,8 @@ class Chat:
         self.system, self.tools, self.timeout = system, tools, timeout
         self.messages = []
         self._post = post or self._requests_post
+        self.extra = {}       # 附加请求参数（个别服务商要的开关）
+        self.finish = ""      # 上一次回复的结束原因：length / max_tokens = 被长度截断（推理模型思考太久时正文会是空的）
 
     @staticmethod
     def _requests_post(url, headers, body, timeout):
@@ -93,7 +95,9 @@ class Chat:
             for cid, out in results:
                 self.messages.append({"role": "tool", "tool_call_id": cid, "content": out})
 
-    def send(self, max_tokens=4096):
+    def send(self, max_tokens=8192, force=None):
+        """force：工具名，要求这一轮必须调用它（查询次数用完时强制调用 finish 给结论）。
+        max_tokens 给足：DeepSeek V4 这类推理模型先「思考」，太小时思考占满长度、正文是空的"""
         if self.fmt == "anthropic":
             url = self.base + ("/messages" if self.base.endswith("/v1") else "/v1/messages")
             headers = {"x-api-key": self.key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
@@ -101,6 +105,8 @@ class Chat:
                     "messages": self.messages, "temperature": 0.2}
             if self.tools:
                 body["tools"] = [{"name": n, "description": d, "input_schema": s} for n, d, s in self.tools]
+                if force:
+                    body["tool_choice"] = {"type": "tool", "name": force}
         else:
             url = self.base + "/chat/completions"
             headers = {"Authorization": f"Bearer {self.key}", "Content-Type": "application/json"}
@@ -109,6 +115,9 @@ class Chat:
             if self.tools:
                 body["tools"] = [{"type": "function", "function": {"name": n, "description": d, "parameters": s}}
                                  for n, d, s in self.tools]
+                if force:
+                    body["tool_choice"] = {"type": "function", "function": {"name": force}}
+        body.update(self.extra)
         try:
             status, data, raw = self._post(url, headers, body, self.timeout)
         except Exception as e:
@@ -117,11 +126,14 @@ class Chat:
             raise LlmError(_http_error_text(status, data, raw))
         if self.fmt == "anthropic":
             blocks = data.get("content") or []
+            self.finish = str(data.get("stop_reason") or "")
             self.messages.append({"role": "assistant", "content": blocks})
             text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text")
             calls = [(b["id"], b["name"], b.get("input") or {}) for b in blocks if b.get("type") == "tool_use"]
             return text, calls
-        msg = ((data.get("choices") or [{}])[0].get("message")) or {}
+        choice = (data.get("choices") or [{}])[0] or {}
+        self.finish = str(choice.get("finish_reason") or "")
+        msg = choice.get("message") or {}
         keep = {k: v for k, v in msg.items() if v is not None and k in ("role", "content", "tool_calls",
                                                                           "reasoning_content")}
         keep["role"] = "assistant"
@@ -694,22 +706,45 @@ def run(api, ctx, log_text, findings=(), on_step=lambda t: None, cancelled=lambd
     for rnd in range(1, MAX_STEPS + 2):
         if cancelled():
             raise LlmError("已取消")
-        text, calls = chat.send()
+        last = rnd > MAX_STEPS
+        if last:
+            # 查询次数用完了还在查（DeepSeek 这类模型很爱一路查下去）：明确要求、并强制它调用 finish 给结论，
+            # 不然界面上的「结论」只剩它开头那句「我先看看……」
+            on_step("查询次数用完，让 AI 根据已经查到的信息给结论")
+            chat.user("查询次数已经用完。不要再查任何东西，现在就根据上面已经查到的信息调用 finish 给出结论。")
+            try:
+                text, calls = chat.send(force="finish")
+            except LlmError:   # 有的服务商（或思考模式）不支持强制调用某个工具：只靠上面那句话再要一次
+                text, calls = chat.send()
+        else:
+            text, calls = chat.send()
         final_text = text or final_text
         if not calls:
+            if not text.strip() and _truncated(chat.finish):
+                raise LlmError(TRUNCATED_TEXT)
             break
         results = []
         for cid, name, args in calls:
             if name == "finish":
                 return _final(api, args, rnd, tools)
             on_step(_step_label(name, args))
-            results.append((cid, tools.call(name, args) if rnd <= MAX_STEPS else
+            results.append((cid, tools.call(name, args) if not last else
                             "查询次数用完了，请根据已有信息调用 finish 给结论"))
         chat.tool_results(results)
+        if last:
+            break
     if final_text.strip():
         return {"summary": final_text.strip()[:300], "cause": final_text.strip(), "steps": [], "actions": [],
                 "confidence": "low", "verdict": "need_user", "rounds": MAX_STEPS}
     raise LlmError("AI 没有给出结论")
+
+
+TRUNCATED_TEXT = ("AI 的回复被长度上限截断了，没有给出正文（推理模型「思考」太久）。可以再试一次，"
+                  "或者在「启动器设置 → 报错诊断」换成不带思考的模型")
+
+
+def _truncated(finish):
+    return str(finish or "").lower() in ("length", "max_tokens")
 
 
 def _step_label(name, args):
@@ -751,7 +786,12 @@ def ping(cfg, post=None):
     chat.user("只回复两个字：正常")
     t0 = time.time()
     try:
-        text, _ = chat.send(max_tokens=20)
+        # 推理模型（DeepSeek V4 等）先思考再回答：只给几十个 token 时思考就占满了，回复是空的
+        text, _ = chat.send(max_tokens=1024)
     except LlmError as e:
         return False, str(e)
-    return True, f"{model} 已连通（{time.time() - t0:.1f} 秒），回复：{text.strip()[:30]}"
+    took = f"{time.time() - t0:.1f} 秒"
+    if not text.strip():
+        why = "思考占满了测试用的长度" if _truncated(chat.finish) else "回复是空的"
+        return True, f"{model} 已连通（{took}），这是推理模型，{why}；诊断时会给足长度"
+    return True, f"{model} 已连通（{took}），回复：{text.strip()[:30]}"

@@ -362,6 +362,9 @@
       try { App.pages[prev].onHide(); } catch (e) { console.error(e); }
     }
     App.currentPage = name;
+    // 换到别的页面从顶上开始看：所有页面共用一个滚动区，不复位的话从实例管理页下面点「部署新的实例…」
+    // 进环境部署页会停在页面中间，顶上的卡片（整合包）看不到
+    if (prev !== name && $("#content")) $("#content").scrollTop = 0;
     const navName = (App.navParent[name] && App.navParent[name]()) || name;
     $$(".nav-item").forEach((b) => b.classList.toggle("active", b.dataset.page === navName));
     $$(".page").forEach((p) => p.classList.toggle("active", p.id === "page-" + name));

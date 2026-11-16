@@ -60,6 +60,8 @@ import model_catalog as mc
 import amd_rocm
 import netspeed
 import lora_trainer as lt
+import pack_manager as pm
+import pack_recipe as pr
 import remote_link as rl
 from activity_log import ActivityLog
 
@@ -566,6 +568,9 @@ class LauncherApi:
         self._deploy_cancel = threading.Event()
         self._deploy_proc = None
         self._deploy_running = False
+        self._deploy_pack = None   # 按整合包部署时的配方（pack_manager.start 放进来，部署结束清掉）
+        self._pack_busy = False    # 正在制作整合包
+        self._pack_cancel = False
         # 正在部署什么（界面上显示「正在部署 Forge Neo H3」用）：action / label / target
         self._deploy_info = {}
         # 双击「开始部署」会在前端连发两次请求，检查和置位必须原子，
@@ -1890,7 +1895,10 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
         except Exception as e:
             log(f"[部署] hashlib 补丁验证异常（不影响结果）: {e}\n")
 
-        # ---- 6. 收尾：路径/分支写回配置，通知前端刷新 ----
+        # ---- 6. 整合包：按配方还原版本 / 插件 / pip 包 / 底模（不是按整合包部署时什么都不做）----
+        pm.after_deploy(self, "neo2h3" if variant == "h3" else branch, target, log, make_env())
+
+        # ---- 7. 收尾：路径/分支写回配置，通知前端刷新 ----
         _deploy_register_instance(self, target, branch, log, variant)
         log("\n[部署] 全部完成！\n")
         self._emit("deploy", "done", target=target, branch=branch)
@@ -1907,6 +1915,7 @@ def _deploy_flow(self, target, branch, use_portable, variant=None):
         self._emit("deploy", "error", title="部署失败",
                    text=detail[-1500:] + "\n\n" + PAN_FALLBACK_TEXT)
     finally:
+        pm.finish(self)
         self._deploy_running = False
         self._deploy_proc = None
         self._emit("deploy", "state", running=False)
@@ -3139,6 +3148,9 @@ def _deploy_flow_comfy(self, target, use_portable):
                                               f"origin/{COMFY_REF}"], parent, log, env=env) != 0:
                 self._emit("deploy", "error", title="部署失败", text="检出 ComfyUI 代码失败，请查看部署日志。")
                 return
+        elif getattr(self, "_deploy_pack", None):
+            # 按整合包部署：收尾时本体会切到整合包里的版本，这里先更新到最新版再装一遍最新版的依赖是白做
+            log("[部署] 已有 ComfyUI 源码，按整合包部署：不先更新到最新版，收尾时直接切到整合包里的版本\n")
         else:
             _comfy_update_existing(self, target, git_exe, env, log, dcfg)
         if self._deploy_cancel.is_set():
@@ -3162,6 +3174,10 @@ def _deploy_flow_comfy(self, target, use_portable):
 
         pip_mirror_argsets = []
         torch_tag = _pick_comfy_torch_tag(log)
+        torch_specs = ["torch", "torchvision", "torchaudio"]
+        pack_torch = pm.deploy_torch(self, log)   # 按整合包部署：显卡带得动就直接装整合包里的版本，免得装完再换一遍
+        if pack_torch:
+            torch_tag, torch_specs = pack_torch
         torch_indexes = [f"{mm_official()}/{torch_tag}"]
         try:
             import mirror_manager as mm
@@ -3200,8 +3216,8 @@ def _deploy_flow_comfy(self, target, use_portable):
                 if self._deploy_cancel.is_set():
                     raise _DeployCancelled()
                 log(f"[部署] 安装 torch（{idx}）...\n")
-                rc = self._deploy_run_cmd(py, ["-m", "pip", "install", "torch", "torchvision", "torchaudio",
-                                               "--index-url", idx], target, log, env=env, timeout=5400)
+                rc = self._deploy_run_cmd(py, ["-m", "pip", "install"] + torch_specs +
+                                          ["--index-url", idx], target, log, env=env, timeout=5400)
                 if rc == 0:
                     ok = True
                     break
@@ -3232,6 +3248,8 @@ def _deploy_flow_comfy(self, target, use_portable):
 
         # ---- 6. 常用节点（失败只提醒，不算部署失败）----
         node_ids = dcfg.get("deploy_comfy_nodes")
+        if getattr(self, "_deploy_pack", None):
+            node_ids = []   # 按整合包部署：节点全按配方装（收尾时 pm.after_deploy），不装默认推荐的那一套
         if not isinstance(node_ids, list):
             node_ids = comfy_nodes.default_ids()
         if node_ids:
@@ -3271,6 +3289,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             log("[部署] 冒烟测试没通过（上面有具体报错）。大多数情况下直接启动仍可使用，"
                 "如果启动失败请把日志发给作者\n")
 
+        pm.after_deploy(self, "comfyui", reg_target, log, env)   # 整合包：按配方还原（不是整合包部署时什么都不做）
         _deploy_register_instance(self, reg_target, "comfyui", log)
         log("\n[部署] 全部完成！\n")
         self._emit("deploy", "done", target=reg_target, branch="comfyui")
@@ -3285,6 +3304,7 @@ def _deploy_flow_comfy(self, target, use_portable):
         log(f"\n[部署] 发生未预期的错误:\n{detail}\n")
         self._emit("deploy", "error", title="部署失败", text=detail[-1500:])
     finally:
+        pm.finish(self)
         self._deploy_running = False
         self._deploy_proc = None
         self._emit("deploy", "state", running=False)
@@ -10332,7 +10352,68 @@ def _api_link_transfer_cancel(self):
     return {"ok": True}
 
 
+# ============================================================
+# 整合包（pack_manager.py / pack_recipe.py）：从实例导出配方，按配方部署
+# ============================================================
+
+def _api_pack_sources(self):
+    try:
+        return {"ok": True, "items": pm.sources(self), "out_dir": os.path.join(APP_DIR, "整合包"),
+                "busy": bool(getattr(self, "_pack_busy", False))}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _api_pack_models(self, sid):
+    try:
+        return {"ok": True, "items": pm.list_models(self, sid)}
+    except pr.RecipeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"读取模型列表失败：{e}"}
+
+
+def _api_pack_export(self, sid, opts=None):
+    return pm.export_start(self, sid, opts or {})
+
+
+def _api_pack_cancel(self):
+    self._pack_cancel = True
+    return {"ok": True}
+
+
+def _api_pack_choose_file(self):
+    return self.choose_files(("整合包 (*.txt;*.zip)", "所有文件 (*.*)"), multiple=False)
+
+
+def _api_pack_load(self, path):
+    try:
+        _rec, _z, s = pm.load((path or "").strip().strip('"'))
+        return {"ok": True, "summary": s}
+    except pr.RecipeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"读不了这个文件：{e}"}
+
+
+def _api_pack_deploy(self, path, target, models=None, use_portable=True, gpu_backend=None, amd_gfx=None):
+    try:
+        return pm.start(self, (path or "").strip().strip('"'), (target or "").strip(), models or {},
+                        use_portable, gpu_backend, amd_gfx)
+    except pr.RecipeError as e:
+        return {"ok": False, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": f"部署没能开始：{e}"}
+
+
 for _name, _fn in {
+    "pack_sources": _api_pack_sources,
+    "pack_models": _api_pack_models,
+    "pack_export": _api_pack_export,
+    "pack_cancel": _api_pack_cancel,
+    "pack_choose_file": _api_pack_choose_file,
+    "pack_load": _api_pack_load,
+    "pack_deploy": _api_pack_deploy,
     "link_info": _api_link_info,
     "link_mode": _api_link_mode,
     "link_host_set": _api_link_host_set,
