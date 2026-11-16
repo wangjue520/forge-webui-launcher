@@ -13,6 +13,7 @@
     $("#deploy-start").disabled = v;
     $("#deploy-cancel").disabled = !v;
     $("#deploy-gpu-switch").disabled = v;
+    if ($("#pack-deploy")) $("#pack-deploy").disabled = v;   // 整合包部署也走这条部署线，同一时间只能一个
   }
 
   /* ---------- 显卡类型（N 卡 CUDA / A 卡 ROCm） ---------- */
@@ -284,6 +285,9 @@
   // 整合包（pack.js）用：部署页选的显卡类型、是否正在部署
   App.deployGpu = () => ({ backend: gpuSel(), gfx: gfxSel() });
   App.deployRunning = () => running;
+  // 多实例时侧栏没有「环境部署」（从实例管理页的「部署新的实例…」进来）：侧栏高亮和页头编号跟实例管理，
+  // 不然页头显示「00 // DEPLOY」
+  App.navParent.deploy = () => (App.instances && App.instances.multi ? "instances" : "deploy");
 
   App.pages.deploy = {
     // 一键启动页训练器卡片上的「补齐环境」：切到训练器这一项

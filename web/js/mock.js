@@ -318,7 +318,7 @@
         [[5, "读取本体版本"], [30, "检查插件 / 节点（20/53）comfyui-penna"], [55, "记录 pip 包版本"], [92, "写出整合包"]]
           .forEach(([pct, text], i) => send("step", { pct, text }, 400 * (i + 1)));
         send("done", { ok: true, zip: true, path: "D:\\AI\\WWY启动器\\整合包\\ComfyUI_20261116-2049.zip",
-          packed: ["comfyui-penna", "comfyui-teach-stage", "zml-image", "random_prompt_node.py"],
+          packed: ["comfyui-penna", "comfyui-teach-stage", "zml-image", "random_prompt_node.py"], overlay: ["ComfyUI-Danbooru-Gallery"],
           summary: { kind: "comfyui", label: "ComfyUI", main: { label: "master @ fd7639f47" }, plugins: { git: 24, cnr: 14, zip: 13, missing: 0 },
             pip: { "主环境": 311 }, models: [] } }, 2000);
         return ok({ ok: true });

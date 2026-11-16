@@ -296,6 +296,20 @@ class FlowTest(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(target, "plain.disabled", "__init__.py")))   # 停用照旧
         self.assertTrue(os.path.isfile(os.path.join(target, "single.py")))
 
+        # 再按同一个整合包部署到同一个目录：停用的插件不能变成 xxx.disabled.disabled，也不能多出一份启用的
+        for p in rec["plugins"]:
+            if p["folder"] == "localcommit":
+                p["disabled"] = True
+        report = {}
+        with mock.patch.object(pm, "_wa") as wa:
+            wa.return_value._DeployCancelled = RuntimeError
+            with mock.patch.object(vm, "rank_sources", return_value=[""]):
+                pm._apply_plugins(c, rec["plugins"], zpath, report)   # localcommit：启用 → 停用
+                pm._apply_plugins(c, rec["plugins"], zpath, report)   # 两边都已经是停用的
+        self.assertEqual(report["plugins_failed"], [], logs)
+        names = sorted(os.listdir(target))
+        self.assertEqual(names, ["localcommit.disabled", "pinned", "plain.disabled", "single.py"])
+
 
 class PipBisectTest(unittest.TestCase):
     def test_finds_only_the_broken_ones(self):

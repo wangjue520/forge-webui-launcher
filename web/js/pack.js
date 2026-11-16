@@ -7,6 +7,8 @@
   const esc = (s) => App.esc(s == null ? "" : String(s));
   const SRC_LABEL = { civitai: "C 站", hf: "常用模型目录", liblib: "LiblibAI" };
   const SRC_ORDER = ["hf", "civitai", "liblib"];   // 默认先走 HF / 国内镜像，再 C 站、Liblib
+  const OUT_KEY = "pack-out-dir";   // 记住上次「保存到」的位置
+  const lastOutDir = () => { try { return localStorage.getItem(OUT_KEY) || ""; } catch (e) { return ""; } };
   let log = null;
   let prog = null;
   let busy = false;
@@ -53,7 +55,7 @@
       '<label class="chk-row"><input type="checkbox" id="pk-with-models"><i></i><span>带上底模（主模型 / 文本编码器 / VAE）：记下哈希和下载方式，部署的人可以选从 C 站、常用模型目录或 LiblibAI 下</span></label>' +
       '<div id="pk-models" class="pk-models" hidden></div>' +
       '<label class="pk-label">保存到</label>' +
-      `<div class="row"><input type="text" id="pk-out" value="${esc(r.out_dir || "")}"><button class="btn" id="pk-out-browse">浏览…</button></div>` +
+      `<div class="row"><input type="text" id="pk-out" value="${esc(lastOutDir() || r.out_dir || "")}"><button class="btn" id="pk-out-browse">浏览…</button></div>` +
       "</div>";
     const v = await App.modal("制作整合包", body, [{ id: "go", label: "开始制作", kind: "primary" }, { id: "cancel", label: "取消" }], {
       onOpen(el) {
@@ -101,6 +103,7 @@
     if (v !== "go" || !openExport.args) return;
     const a = openExport.args;
     openExport.args = null;
+    try { if (a.opts.out_dir) localStorage.setItem(OUT_KEY, a.opts.out_dir); } catch (e) { /* 存不了就下次用默认位置 */ }
     try {
       const s = await App.api.pack_export(a.sid, a.opts);
       if (s && s.ok === false) { App.toast(s.error || "没能开始", "error", 6000); return; }
@@ -122,7 +125,10 @@
     lines.push("pip 包：" + Object.entries(s.pip || {}).map(([k, n]) => `${k} ${n} 个`).join("、"));
     if ((s.models || []).length) lines.push(`底模：${s.models.length} 个（只记了下载方式，模型文件本身不在整合包里）`);
     if (e.zip) {
-      lines.push("", `有 ${(e.packed || []).length} 个插件查不到来源，已连文件一起打成 .zip：${(e.packed || []).join("、")}`);
+      const packed = e.packed || [], overlay = e.overlay || [];
+      lines.push("");
+      if (packed.length) lines.push(`有 ${packed.length} 个插件查不到来源，已连文件一起打包：${packed.join("、")}`);
+      if (overlay.length) lines.push(`有 ${overlay.length} 个插件本地改过文件，改过的文件也一起打包了（装好后覆盖上去）：${overlay.join("、")}`);
       lines.push("把这个 .zip 发给别人就行（里面已经有整合包.txt）。");
     } else lines.push("", "所有插件都能从网上装回来，整合包就是这一个 .txt 文件。");
     const v = await App.modal("整合包做好了", esc(lines.join("\n")),
@@ -200,16 +206,27 @@
     const body = '<div class="pk-form">' + `<div class="pk-title">${esc(s.name || "整合包")}</div>` + summaryHtml(s) +
       '<label class="pk-label">安装目录</label>' +
       `<div class="row"><input type="text" id="pk-target" value="${esc(defTarget)}" placeholder="${trainer ? "训练器装在哪个文件夹" : "选一个空文件夹，装好后自动添加为新实例"}"><button class="btn" id="pk-target-browse">浏览…</button></div>` +
+      '<div class="hint" id="pk-target-tip" data-status="bad" hidden>先选安装目录（点「浏览…」，或者直接填路径）</div>' +
       modelChoiceHtml(s.models || []) +
       (trainer ? "" : '<div class="hint">显卡类型和便携环境按本页下面「显卡」「虚拟环境依赖」的选择来。</div>') +
       "</div>";
     let picked = null;
     const v = await App.modal("部署整合包", body, [{ id: "go", label: "开始部署", kind: "primary" }, { id: "cancel", label: "取消" }], {
       onOpen(el) {
+        const target = el.querySelector("#pk-target"), tip = el.querySelector("#pk-target-tip");
         el.querySelector("#pk-target-browse").addEventListener("click", async () => {
-          const d = await App.api.choose_directory("整合包装到哪个文件夹", el.querySelector("#pk-target").value);
-          if (d && d.ok && d.path) el.querySelector("#pk-target").value = d.path;
+          const d = await App.api.choose_directory("整合包装到哪个文件夹", target.value);
+          if (d && d.ok && d.path) { target.value = d.path; tip.hidden = true; }
         });
+        target.addEventListener("input", () => { tip.hidden = true; });
+        // 没选安装目录就点「开始部署」：留在对话框里提示，别关掉（关掉的话文件和底模来源都得重选）
+        const go = Array.from(document.querySelectorAll("#modal-buttons .btn")).find((b) => b.textContent === "开始部署");
+        if (go) go.addEventListener("click", (ev) => {
+          if (target.value.trim()) return;
+          ev.stopImmediatePropagation();
+          tip.hidden = false;
+          target.focus();
+        }, true);
       },
       onClose(el, val) {
         if (val !== "go") return;
@@ -250,8 +267,12 @@
     const pf = r.pip_failed || [];
     out.push(pf.length ? `pip 包：${pf.length} 个没对齐（多半是这台电脑上装不了的包，详情见运行日志）` : "pip 包：全部和整合包一致");
     if (r.models_ok) {
-      const bad = r.models_failed || [];
-      out.push(`底模：下好 ${r.models_ok.length} 个` + (bad.length ? `，没下好 ${bad.length} 个` : ""));
+      const bad = r.models_failed || [], have = r.models_have || [];
+      const parts = [];
+      if (r.models_ok.length) parts.push(`下好 ${r.models_ok.length} 个`);
+      if (have.length) parts.push(`本来就有 ${have.length} 个（跳过）`);
+      if (bad.length) parts.push(`没下好 ${bad.length} 个：` + bad.map((x) => x[0]).join("、"));
+      out.push("底模：" + (parts.join("，") || "没有要下的"));
     }
     return "\n\n整合包还原结果：\n" + out.map((x) => "· " + x).join("\n");
   };

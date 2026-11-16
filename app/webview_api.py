@@ -3148,6 +3148,9 @@ def _deploy_flow_comfy(self, target, use_portable):
                                               f"origin/{COMFY_REF}"], parent, log, env=env) != 0:
                 self._emit("deploy", "error", title="部署失败", text="检出 ComfyUI 代码失败，请查看部署日志。")
                 return
+        elif getattr(self, "_deploy_pack", None):
+            # 按整合包部署：收尾时本体会切到整合包里的版本，这里先更新到最新版再装一遍最新版的依赖是白做
+            log("[部署] 已有 ComfyUI 源码，按整合包部署：不先更新到最新版，收尾时直接切到整合包里的版本\n")
         else:
             _comfy_update_existing(self, target, git_exe, env, log, dcfg)
         if self._deploy_cancel.is_set():

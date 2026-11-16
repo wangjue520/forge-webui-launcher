@@ -289,8 +289,10 @@ def export_flow(api, sid, opts):
         s = pr.summary(rec, path if packs else None)
         log(f"[整合包] 完成：{path}")
         step(100, "完成")
+        # 完成弹窗分开说：查不到来源、连整个文件夹打包的；有 git 地址、只打包了本地改动的
         api._emit(SCOPE, "done", ok=True, path=path, zip=bool(packs), summary=s,
-                  packed=[a.split("/", 1)[-1] for a, _, _ in packs])
+                  packed=[p["folder"] for p in rec["plugins"] if p.get("zip")],
+                  overlay=[p["folder"] for p in rec["plugins"] if p.get("overlay") and not p.get("zip")])
     except PackCancelled:
         log("[整合包] 已取消")
         api._emit(SCOPE, "done", ok=False, cancelled=True)
@@ -886,19 +888,21 @@ def _apply_plugins(c, plugins, zpath, report):
         folder = p["folder"]
         dest = os.path.join(c.plugins_dir, folder)
         c.log(f"\n[整合包] ({i + 1}/{len(plugins)}) {folder}")
-        err = ""
-        existing = have.get(folder.lower())
+        err, same = "", False
+        existing = have.get(folder.lower())   # 目录里已经有它（可能是停用的 xxx.disabled）
         try:
             if p.get("zip"):
                 if not zpath or not pr.zip_members(zpath, p["zip"]) and not _zip_has_file(zpath, p["zip"]):
                     err = "整合包压缩包里没有它的文件（只拿到了 .txt？）"
                 else:
-                    if existing and not os.path.isfile(dest):
-                        c.log("[整合包] 已经有同名文件夹，按整合包里的文件覆盖")
+                    if existing:   # 写进已有的那个文件夹（停用的就写进 xxx.disabled），不另建一份
+                        dest = existing["path"]
+                        c.log("[整合包] 已经有这个插件，按整合包里的文件覆盖")
                     n = pr.extract_prefix(zpath, p["zip"], dest)
                     c.log(f"[整合包] 从压缩包还原 {n} 个文件")
             elif p.get("cnr"):
                 if existing and pr.read_cnr(existing["path"]) == (p["cnr"], p["version"]):
+                    dest, same = existing["path"], True
                     c.log("[整合包] 已经装好同一个版本，跳过")
                 else:
                     if existing:
@@ -906,9 +910,10 @@ def _apply_plugins(c, plugins, zpath, report):
                     c.log(f"[整合包] 从 ComfyUI 官方节点库下载 {p['cnr']} {p['version']}")
                     err = _install_cnr(c, p, dest)
             elif p.get("git"):
-                if existing and existing["is_git"] and vm.repo_slug(existing["remote"]) == vm.repo_slug(p["git"]):
+                if existing and existing["is_git"] and _same_repo(existing["remote"], p["git"]):
                     dest = existing["path"]
                     if existing["commit"] == p.get("commit"):
+                        same = not p.get("overlay")
                         c.log("[整合包] 已经装好同一个版本，跳过")
                     elif p.get("commit"):
                         err = _pin(c, dest, p)
@@ -927,21 +932,15 @@ def _apply_plugins(c, plugins, zpath, report):
                         report.setdefault("notes", []).append(f"{folder}：原来本地改过的文件不在压缩包里，用的是官方原版")
             else:
                 err = "整合包里没写来源"
-            if not err and comfy and os.path.isdir(dest) and c.py:
+            if not err and not same and comfy and os.path.isdir(dest) and c.py:
                 import comfy_nodes
                 bad = comfy_nodes.install_node_deps(dest, c.comfy_dir, c.py,
                                                     lambda prog, a, cwd, e, t: c.run(prog, a, cwd, e, t),
                                                     c.log, c.env, c.cancelled, c.sources, c.mirrors)
                 if bad:
                     report.setdefault("notes", []).append(f"{folder}：依赖没装全（{'、'.join(bad)}），pip 对齐时会再试")
-            if not err and p.get("disabled"):
-                if comfy:
-                    dd = dest + ".disabled"
-                    if os.path.exists(dest) and not os.path.exists(dd):
-                        os.rename(dest, dd)
-                else:
-                    wa._webui_set_ext_disabled(c.root, folder, True)
-                c.log("[整合包] 原来是停用状态，照样停用")
+            if not err:
+                _set_enabled(c, folder, dest, not p.get("disabled"))
         except _wa()._DeployCancelled:
             raise
         except Exception as e:
@@ -959,6 +958,37 @@ def _apply_plugins(c, plugins, zpath, report):
             comfy_nodes.fix_rgthree_compat(c.comfy_dir, lambda m: c.log(m.replace("[启动器]", "[整合包]")))
         except Exception:
             pass
+
+
+def _same_repo(a, b):
+    """两个仓库地址是不是同一个（Windows 路径的反斜杠 / 正斜杠、.git 后缀、大小写都不算区别）"""
+    slug = lambda u: vm.repo_slug((u or "").replace("\\", "/"))
+    return bool(slug(a)) and slug(a) == slug(b)
+
+
+def _set_enabled(c, folder, path, enabled):
+    """
+    插件的启用 / 停用和整合包一致。
+    ComfyUI 靠文件夹名：停用 = xxx.disabled（也可能在 .disabled/ 子文件夹里），启用 = xxx；
+    WebUI 靠 config.json 的 disabled_extensions。
+    """
+    if c.kind != "comfyui":
+        if not enabled:
+            _wa()._webui_set_ext_disabled(c.root, folder, True)
+            c.log("[整合包] 原来是停用状态，照样停用")
+        return
+    if not os.path.exists(path):
+        return
+    want = os.path.join(c.plugins_dir, folder + ("" if enabled else ".disabled"))
+    if os.path.normcase(os.path.abspath(path)) == os.path.normcase(os.path.abspath(want)):
+        if not enabled:
+            c.log("[整合包] 原来是停用状态，照样停用")
+        return
+    if os.path.exists(want):   # 启用和停用的两份都在：不动，免得覆盖掉一份
+        c.log(f"[整合包] 注意：{os.path.basename(path)} 和 {os.path.basename(want)} 两份都在，请手动删掉不要的那份")
+        return
+    os.rename(path, want)
+    c.log("[整合包] 原来是停用状态，照样停用" if not enabled else "[整合包] 原来是启用状态，已启用")
 
 
 def _zip_has_file(zpath, arc):
@@ -1168,7 +1198,7 @@ def _apply_models(c, models, choice, report):
     if not todo:
         return
     api_key = (c.api.cfg.get("civitai_api_key") or "").strip() or None
-    ok, failed = [], []
+    ok, have, failed = [], [], []
     c.log(f"\n[整合包] 下载底模：{len(todo)} 个")
     for i, (md, src) in enumerate(todo):
         c.check()
@@ -1180,7 +1210,7 @@ def _apply_models(c, models, choice, report):
         found, size_ok = mc.existing_file([dest], fname, md.get("size") or None)
         if found and size_ok:
             c.log(f"[整合包] 已经有了，跳过：{found}")
-            ok.append(md["name"])
+            have.append(md["name"])
             continue
         c.log(f"[整合包] ({i + 1}/{len(todo)}) {fname}（{(md.get('size') or 0) / 1024 ** 3:.2f} GB）→ {dest}")
         os.makedirs(dest, exist_ok=True)
@@ -1223,6 +1253,7 @@ def _apply_models(c, models, choice, report):
             failed.append((md["name"], err))
             c.log(f"[整合包] {fname} 没下好：{err}")
     report["models_ok"] = ok
+    report["models_have"] = have
     report["models_failed"] = failed
 
 
@@ -1244,7 +1275,8 @@ def _final_report(c, report):
     bad = report.get("pip_failed") or []
     L(f"[整合包] pip 包：{'全部对齐' if not bad else f'{len(bad)} 个没对齐（多半是这台电脑上装不了的包，一般不影响使用）'}")
     if "models_ok" in report:
-        L(f"[整合包] 底模：下好 {len(report['models_ok'])} 个，没下好 {len(report.get('models_failed') or [])} 个")
+        L(f"[整合包] 底模：下好 {len(report['models_ok'])} 个，本来就有 {len(report.get('models_have') or [])} 个，"
+          f"没下好 {len(report.get('models_failed') or [])} 个")
         for name, why in report.get("models_failed") or []:
             L(f"         · {name}：{why}")
     c.api._emit("deploy", "pack_report", report=_jsonable(report))
