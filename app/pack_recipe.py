@@ -208,7 +208,8 @@ def new_recipe(kind, name=""):
 _HEAD_KEYS = [("format", "格式"), ("kind", "程序"), ("name", "名称"), ("label", "程序名"), ("created", "制作时间"),
               ("launcher", "启动器版本"), ("gpu", "显卡"), ("python", "Python"), ("torch", "torch"),
               ("torch_variant", "训练器 PyTorch")]
-_MAIN_KEYS = [("url", "仓库"), ("branch", "分支"), ("commit", "提交"), ("label", "版本"), ("zip", "压缩包")]
+_MAIN_KEYS = [("url", "仓库"), ("branch", "分支"), ("commit", "提交"), ("label", "版本"), ("zip", "压缩包"),
+              ("note", "说明")]   # 说明 = 本地提交：这个提交没推到远程，部署时装分支最新版
 _HEAD_BY_CN = {cn: k for k, cn in _HEAD_KEYS}
 _MAIN_BY_CN = {cn: k for k, cn in _MAIN_KEYS}
 

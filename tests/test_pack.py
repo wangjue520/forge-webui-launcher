@@ -53,6 +53,8 @@ class RecipeTextTest(unittest.TestCase):
         self.assertEqual(back["head"]["name"], "我的 ComfyUI")
         self.assertEqual(back["head"]["torch"], "2.9.1+cu130")
         self.assertEqual(back["main"]["commit"], "a" * 40)
+        r["main"]["note"] = "本地提交"
+        self.assertEqual(pr.parse(pr.dump(r))["main"]["note"], "本地提交")   # 部署端靠它跳过切到这个提交
         self.assertEqual([p["folder"] for p in back["plugins"]], ["rgthree-comfy", "comfyui-kjnodes", "本地节点", "x.py"])
         self.assertTrue(back["plugins"][1]["disabled"])
         self.assertNotIn("disabled", back["plugins"][0])

@@ -130,7 +130,11 @@
       if (packed.length) lines.push(`有 ${packed.length} 个插件查不到来源，已连文件一起打包：${packed.join("、")}`);
       if (overlay.length) lines.push(`有 ${overlay.length} 个插件本地改过文件，改过的文件也一起打包了（装好后覆盖上去）：${overlay.join("、")}`);
       lines.push("把这个 .zip 发给别人就行（里面已经有整合包.txt）。");
-    } else lines.push("", "所有插件都能从网上装回来，整合包就是这一个 .txt 文件。");
+    } else if (s.kind === "lora_trainer") lines.push("", "训练器和训练引擎都能从网上装回来，整合包就是这一个 .txt 文件。");
+    else lines.push("", "所有插件都能从网上装回来，整合包就是这一个 .txt 文件。");
+    if (s.main && s.main.note === "本地提交") {
+      lines.push("", "注意：本体现在的版本只在这台电脑上（没推到远程仓库），别人部署时拿不到这个版本，会装分支的最新版。");
+    }
     const v = await App.modal("整合包做好了", esc(lines.join("\n")),
       [{ id: "open", label: "打开所在文件夹", kind: "primary" }, { id: "ok", label: "好" }]);
     if (v === "open") App.api.reveal_in_explorer(e.path);
@@ -148,6 +152,9 @@
     rows.push(["pip 包", Object.entries(s.pip || {}).map(([k, n]) => `${k} ${n} 个`).join("、") || "—"]);
     if (s.created) rows.push(["制作时间", s.created]);
     let html = '<div class="pk-sum">' + rows.map(([k, v]) => `<span class="pk-k">${esc(k)}</span><span>${esc(v)}</span>`).join("") + "</div>";
+    if (s.main && s.main.note === "本地提交") {
+      html += `<div class="pk-warn">${esc("本体的这个版本只在做整合包的那台电脑上（没推到远程仓库），这里会装分支的最新版；其余部分照样按整合包对齐。")}</div>`;
+    }
     if ((s.missing || []).length) {
       html += `<div class="pk-warn">${esc((s.zip ? "压缩包里少了这些插件的文件，装不上：" : "这些插件的文件在同名 .zip 里，只有 .txt 时装不上（要部署 .zip 才行）：") + s.missing.join("、"))}</div>`;
     }
@@ -201,11 +208,11 @@
     }
     const s = r.summary;
     const trainer = s.kind === "lora_trainer";
-    let defTarget = "";
-    if (trainer) { try { const t = await App.api.trainer_status(); defTarget = (t && t.root) || ""; } catch (e) { /* 空着 */ } }
+    // 安装目录不预填：预填现在这份训练器的目录的话，直接点「开始部署」就会按整合包改掉正在用的训练器
+    const defTarget = "";
     const body = '<div class="pk-form">' + `<div class="pk-title">${esc(s.name || "整合包")}</div>` + summaryHtml(s) +
       '<label class="pk-label">安装目录</label>' +
-      `<div class="row"><input type="text" id="pk-target" value="${esc(defTarget)}" placeholder="${trainer ? "训练器装在哪个文件夹" : "选一个空文件夹，装好后自动添加为新实例"}"><button class="btn" id="pk-target-browse">浏览…</button></div>` +
+      `<div class="row"><input type="text" id="pk-target" value="${esc(defTarget)}" placeholder="${trainer ? "选一个空文件夹，装一份新的训练器" : "选一个空文件夹，装好后自动添加为新实例"}"><button class="btn" id="pk-target-browse">浏览…</button></div>` +
       '<div class="hint" id="pk-target-tip" data-status="bad" hidden>先选安装目录（点「浏览…」，或者直接填路径）</div>' +
       modelChoiceHtml(s.models || []) +
       (trainer ? "" : '<div class="hint">显卡类型和便携环境按本页下面「显卡」「虚拟环境依赖」的选择来。</div>') +
