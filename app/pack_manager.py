@@ -357,9 +357,10 @@ def _is_empty_dir(path):
 
 
 def _skip_plugin(ctx, folder):
-    """启动器自己会放的东西不进整合包（部署时启动器照样会放）"""
+    """启动器自己会放的东西不进整合包（部署 / 启动时启动器照样会放）：
+    ComfyUI 的 custom_nodes 和 WebUI 的 extensions 里都有同名的桥接插件"""
     import comfy_bridge
-    return ctx["kind"] == "comfyui" and folder.lower() == comfy_bridge.NAME.lower()
+    return ctx["kind"] != "lora_trainer" and folder.lower() == comfy_bridge.NAME.lower()
 
 
 def _export_plugins(api, ctx, git, env, log, check_remote, cancelled, step):
