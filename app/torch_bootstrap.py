@@ -173,6 +173,25 @@ def _pip_install_local(python_exe, wheel_paths, cfg, log):
     return True
 
 
+def index_bases(cfg, tag):
+    """torch 预下载依次试的索引地址（带 cuda tag）。
+    有新鲜的部署前测速结果时按 PyTorch 那一组的实测速度排（mirror_manager.torch_bases）。
+    以前这里看的是 resolve_mode（PyPI 那一组的测速 / 地区）：PyPI 国内镜像最快时，
+    会先去试实测只有几百 KB/s 的 torch 镜像，3GB 的 torch 要下好几个小时。
+    选中的源不通 / 找不到 wheel 时照样换下一个，所以官方源和镜像都留在候选里。"""
+    try:
+        import mirror_manager as mm
+        order = mm.torch_bases(cfg) + [mm.PYTORCH_OFFICIAL_WHL] + list(mm.PYTORCH_MIRROR_BASES)
+    except Exception:
+        return [f"https://download.pytorch.org/whl/{tag}"]
+    out = []
+    for b in order:
+        u = f"{b.rstrip('/')}/{tag}"
+        if u not in out:
+            out.append(u)
+    return out
+
+
 def ensure_torch(root_dir, cfg, log, progress=None, cancel_event=None):
     """
     部署主流程调用：在 webui.bat 之前把 torch 装好。返回 True=已就绪
@@ -241,16 +260,7 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
         _log(log, "无法确定目标 Python 版本，跳过预下载")
         return False
 
-    try:
-        import mirror_manager as mm
-        use_mirror = mm.resolve_mode(cfg)
-    except Exception:
-        use_mirror = False
-    official = f"https://download.pytorch.org/whl/{tag}"
-    if use_mirror:
-        bases = [f"{b}/{tag}" for b in mm.PYTORCH_MIRROR_BASES] + [official]
-    else:
-        bases = [official] + [f"{b}/{tag}" for b in mm.PYTORCH_MIRROR_BASES]
+    bases = index_bases(cfg, tag)
 
     # wheel 缓存放在启动器目录，所有实例共用（第二个实例不用再下 2GB 的 torch）
     cache_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
