@@ -402,7 +402,15 @@ def instance_model_dirs(cfg, comfy_layout):
         return out
     if cfg.get("webui_branch") == "comfyui":
         base = comfy_layout(root)[0] or root
+        # ComfyUI 桌面版实例：模型默认放共享模型目录（ComfyUI-Shared\models），不放实例自己的 models
+        import comfy_desktop
+        desk = comfy_desktop.model_dirs(root)[0]
         for k, _l, _i, _f, crel, _a in LIBRARY_CATEGORIES:
+            if desk:
+                d = comfy_desktop.category_dir(desk, crel)
+                if os.path.isdir(d):
+                    out[k] = d
+                    continue
             d = os.path.join(base, crel.replace("/", os.sep))
             if os.path.isdir(d):
                 out[k] = d

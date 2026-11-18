@@ -51,6 +51,7 @@ import model_library as ml
 import output_index as oi
 import comfy_nodes
 import comfy_bridge
+import comfy_desktop
 import send_bridge as sb
 import diagnose as dg
 import diagnose_llm as dl
@@ -1255,6 +1256,7 @@ class LauncherApi:
         """启动前把共享模型库挂到实例上（见 _library_launch_extras），顺带修已知的节点兼容问题"""
         _library_launch_extras(self, iid, cfg, log)
         if cm.is_comfy(cfg):
+            _desktop_launch_extras(cfg, log)
             comfy_dir = cm.comfy_layout((cfg.get("webui_root") or "").strip())[0]
             if comfy_dir:
                 comfy_nodes.fix_rgthree_compat(comfy_dir, log)
@@ -5001,7 +5003,8 @@ def _api_models_categories(self):
             if k in dirs:
                 cats.append({"label": label, "path": dirs[k], "is_lora": is_lora, "key": k})
         base = cm.comfy_layout(root)[0]
-        models_dir = os.path.join(base, "models") if base else ""
+        # ComfyUI 桌面版实例：「其他」分类也从共享模型目录里找
+        models_dir = comfy_desktop.model_dirs(root)[0] or (os.path.join(base, "models") if base else "")
         if models_dir and os.path.isdir(models_dir):
             for name in sorted(os.listdir(models_dir)):
                 sub = os.path.join(models_dir, name)
@@ -5567,6 +5570,11 @@ def _models_root(cfg):
     """
     root = (cfg.get("webui_root") or "").strip()
     if root and cm.is_comfy(cfg):
+        # ComfyUI 桌面版实例：模型放它的共享模型目录（默认 ComfyUI-Shared\models），
+        # 放进实例自己的 models 的话，桌面版和它的其他实例都用不上
+        desk = comfy_desktop.model_dirs(root)[0]
+        if desk and os.path.basename(os.path.normpath(desk)).lower() == "models":
+            return os.path.dirname(os.path.normpath(desk))
         return cm.comfy_layout(root)[0] or root
     return root
 
@@ -5583,8 +5591,35 @@ def _download_dest(self, folder):
         if key:
             d = ml.library_dir(lib, key)
             return d, f"共享模型库/{os.path.basename(d)}"
+    if cm.is_comfy(self.cfg) and folder.lower().startswith("models/"):
+        desk = comfy_desktop.model_dirs((self.cfg.get("webui_root") or "").strip())[0]
+        if desk:
+            return comfy_desktop.category_dir(desk, folder), "桌面版共享模型/" + folder[len("models/"):]
     root = _models_root(self.cfg)
     return (os.path.join(root, *folder.split("/")) if root else folder), folder
+
+
+DESKTOP_YAML_DIR = os.path.join(APP_DIR, "launcher_data", "comfy_desktop_paths")
+
+
+def _desktop_launch_extras(cfg, log):
+    """
+    ComfyUI 桌面版的实例用启动器启动时，照桌面版的设置把共享模型目录（ComfyUI-Shared\\models 等）
+    挂上：桌面版自己启动时会传这份 extra_model_paths，启动器不传的话共享目录里的模型全都看不到。
+    """
+    root = (cfg.get("webui_root") or "").strip()
+    primary, dirs = comfy_desktop.model_dirs(root)
+    if not dirs:
+        return
+    import hashlib
+    install, _rec = comfy_desktop.find_install(root)
+    os.makedirs(DESKTOP_YAML_DIR, exist_ok=True)
+    name = hashlib.md5(os.path.normcase(install or root).encode("utf-8")).hexdigest()[:12] + ".yaml"
+    path = os.path.join(DESKTOP_YAML_DIR, name)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(comfy_desktop.yaml_text(dirs, primary))
+    cfg["_desktop_model_paths"] = path
+    log(f"[启动器] ComfyUI 桌面版实例：已挂上桌面版的共享模型目录 {'、'.join(dirs)}\n")
 
 
 def _library_launch_extras(self, iid, cfg, log):
