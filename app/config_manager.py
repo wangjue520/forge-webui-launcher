@@ -1299,6 +1299,9 @@ def comfy_layout(root):
         os.path.join(root, ".venv", "Scripts", "python.exe"),
         os.path.join(parent, "venv", "Scripts", "python.exe"),
         os.path.join(parent, ".venv", "Scripts", "python.exe"),
+        # ComfyUI 桌面版（新版 Comfy Desktop）的实例：ComfyUI-Installs\<名字>\{ComfyUI, standalone-env\python.exe}
+        os.path.join(parent, "standalone-env", "python.exe"),
+        os.path.join(root, "standalone-env", "python.exe"),
     ]
     for p in pys:
         if os.path.isfile(p):
@@ -1436,6 +1439,10 @@ def build_comfy_args(cfg):
     extra_paths = cfg.get("_extra_model_paths")
     if extra_paths:
         args += ["--extra-model-paths-config", extra_paths]
+    # ComfyUI 桌面版实例的共享模型目录（ComfyUI 的这个参数可以给多次）
+    desktop_paths = cfg.get("_desktop_model_paths")
+    if desktop_paths:
+        args += ["--extra-model-paths-config", desktop_paths]
     extra = (cfg.get("extra_args") or "").strip()
     if extra:
         import shlex

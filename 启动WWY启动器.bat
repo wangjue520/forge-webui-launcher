@@ -92,11 +92,24 @@ if exist "%~dp0python\python.exe" if exist "%~dp0.venv\pyvenv.cfg" (
     "%~dp0python\python.exe" -I "%~dp0app\venv_relocate.py" "%~dp0." 2>nul
 )
 
+rem ---------- 0.1 不用 .venv：自带的便携 Python 已经装好依赖（整合包这样发），直接用它 ----------
+rem 开了 Windows「智能应用控制」等应用控制策略的电脑会拦 .venv\Scripts\python.exe
+rem （它是 Python 自带的 venv 启动器的拷贝，没有数字签名），报 WinError 4551；便携 Python 本体照样能运行。
+if not exist %VPY% if exist "%~dp0python\python.exe" (
+    "%~dp0python\python.exe" -c "import webview, requests" >nul 2>nul
+    if not errorlevel 1 goto :use_portable
+)
+
 rem ---------- 0. 快速通道：.venv 已经能用 ----------
 if exist %VPY% (
     rem 基础 Python 被卸载/移动后，venv 里的 python.exe 会失效，这里顺便检查
     %VPY% -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>nul
     if errorlevel 1 (
+        rem .venv 跑不起来（被应用控制策略拦截、或基础 Python 没了）：便携 Python 已经有依赖就直接用它
+        if exist "%~dp0python\python.exe" (
+            "%~dp0python\python.exe" -c "import webview, requests" >nul 2>nul
+            if not errorlevel 1 goto :use_portable
+        )
         echo.
         echo   [!] 现有的 .venv 虚拟环境已失效，将自动重建 ...
         rmdir /s /q "%VENV%" >nul 2>nul
@@ -351,6 +364,7 @@ if not errorlevel 1 goto :check_clr
 rem 装完却导不进：环境很可能装坏了（杀软动了文件/磁盘写入被拦）。
 rem 以前到这一步只能让用户手动删 .venv 再双击——这就是"第一次失败、
 rem 第二次就好"的一个来源；现在自动删掉重建一次（只一次，防死循环）
+if defined NOVENV goto :deps_import_fail
 if defined REBUILT goto :deps_import_fail
 set "REBUILT=1"
 echo.
@@ -383,12 +397,37 @@ echo.
 goto :end_fail
 
 :venv_fail
+rem 建不出 .venv（常见：Windows「智能应用控制」等策略拦了 venv 启动器，WinError 4551）：
+rem 便携 Python 本体还能运行的话，把依赖直接装进它，不用 .venv
+if not defined NOVENV if exist "%~dp0python\python.exe" (
+    "%~dp0python\python.exe" -c "import sys" >nul 2>nul
+    if not errorlevel 1 (
+        echo.
+        echo   [!] 虚拟环境建不出来（可能被 Windows「智能应用控制」等安全策略拦截），
+        echo       改为把依赖直接装进启动器自带的便携 Python ...
+        rmdir /s /q "%VENV%" >nul 2>nul
+        goto :use_portable_install
+    )
+)
 echo.
 echo   [x] 创建虚拟环境失败。
 echo       当前使用的 Python：%PY%
 echo       可以删除启动器目录下的 .venv 文件夹后重试；
 echo       也可以删掉 python 文件夹（如果有），让启动器改用便携版 Python。
 goto :end_fail
+
+rem ===================================================================
+rem  不用 .venv，直接用自带的便携 Python（依赖已装好 / 现在装进去）
+rem ===================================================================
+:use_portable
+set VPY="%~dp0python\python.exe"
+set "NOVENV=1"
+goto :check_clr
+
+:use_portable_install
+set VPY="%~dp0python\python.exe"
+set "NOVENV=1"
+goto :pip_ready
 
 rem ===================================================================
 rem  :try_install "索引参数" "显示名"
@@ -564,7 +603,7 @@ if %NETREL% GEQ 528040 (
 )
 exit /b 0
 
-rem ---------- 7. 启动（永远用 .venv 里的 Python） ----------
+rem ---------- 7. 启动（用 .venv 里的 Python；整合包 / .venv 被拦时用自带的便携 Python） ----------
 :launch
 rem WebView2 预检：精简版/LTSC 系统可能没装运行时，缺了启动必白屏崩溃，
 rem 提前给出明确指引，比事后从 pywebview 的报错里猜友好得多。
@@ -582,9 +621,12 @@ if errorlevel 1 (
 rem 平时用 pythonw.exe（没有控制台）在后台拉起界面，bat 随即退出，黑框跟着关掉；
 rem 输出写进 launcher_data\launcher.log，启动失败会弹系统对话框说明。
 rem debug 模式或 venv 里没有 pythonw.exe 时，照旧在本控制台里运行。
-if not defined WWY_DEBUG if exist "%~dp0.venv\Scripts\pythonw.exe" (
-    start "" /d "%~dp0" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0app\webview_main.py"
-    exit /b 0
+set "PYW=%~dp0.venv\Scripts\pythonw.exe"
+if defined NOVENV set "PYW=%~dp0python\pythonw.exe"
+if not defined WWY_DEBUG if exist "%PYW%" (
+    start "" /d "%~dp0" "%PYW%" "%~dp0app\webview_main.py"
+    rem pythonw.exe 也被拦（start 拉不起来）时，退回在本控制台里运行
+    if not errorlevel 1 exit /b 0
 )
 %VPY% app\webview_main.py
 if errorlevel 1 (
