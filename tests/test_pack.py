@@ -347,5 +347,15 @@ class StartGuardTest(unittest.TestCase):
         api._emit.assert_not_called()
 
 
+class SkipBridgeTest(unittest.TestCase):
+    def test_bridge_skipped_for_webui_and_comfy(self):
+        # 启动器自己放的桥接插件：ComfyUI 和 WebUI 都不进整合包（WebUI 以前没跳过，整合包被迫变成 .zip）
+        for kind in ("comfyui", "neo2", "classic", "neo2h3"):
+            self.assertTrue(pm._skip_plugin({"kind": kind}, "wwy_launcher_bridge"), kind)
+            self.assertTrue(pm._skip_plugin({"kind": kind}, "WWY_Launcher_Bridge"), kind)
+            self.assertFalse(pm._skip_plugin({"kind": kind}, "ADetailer-Neo"), kind)
+        self.assertFalse(pm._skip_plugin({"kind": "lora_trainer"}, "wwy_launcher_bridge"))
+
+
 if __name__ == "__main__":
     unittest.main()
