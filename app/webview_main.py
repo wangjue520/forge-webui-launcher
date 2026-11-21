@@ -254,6 +254,11 @@ def main():
     _unblock_dotnet_dlls()
     api = LauncherApi()
     cm.write_theme_file(api.cfg)   # 开屏动画在后端应答前就要读风格文件
+    try:   # 匿名使用计数（只下载 Release 里的小文件，见 usage_ping）
+        import usage_ping
+        usage_ping.start_background(api.cfg)
+    except Exception:
+        pass
     window = webview.create_window(
         "WWY 启动器",
         os.path.join(APP_DIR, "web", "index.html"),
