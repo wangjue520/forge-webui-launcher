@@ -299,6 +299,8 @@ Forge 有两套互不兼容的参数体系（Neo 新参数 `--normalvram` 等，
 
 **下载安全**：凡经加速代理下载的二进制（Python/Git/源码）一律**强制来源校验**——哈希基准取自官方 release 校验清单并与 GitHub API 交叉核对，解压/执行前强制比对 sha256，Git 安装包额外验微软 Authenticode 签名。校验不过自动换地址重下，全部不符宁可中止也不执行来源不可证的东西。
 
+**匿名使用计数**：为了知道大概有多少人在用，启动器会从本仓库的 `usage-ping` Release 下载几字节的小文件——每台电脑第一次打开下一次 `user.txt`，每升到一个新版本下一次 `update.txt`，靠 GitHub 的下载次数计数。除此之外什么都不发（没有编号、路径、配置）。不想参与：在 `launcher_config.json` 里加 `"usage_ping": false`。
+
 ---
 
 ## 常见问题 FAQ

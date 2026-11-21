@@ -40,3 +40,4 @@ web/js/current_theme.js
 
 # 自动生成的快捷方式（含本机绝对路径，由 create_shortcuts.ps1 按需生成）
 *.lnk
+tools/usage_stats.csv
