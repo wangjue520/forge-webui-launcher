@@ -163,10 +163,36 @@ def scan_root(budget=6.0):
     return max(roots, key=lambda r: (detect(r)["ready"], _last_used(r)))
 
 
-def recommend_torch(gpu_names):
-    """GTX 9xx / 10xx、TITAN X/V 等老卡新版 CUDA 已经不支持，只能用 cu126；其余用训练器默认的 cu128。"""
-    legacy = re.compile(r"GTX?\s*(9\d\d|10\d\d)\b|TITAN\s+X|TITAN\s+V\b|Tesla\s+[PM]\d+", re.IGNORECASE)
-    return "cu126" if any(legacy.search(n or "") for n in gpu_names or []) else "cu128"
+def recommend_torch(gpus):
+    """
+    20 系之前的老架构卡（GTX 750 Ti / 9xx / 10xx、MX 系列、Quadro M / P、TITAN X / V、Tesla M / P / V100）
+    新版 CUDA 的 torch 已经不支持，只能用 cu126；其余用训练器默认的 cu128（50 系也是它）。
+    gpus：cuda_compat.gpu_info() 的 [{"name", "sm"}]，或者只有型号名的列表（按型号估架构）。
+    """
+    import cuda_compat as cc
+    sms = []
+    for g in gpus or []:
+        if isinstance(g, dict):
+            sms.append(g.get("sm") or cc.sm_from_name(g.get("name")))
+        else:
+            sms.append(cc.sm_from_name(g))
+    return cc.LEGACY_TAG if cc.sms_legacy(sms) else "cu128"
+
+
+def torch_warning():
+    """训练器的 torch（cu126 / cu128）这台电脑带不动时的一句提示；没问题返回 ""。"""
+    try:
+        import cuda_compat as cc
+        gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
+        if cc.is_unsupported_gpu():
+            return cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " ")
+        driver = cc.driver_cuda_version()
+        if driver and driver[0] < 12:
+            return (f"显卡驱动太旧：最高只支持 CUDA {cc.fmt_cuda(driver)}，训练器的 PyTorch 需要 CUDA 12"
+                    f"（{cc.driver_min_for(12)} 以上的驱动）。请先升级显卡驱动，否则装好了也用不了显卡")
+    except Exception:
+        pass
+    return ""
 
 
 def clean_env(extra=None):

@@ -560,6 +560,10 @@ def present(m):
         "prompt": m.positive_prompt or "",
         "negative": m.negative_prompt or "",
         "text_boxes": _collect_text_boxes(m),
+        # 「汇总」视图：每个采样阶段各自拼好的一条正向 / 负向
+        "text_stages": [dict(s) for s in (getattr(m, "text_stages", None) or []) if isinstance(s, dict)],
+        # 图里带着 ComfyUI 节点图：可以交给 AI 分析（见 meta_ai.py）
+        "can_ai": bool(m.raw_prompt_json or m.raw_workflow_json),
         "rows": _build_rows(m) if has_meta else [],
         "loras": _collect_loras(m),
         "characters": list(m.character_prompts or []),

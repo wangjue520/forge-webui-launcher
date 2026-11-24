@@ -495,6 +495,16 @@
         loras: [], characters: [], civitai: [], raw_text: "", refs_count: 0,
         timing: { parse: 0.4, mode: "前端直读" } }),
       meta_deep: () => ok({ ok: true, has_meta: false }),
+      meta_ai_analyze: () => ok({ ok: true, model: "（预览）", result: {
+        by: "预览环境假数据", summary: "（预览环境假数据）SDXL 文生图，一次采样后做 1.5 倍高清修复。",
+        positive: "masterpiece, best quality, 1girl, silver hair", negative: "lowres, bad anatomy",
+        positive_parts: [
+          { text: "masterpiece, best quality", node: "质量词 #11", stage: "主采样", note: "" },
+          { text: "1girl, silver hair", node: "角色 #12", stage: "主采样", note: "" }],
+        negative_parts: [{ text: "lowres, bad anatomy", node: "CLIPTextEncode #7", stage: "主采样", note: "" }],
+        loras: [{ name: "demoStyle.safetensors", weight: 0.8, clip_weight: null, enabled: true, node: "LoraLoader #20" }],
+        model: "demo_sdxl.safetensors", params: [["采样器", "euler"], ["步数", "28"]],
+        notes: ["这是预览环境的假数据，没有真的请求 AI"] } }),
       // 缺失模型：照群友反馈视频里的情形——一个能下（Civitai 文件名和图里不同），一个要登录（403）
       meta_scan_missing: () => {
         setTimeout(() => window.App.onEvent({ scope: "meta", type: "missing_row", idx: 1, state: "found",

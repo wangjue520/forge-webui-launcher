@@ -66,6 +66,10 @@ class ImageMetadata:
     # 文本框 (分段拼接 / 二次采样 / Detailer / 没接上的备用框) 时全部列在这里。
     # 只读展示用, 写回不看它。仅 ComfyUI 读路径填充, 其他来源为空
     text_boxes: List[Dict[str, Any]] = field(default_factory=list)
+    # 按采样阶段汇总好的提示词 (「汇总」视图用): [{"stage": "主采样", "main": bool,
+    # "positive": str, "negative": str}]。主采样那一项就是 positive_prompt / negative_prompt,
+    # 其余阶段 (二次采样 / Detailer) 是各自拼出来的那一条。仅 ComfyUI 读路径填充
+    text_stages: List[Dict[str, Any]] = field(default_factory=list)
 
 @dataclass
 class LoraTagFrequency:

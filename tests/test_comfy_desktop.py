@@ -129,6 +129,73 @@ class DesktopTest(unittest.TestCase):
         i = [k for k, a in enumerate(args) if a == "--extra-model-paths-config"]
         self.assertEqual([args[k + 1] for k in i], ["lib.yaml", "desk.yaml"])
 
+    def test_yaml_mounts_what_desktop_mounts(self):
+        # 桌面版自己挂的不止 25 个固定分类：unet / clip / t2i_adapter，还有共享目录里自定义节点的文件夹
+        for sub in ("unet", "ipadapter", "my models", "custom_nodes"):
+            os.makedirs(os.path.join(self.shared, sub))
+        self.write({"modelsDirs": [self.shared]}, [self.rec()])
+        primary, dirs = cdk.model_dirs(self.install)
+        self.assertEqual(cdk.extra_folders(dirs), ["ipadapter", "my models"])   # custom_nodes 不是模型文件夹
+        text = cdk.yaml_text(dirs, primary)
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("没有 PyYAML")
+        sec = yaml.safe_load(text)["wwy_comfy_desktop_0"]
+        self.assertEqual(sec["unet"], "unet/")
+        self.assertEqual(sec["clip"], "clip/")
+        self.assertEqual(sec["controlnet"].split("\n"), ["controlnet/", "t2i_adapter/"])
+        self.assertEqual(sec["ipadapter"], "ipadapter/")
+        self.assertEqual(sec["my models"], "my models/")
+        self.assertEqual(sec["loras"], "loras/")
+        self.assertNotIn("custom_nodes", sec)
+
+    def test_reads_both_shared_and_own(self):
+        # 桌面版两边都读：模型塞在 installs 里还是 shared 里，模型管理都要看得到
+        own = os.path.join(self.install, "ComfyUI", "models")
+        _touch(os.path.join(own, "loras", "in_installs.safetensors"))
+        _touch(os.path.join(self.shared, "loras", "in_shared.safetensors"))
+        _touch(os.path.join(self.shared, "unet", "old_unet.safetensors"))
+        _touch(os.path.join(own, "ultralytics", "face.pt"))
+        _touch(os.path.join(self.shared, "ipadapter", "ip.safetensors"))
+        self.write({"modelsDirs": [self.shared]}, [self.rec()])
+        n = os.path.normcase
+        self.assertEqual([(n(d), s) for d, s in cdk.search_roots(self.install)],
+                         [(n(own), "own"), (n(self.shared), "shared")])
+        extra = {(k, n(d), s) for k, d, s in ml.instance_extra_model_dirs(self.cfg(), cm.comfy_layout)}
+        self.assertIn(("loras", n(os.path.join(own, "loras")), "own"), extra)
+        self.assertIn(("checkpoints", n(os.path.join(own, "checkpoints")), "own"), extra)
+        self.assertIn(("diffusion_models", n(os.path.join(self.shared, "unet")), "shared"), extra)
+        # 主目录（下载位置）不重复出现
+        main = {n(d) for d in ml.instance_model_dirs(self.cfg(), cm.comfy_layout).values()}
+        self.assertFalse(main & {d for _k, d, _s in extra})
+
+        import webview_api as wa
+
+        class Api:
+            cfg = dict(self.cfg(), model_library_enabled=False)
+        cats = {c["label"]: n(c["path"]) for c in wa._api_models_categories(Api())["categories"]}
+        self.assertEqual(cats["LoRA（共享目录）"], n(os.path.join(self.shared, "loras")))
+        self.assertEqual(cats["LoRA（实例自带）"], n(os.path.join(own, "loras")))
+        self.assertEqual(cats["扩散模型 (UNet / DiT)（共享目录 / unet）"], n(os.path.join(self.shared, "unet")))
+        self.assertEqual(cats["其他: ultralytics（实例自带）"], n(os.path.join(own, "ultralytics")))
+        self.assertEqual(cats["其他: ipadapter（共享目录）"], n(os.path.join(self.shared, "ipadapter")))
+        # 「已经下过」两边都算
+        _dest, _disp, look = wa._catalog_dirs(Api(), "LoRA", "models/loras")
+        self.assertIn(n(os.path.join(own, "loras")), [n(d) for d in look])
+        self.assertIn(n(os.path.join(self.shared, "loras")), [n(d) for d in look])
+
+    def test_shared_off_or_not_desktop_unchanged(self):
+        self.write({"modelsDirs": [self.shared]}, [self.rec(useSharedModels=False)])
+        self.assertEqual(ml.instance_extra_model_dirs(self.cfg(), cm.comfy_layout), [])
+        self.assertEqual(len(cdk.search_roots(self.install)), 1)
+        portable = os.path.join(self.tmp, "portable")
+        _touch(os.path.join(portable, "ComfyUI", "main.py"))
+        os.makedirs(os.path.join(portable, "ComfyUI", "comfy"))
+        os.makedirs(os.path.join(portable, "ComfyUI", "models", "loras"))
+        self.assertEqual(cdk.search_roots(portable), [])
+        self.assertEqual(ml.instance_extra_model_dirs(self.cfg(portable), cm.comfy_layout), [])
+
     def test_not_desktop(self):
         portable = os.path.join(self.tmp, "ComfyUI_windows_portable")
         _touch(os.path.join(portable, "ComfyUI", "main.py"))

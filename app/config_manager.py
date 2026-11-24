@@ -1115,6 +1115,15 @@ def build_launch_env_overrides(cfg, root_dir, notes=None):
     try:
         compat, reinstall = torch_compat_overrides(cfg, root_dir, notes)
         overrides.update(compat)
+        if compat and notes is not None:
+            # Neo 按已装 torch 的版本和 CUDA 版本去拼这些加速库的下载地址，换装后那个组合不一定有包
+            # （比如 SageAttention 没有 cu126 的包），装不上只是没有加速，不影响出图
+            accel = [n for f, n in (("--sage", "SageAttention"), ("--flash", "FlashAttention"),
+                                    ("--xformers", "xformers"))
+                     if f in overrides.get("COMMANDLINE_ARGS", "").split()]
+            if accel:
+                notes.append(f"[启动器] 提示：换装兼容版 torch 后，{' / '.join(accel)} 可能没有对应版本的安装包，"
+                             "日志里出现 Failed to install 属于这种情况——不影响出图，只是没有这项加速")
         if reinstall:
             extra = " --reinstall-torch"
             if "--xformers" in overrides.get("COMMANDLINE_ARGS", ""):
@@ -1139,8 +1148,35 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
     if not specs:
         return {}, False
     driver = cc.driver_cuda_version()
+    py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
+    ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root_dir, py))
+    installed = f"{ver}+{itag}" if ver and itag else ""
+    gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
+    note = notes.append if notes is not None else (lambda _m: None)
     new_tag = cc.effective_tag(tag, driver)
     if new_tag == tag:
+        # WebUI 默认的 torch 驱动带得动、也不用给老卡降级。还要管三件事：
+        #   · 显卡根本不支持 / 50 系遇上写死老 torch 的 WebUI（Forge Classic）：换不了，说清楚
+        #   · 环境里已装的 torch 和显卡对不上（50 系的环境里是 cu126 这类）：换回默认版本
+        #   · 以前因为驱动太旧换装过、现在驱动够新了：换回默认版本
+        wanted_bad = cc.gpu_tag_mismatch(tag)
+        if wanted_bad == "unsupported":
+            note("[启动器] " + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " "))
+            return {}, False
+        if wanted_bad == "blackwell":
+            note(f"[启动器] 显卡（{gpu}）是 RTX 50 系，需要 {cc.BLACKWELL_MIN_TAG} 及以上的 torch；这个 WebUI 固定用 "
+                 f"{tag} 的老 torch，不支持 50 系，出图会报 no kernel image。请到「环境部署」页部署 Forge Neo 或 ComfyUI")
+            return {}, False
+        if not installed:
+            return {}, False
+        if cc.gpu_tag_mismatch(itag):
+            note(f"[启动器] 环境里已装的 torch {installed} 不支持这张显卡（{gpu}），"
+                 "这次启动会自动换装 WebUI 默认的版本（几个 GB，需要一点时间）")
+            return {}, True
+        if cc.fallback_restorable(root_dir, installed, tag, driver):
+            note(f"[启动器] 显卡驱动已经带得动 WebUI 默认的 torch（{tag}）了，这次启动把之前换装的 "
+                 f"{installed} 换回默认版本（几个 GB，需要一点时间）")
+            return {}, True
         return {}, False
     try:
         import mirror_manager as mm
@@ -1153,19 +1189,27 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
         official, mirrors = f"{off_base}/{t}", [f"{b}/{t}" for b in mirror_bases]
         return mirrors + [official] if use_mirror else [official] + mirrors
 
-    py = (cfg.get("custom_python_path") or "").strip() or detect_bundled_python(root_dir) or ""
     venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
     pytag = cc.python_tag(venv_py if os.path.isfile(venv_py) else py)
+    legacy = new_tag == cc.LEGACY_TAG and cc.is_legacy_gpu()
+    need_driver = cc.driver_min_for((cc.tag_cuda(tag) or (13, 0))[0])
     # 同一个 CUDA 大版本里每个 tag 都试（2.12 起 CUDA 12 只有 cu126、没有 cu128），
     # 实在没有再退到 WebUI 自己写着的备选 torch 版本
     new_specs, new_tag, base = cc.resolve_compat(
         [specs] + tb._parse_alt_torch_specs(root_dir), tag, bases_for, pytag, driver)
     if not new_specs:
-        # 这个 WebUI 要的 torch 在驱动支持的 CUDA 版本下没有构建：硬装老 torch 只会更糟
-        if notes is not None:
-            notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，而这个 WebUI 需要的 "
-                         f"{'、'.join(f'{n} {v}' for n, v in specs)} 没有驱动能用的版本，"
-                         "请把显卡驱动升级到 580 以上（NVIDIA 官网或 GeForce Experience / NVIDIA App 更新）")
+        # 这个 WebUI 要的 torch 在显卡 / 驱动支持的 CUDA 版本下没有构建：硬装老 torch 只会更糟
+        want = "、".join(f"{n} {v}" for n, v in specs)
+        if cc.is_unsupported_gpu():
+            # Kepler 这类卡驱动停在 47x，让用户「升级到 580」是做不到的事
+            note("[启动器] " + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " "))
+        elif legacy:
+            note(f"[启动器] 显卡（{gpu}）架构较老，只能用 {cc.LEGACY_TAG} 的 torch，而这个 WebUI 需要的 "
+                 f"{want} 没有 {cc.LEGACY_TAG} 的版本，这张显卡跑不了这个 WebUI 的当前版本")
+        else:
+            note(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，而这个 WebUI 需要的 "
+                 f"{want} 没有驱动能用的版本，"
+                 f"请把显卡驱动升级到 {need_driver} 以上（NVIDIA 官网或 GeForce Experience / NVIDIA App 更新）")
         return {}, False
     index = base or bases_for(new_tag)[0]
     out = {
@@ -1173,24 +1217,27 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
         "TORCH_COMMAND": "pip install " + " ".join(f"{n}=={v}" for n, v in new_specs)
                          + f" --extra-index-url {index}",
     }
-    ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root_dir, py))
     need = cc.tag_cuda(itag) if itag else None
     target_torch = dict(new_specs).get("torch", "")
     # 驱动带不动已装的 torch，或者已装的不是这次要的版本（比如之前装错的老版本）→ 重装
     reinstall = bool(ver and ((need and driver and need[0] > driver[0])
                               or (target_torch and f"{ver}+{itag}" != target_torch)))
-    if notes is not None:
-        target = "、".join(f"{n} {v}" for n, v in new_specs)
-        if new_tag == cc.LEGACY_TAG and cc.is_legacy_gpu():
-            notes.append(f"[启动器] 显卡（{'、'.join(cc.gpu_names())}）架构较老，新版 torch 已不支持，"
-                         f"已自动改装老卡专用版本：{target}")
-        else:
-            notes.append(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
-                         f"（需要 {cc.DRIVER_MIN} 以上的驱动），已自动改装兼容版本：{target}。"
-                         "建议有空把显卡驱动升级一下，之后就能直接用新版")
+    target = "、".join(f"{n} {v}" for n, v in new_specs)
+    if legacy:
+        note(f"[启动器] 显卡（{gpu}）架构较老，新版 torch 已不支持，已自动改装老卡专用版本：{target}")
         if reinstall:
-            notes.append(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 驱动带不动，这次启动会自动重装"
-                         "（几个 GB，需要一点时间）。想继续用新版 torch 的话，把显卡驱动升级到 580 以上即可")
+            note(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 这张显卡用不了，这次启动会自动重装"
+                 "（几个 GB，需要一点时间）")
+    else:
+        # 记下这次换装：驱动升级之后启动器会提示换回默认版本（见 cuda_compat「换装记录」）
+        if target_torch and "+" in target_torch:
+            cc.note_fallback(root_dir, target_torch, tag)
+        note(f"[启动器] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，WebUI 默认要装的 torch 是 {tag}"
+             f"（需要 {need_driver} 以上的驱动），已自动改装兼容版本：{target}。"
+             "建议有空把显卡驱动升级一下，升级后启动器会提示换回默认版本")
+        if reinstall:
+            note(f"[启动器] 当前环境里已装的 torch {ver}+{itag} 驱动带不动，这次启动会自动重装"
+                 "（几个 GB，需要一点时间）")
     return out, reinstall
 
 

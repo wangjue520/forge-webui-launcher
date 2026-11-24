@@ -229,6 +229,53 @@ def _natural_key(nid: str) -> Tuple:
     return tuple((0, int(p)) if p.isdigit() else (1, p) for p in str(nid).split(":"))
 
 
+def _is_executor(n: Any) -> bool:
+    """类名里没有 sampler、但同样自己跑采样的节点（FaceDetailer / UltimateSDUpscale 这类）。"""
+    if not isinstance(n, dict) or n.get("mode") in (2, 4):
+        return False
+    inp = n.get("inputs")
+    if not isinstance(inp, dict) or not ("steps" in inp or "denoise" in inp):
+        return False
+    clow = str(n.get("class_type") or "").lower()
+    if _NOT_EXECUTOR_RE.search(clow):
+        return False
+    has_cond = any(_is_link(v) and (key_polarity(k) or "pipe" in str(k).lower())
+                   for k, v in inp.items())
+    if not has_cond:
+        return False
+    return bool(_EXECUTOR_HINT_RE.search(clow)) or _is_link(inp.get("model"))
+
+
+def find_stage_roots(nodes: Dict[str, Any], samplers: Any = None) -> List[Tuple[str, str, Dict[str, Any]]]:
+    """图里所有「消费条件」的节点，每个算一个采样阶段：[(阶段名, 节点id, 节点)]。
+
+    文本框清单（哪个框用在哪个阶段）和按阶段汇总的提示词都从这里取阶段，两边的
+    阶段名必须一致，所以单独抽成一个函数。
+    """
+    if samplers is None:
+        from .comfyui_parser import ComfyUIParser   # 延迟导入：comfyui_parser 也导入本模块
+        samplers = ComfyUIParser._find_all_samplers(nodes)
+    # 静音(2) / 旁路(4) 的采样器不参与出图，接在它上面的文本框不能算「已使用」
+    samplers = [(str(nid), n) for nid, n in samplers
+                if isinstance(n, dict) and n.get("mode") not in (2, 4)]
+    out: List[Tuple[str, str, Dict[str, Any]]] = []
+    for i, (nid, n) in enumerate(samplers):
+        label = "主采样" if i == 0 else ("二次采样" if len(samplers) == 2 else f"二次采样 {i}")
+        out.append((label, nid, n))
+    seen = {nid for nid, _ in samplers}
+
+    # FaceDetailer / UltimateSDUpscale 的提示词可以和主采样完全不同，必须各算一个阶段
+    others = [(nid, n) for nid, n in nodes.items() if nid not in seen and _is_executor(n)]
+    class_count: Dict[str, int] = {}
+    for _nid, n in others:
+        c = str(n.get("class_type") or "")
+        class_count[c] = class_count.get(c, 0) + 1
+    for nid, n in sorted(others, key=lambda x: _natural_key(x[0])):
+        c = str(n.get("class_type") or "") or "节点"
+        out.append((f"{c} #{nid}" if class_count.get(c, 0) > 1 else c, nid, n))
+    return out
+
+
 class _Collector:
     def __init__(self, nodes: Dict[str, Any], workflow: Any, samplers: Any):
         self.nodes = nodes
@@ -260,50 +307,11 @@ class _Collector:
     # ---------------------------------------------------------- 找「消费条件」的节点
 
     def _find_roots(self) -> List[Tuple[str, Dict[str, Any]]]:
-        samplers = self.samplers
-        if samplers is None:
-            from .comfyui_parser import ComfyUIParser   # 延迟导入：comfyui_parser 也导入本模块
-            samplers = ComfyUIParser._find_all_samplers(self.nodes)
-        # 静音(2) / 旁路(4) 的采样器不参与出图，接在它上面的文本框不能算「已使用」
-        samplers = [(str(nid), n) for nid, n in samplers
-                    if isinstance(n, dict) and n.get("mode") not in (2, 4)]
-        roots = list(samplers)
-        seen = {nid for nid, _ in roots}
-        for i in range(len(samplers)):
-            if i == 0:
-                self.stage_labels.append("主采样")
-            else:
-                self.stage_labels.append("二次采样" if len(samplers) == 2 else f"二次采样 {i}")
-
-        # 类名里没有 sampler 但同样自己跑采样的节点：FaceDetailer / UltimateSDUpscale 这类。
-        # 它们的提示词可以和主采样完全不同，必须各算一个阶段
-        others = [(nid, n) for nid, n in self.nodes.items()
-                  if nid not in seen and self._is_executor(n)]
-        class_count: Dict[str, int] = {}
-        for _nid, n in others:
-            c = str(n.get("class_type") or "")
-            class_count[c] = class_count.get(c, 0) + 1
-        for nid, n in sorted(others, key=lambda x: _natural_key(x[0])):
-            c = str(n.get("class_type") or "") or "节点"
-            self.stage_labels.append(f"{c} #{nid}" if class_count.get(c, 0) > 1 else c)
-            roots.append((nid, n))
+        roots = []
+        for label, nid, node in find_stage_roots(self.nodes, self.samplers):
+            self.stage_labels.append(label)
+            roots.append((nid, node))
         return roots
-
-    @staticmethod
-    def _is_executor(n: Any) -> bool:
-        if not isinstance(n, dict) or n.get("mode") in (2, 4):
-            return False
-        inp = n.get("inputs")
-        if not isinstance(inp, dict) or not ("steps" in inp or "denoise" in inp):
-            return False
-        clow = str(n.get("class_type") or "").lower()
-        if _NOT_EXECUTOR_RE.search(clow):
-            return False
-        has_cond = any(_is_link(v) and (key_polarity(k) or "pipe" in str(k).lower())
-                       for k, v in inp.items())
-        if not has_cond:
-            return False
-        return bool(_EXECUTOR_HINT_RE.search(clow)) or _is_link(inp.get("model"))
 
     # ---------------------------------------------------------- 回溯
 

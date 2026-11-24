@@ -218,7 +218,14 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
         import cuda_compat as cc
         import mirror_manager as mm
         new_tag = cc.effective_tag(tag)
+        gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
+        if new_tag == tag and cc.gpu_tag_mismatch(tag) == "blackwell":
+            # Forge Classic 写死的 torch 2.3.1+cu121 没有 50 系的内核，也没有 cu128 的构建可换
+            _log(log, f"注意：显卡（{gpu}）是 RTX 50 系，需要 {cc.BLACKWELL_MIN_TAG} 及以上的 torch，而这个 WebUI "
+                      f"固定用 {tag} 的老 torch——装得上但出不了图（no kernel image）。50 系请改用 Forge Neo 或 ComfyUI")
         if new_tag != tag:
+            legacy = new_tag == cc.LEGACY_TAG and cc.is_legacy_gpu()
+
             def bases_for(t):
                 return [f"{mm.PYTORCH_OFFICIAL_WHL}/{t}"] + [f"{b}/{t}" for b in mm.PYTORCH_MIRROR_BASES]
             venv_py = os.path.join(root_dir, "venv", "Scripts", "python.exe")
@@ -227,12 +234,27 @@ def _ensure_torch(root_dir, cfg, log, progress, cancel_event):
             new_specs, new_tag, _base = cc.resolve_compat(
                 [specs] + _parse_alt_torch_specs(root_dir), tag, bases_for, pytag)
             if not new_specs:
-                _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，这个 WebUI 需要的 torch "
-                          "没有驱动能用的版本，请把显卡驱动升级到 580 以上；跳过预下载")
+                if cc.is_unsupported_gpu():
+                    _log(log, cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " ") + "；跳过预下载")
+                elif legacy:
+                    _log(log, f"显卡（{gpu}）架构较老，只能用 {cc.LEGACY_TAG} 的 torch，而这个 WebUI 需要的 torch "
+                              f"没有 {cc.LEGACY_TAG} 的版本；跳过预下载")
+                else:
+                    need_driver = cc.driver_min_for((cc.tag_cuda(tag) or (13, 0))[0])
+                    _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，这个 WebUI 需要的 torch "
+                              f"没有驱动能用的版本，请把显卡驱动升级到 {need_driver} 以上；跳过预下载")
                 return False
+            wanted_tag = tag
             specs = new_specs
-            _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，"
-                      f"改为预装 {'、'.join(f'{n}=={v}' for n, v in specs)}")
+            target = "、".join(f"{n}=={v}" for n, v in specs)
+            if legacy:
+                _log(log, f"显卡（{gpu}）架构较老，新版 torch（{wanted_tag}）已不支持，改为预装老卡专用的 {target}")
+            else:
+                _log(log, f"显卡驱动最高支持 CUDA {cc.fmt_cuda(cc.driver_cuda_version())}，改为预装 {target}"
+                          "（升级显卡驱动后，启动时会提示换回默认版本）")
+                torch_spec = dict(specs).get("torch", "")
+                if "+" in torch_spec:
+                    cc.note_fallback(root_dir, torch_spec, wanted_tag)
             tag = new_tag
     except Exception as e:
         _log(log, f"驱动兼容检查失败（按默认版本继续）: {e}")

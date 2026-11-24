@@ -429,6 +429,39 @@ def instance_model_dirs(cfg, comfy_layout):
     return out
 
 
+def instance_extra_model_dirs(cfg, comfy_layout):
+    """
+    ComfyUI 桌面版实例：instance_model_dirs 给出的那个目录之外，ComfyUI 实际还在读的同分类目录
+    [(分类键, 绝对路径, 来源)]，来源是 "own"（实例自带的 ComfyUI\\models）或 "shared"（共享 / 额外挂的目录）。
+
+    桌面版同时读实例自带的 models 和共享目录，instance_model_dirs 每个分类却只能给一个：共享目录里有这个
+    分类就只看共享的，塞在 installs 里的模型在模型管理里看不到；共享目录里还没有这个分类时又反过来只看
+    installs 的。这里把「另一边」补出来，模型管理两边都列。不是桌面版实例返回 []。
+    """
+    root = (cfg.get("webui_root") or "").strip()
+    if cfg.get("webui_branch") != "comfyui" or not root or not os.path.isdir(root):
+        return []
+    import comfy_desktop
+    roots = comfy_desktop.search_roots(root)
+    if len(roots) < 2:      # 不是桌面版，或者这个实例关了共享模型（只有自带的 models）
+        return []
+    norm = lambda p: os.path.normcase(os.path.abspath(p))
+    seen = {norm(d) for d in instance_model_dirs(cfg, comfy_layout).values()}
+    legacy = {"diffusion_models": "unet", "text_encoders": "clip", "controlnet": "t2i_adapter"}
+    out = []
+    for k, _l, _i, _f, crel, _a in LIBRARY_CATEGORIES:
+        subs = [crel[len("models/"):] if crel.startswith("models/") else crel]
+        if k in legacy:
+            subs.append(legacy[k])
+        for base, src in roots:
+            for sub in subs:
+                d = os.path.join(base, *sub.split("/"))
+                if os.path.isdir(d) and norm(d) not in seen:
+                    seen.add(norm(d))
+                    out.append((k, d, src))
+    return out
+
+
 def comfy_yaml_text(lib_path):
     """给 ComfyUI 的 extra_model_paths 配置（启动器自己生成一份，通过参数传入，不动用户原有的 yaml）"""
     base = lib_path.replace("\\", "/")

@@ -131,8 +131,64 @@ def category_dir(models_dir, comfy_rel):
     return os.path.join(models_dir, *rel.split("/"))
 
 
-def yaml_text(dirs, primary):
-    """照桌面版 buildYaml 生成 extra_model_paths：每个模型目录一段，默认目录标 is_default"""
+# 桌面版另外会挂的东西（src/main/lib/models.ts）——启动器以前只挂上面那 25 个分类，
+# 共享目录里的 unet / clip / t2i_adapter 和自定义节点自己的模型文件夹（ipadapter、ultralytics…）
+# 用桌面版启动看得到、用启动器启动就看不到：
+LEGACY_ALIASES = ("clip", "unet")                      # 老目录名，ComfyUI 会并进 text_encoders / diffusion_models
+SECONDARY_DIRS = {"controlnet": ("t2i_adapter",)}      # 同一个类型多读一个文件夹
+KNOWN_MODEL_FOLDERS = set(MODEL_FOLDER_TYPES) | {"clip", "unet", "t2i_adapter"}
+NON_MODEL_FOLDERS = {"custom_nodes", "user", "input", "output", "temp", "models", ".venv", ".snapshots",
+                     ".git", "__pycache__", ".desktop2-downloads"}
+
+
+def extra_folders(dirs):
+    """模型目录里上面清单之外的文件夹名（自定义节点的模型类型），排好序；照桌面版 discoverExtraFoldersFromSharedDirs"""
+    seen = set()
+    for d in dirs:
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            if name not in KNOWN_MODEL_FOLDERS and name not in NON_MODEL_FOLDERS \
+                    and os.path.isdir(os.path.join(d, name)):
+                seen.add(name)
+    return sorted(seen)
+
+
+def own_models_dir(root):
+    """桌面版实例自己的 ComfyUI\\models（不是桌面版返回 ""）"""
+    ip, _rec = find_install(root)
+    return os.path.join(ip, "ComfyUI", "models") if ip else ""
+
+
+def search_roots(root):
+    """
+    桌面版实例实际会读的全部模型目录 [(目录, 来源)]，来源是 "own"（实例自带的 ComfyUI\\models）或
+    "shared"（挂上去的共享 / 额外目录）。照桌面版 resolveInstallModelSearchPaths：自带的 models 永远在读，
+    共享目录是另外挂的——所以模型不管塞在 installs 还是 shared，ComfyUI 都加载得到。不是桌面版返回 []。
+    """
+    own = own_models_dir(root)
+    if not own:
+        return []
+    out = [(own, "own")]
+    for d in model_dirs(root)[1]:
+        if not any(_norm(d) == _norm(x) for x, _s in out):
+            out.append((d, "shared"))
+    return out
+
+
+def _yq(s):
+    """YAML 单引号字符串（文件夹名可能带空格、冒号）"""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def yaml_text(dirs, primary, extra=None):
+    """
+    照桌面版 buildYaml 生成 extra_model_paths：每个模型目录一段，默认目录标 is_default。
+    extra：清单之外要挂的文件夹名，不给就到 dirs 里现找（extra_folders）。
+    """
+    extra = extra_folders(dirs) if extra is None else list(extra)
     lines = ["# 由启动器生成：ComfyUI 桌面版的共享模型目录（照桌面版自己的设置）。改这里没用，每次启动会重新生成。"]
     for i, d in enumerate(dirs):
         base = d.replace("\\", "/").replace('"', '\\"')
@@ -141,5 +197,13 @@ def yaml_text(dirs, primary):
         if primary and _norm(d) == _norm(primary):
             lines.append("    is_default: true")
         for name in MODEL_FOLDER_TYPES:
+            if name in SECONDARY_DIRS:
+                lines.append(f"    {name}: |-")
+                lines += [f"        {sub}/" for sub in (name,) + SECONDARY_DIRS[name]]
+            else:
+                lines.append(f"    {name}: {name}/")
+        for name in extra:
+            lines.append(f"    {_yq(name)}: {_yq(name + '/')}")
+        for name in LEGACY_ALIASES:
             lines.append(f"    {name}: {name}/")
     return "\n".join(lines) + "\n"

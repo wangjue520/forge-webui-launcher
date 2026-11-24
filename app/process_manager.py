@@ -84,13 +84,26 @@ def _driver_issue_forge(root, cfg):
         import cuda_compat as cc
         import torch_bootstrap as tb
         py = (cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root) or ""
-        _ver, tag = cc.installed_torch_tag(cc.forge_site_packages(root, py))
-        if not tag:
-            _specs, tag = tb._parse_torch_spec(root)
+        ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root, py))
+        _specs, wanted = tb._parse_torch_spec(root)
+        tag = itag or wanted
         if not tag:
             return None
         auto = "TORCH_COMMAND" not in os.environ
-        return cc.driver_issue(tag, "这个 WebUI ", auto)
+        # 显卡架构和 torch 对不上时能不能自动换装：要看这个 WebUI 默认的 torch（老卡降到 cu126 之后）
+        # 显卡跑不跑得了——Forge Classic 写死 cu121，50 系怎么换都不行
+        gpu_fix = auto and bool(wanted) and cc.gpu_tag_mismatch(cc.effective_tag(wanted)) is None
+        issue = cc.driver_issue(tag, "这个 WebUI ", auto, gpu_fix=gpu_fix)
+        if issue is None and auto and ver and itag and wanted and \
+                cc.fallback_restorable(root, f"{ver}+{itag}", wanted):
+            return {
+                "level": "warn", "id": "torch_restore", "root": root,
+                "text": f"显卡驱动已经升级，带得动这个 WebUI 默认的 torch（{wanted}）了。\n\n"
+                        f"现在环境里还是之前因为驱动太旧换装的兼容版本（torch {ver}+{itag}）。"
+                        "换回默认版本需要下载约 3GB，换回后 SageAttention 这类按 torch 版本配套的加速库才装得上。\n\n"
+                        "选「保持现状」以后不再提醒（想换回时到「环境部署」页对这个目录重新点「开始部署」）。",
+            }
+        return issue
     except Exception:
         return None
 
@@ -106,7 +119,8 @@ def _driver_issue_comfy(root, cfg, comfy_dir):
         for v in ("venv", ".venv"):
             cands.append(os.path.join(comfy_dir, v, "Lib", "site-packages"))
         _ver, tag = cc.installed_torch_tag([c for c in cands if os.path.isdir(c)])
-        return cc.driver_issue(tag, "ComfyUI ", False) if tag else None
+        # ComfyUI 启动时不会自己换 torch；显卡和 torch 对不上的，重新部署会换装（webview_api._comfy_torch_problem）
+        return cc.driver_issue(tag, "ComfyUI ", False, redeploy_fixes=True) if tag else None
     except Exception:
         return None
 
@@ -116,6 +130,34 @@ _AMD_FATAL_HINT = (
     "  · 环境里还是 N 卡的 CUDA 版 torch：到「环境部署」页选 AMD 显卡，点「把这个目录的环境切换成所选显卡」\n"
     "  · 显卡架构（gfx）选错了：同一个页面换成正确的型号再切换一次\n"
     "  · 显卡驱动太旧：到 AMD 官网更新 Adrenalin 驱动后重启电脑")
+
+
+def _no_kernel_hint():
+    """
+    no kernel image：torch 里没有这张显卡架构的内核。两个方向都有——老卡配了新 torch、
+    50 系配了老 torch——按本机显卡说清楚是哪一种、怎么修。
+    """
+    head = "[启动器] 启动失败：环境里的 torch 不支持这张显卡的架构。\n"
+    fix = ("Forge Neo 再启动一次会自动换装；ComfyUI 到「环境部署」页选中这个安装目录，"
+           "再点一次「开始部署」")
+    try:
+        import cuda_compat as cc
+        gpu = "、".join(cc.gpu_names()) or "这张显卡"
+        if cc.is_unsupported_gpu():
+            return head + "  · " + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", "\n  · ")
+        if cc.is_blackwell_gpu():
+            return (head + f"  · {gpu} 是 RTX 50 系，需要 {cc.BLACKWELL_MIN_TAG} 及以上的新版 torch，环境里的太旧了\n"
+                    f"  · {fix}\n"
+                    "  · Forge Classic、A1111 这类老版本 WebUI 固定用老 torch，不支持 50 系，请改用 Forge Neo 或 ComfyUI")
+        if cc.is_legacy_gpu():
+            return (head + f"  · {gpu} 架构较老（20 系之前），新版 torch 已经不带它的内核，"
+                    f"要用老卡专用的 {cc.LEGACY_TAG} 版\n"
+                    f"  · {fix}")
+    except Exception:
+        pass
+    return head + ("  · 常见的两种情况：20 系之前的老卡配了新版 torch（要换成 cu126 版），"
+                   "或者 RTX 50 系配了旧版 torch（要换成 cu128 及以上）\n"
+                   f"  · {fix}")
 
 
 def _fatal_hint_for(text, rocm=False):
@@ -130,6 +172,8 @@ def _fatal_hint_for(text, rocm=False):
     if rocm and any(k in low for k in ("pytorch is not able to access any compute device",
                                         "torch is not able to use gpu", "hip error", "no hip gpus")):
         return _AMD_FATAL_HINT
+    if "no kernel image is available" in low and not rocm:
+        return _no_kernel_hint()
     for keys, hint in _FATAL_HINTS:
         if any(k in low for k in keys):
             return hint

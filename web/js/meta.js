@@ -101,6 +101,8 @@
     $("#meta-neg").value = "";
     $("#meta-settings tbody").innerHTML = "";
     $("#meta-boxes").innerHTML = ""; $("#meta-boxes-card").hidden = true;
+    boxData = { boxes: [], stages: [], prompt: "", negative: "" };
+    resetAi(false);
     $("#meta-chars").innerHTML = ""; $("#meta-chars-card").hidden = true;
     $("#meta-loras").innerHTML = ""; $("#meta-lora-card").hidden = true;
     $("#meta-civitai").innerHTML = ""; $("#meta-civitai-card").hidden = true;
@@ -236,6 +238,8 @@
       .map(([k, v]) => `<tr><td class="dim" style="white-space:nowrap">${App.esc(k)}</td><td>${App.esc(v)}</td></tr>`)
       .join("");
     renderBoxes(r.text_boxes, r);
+    // 兜底的深度解析会再进来一次：AI 正在跑或者已经有结果时别清掉
+    if (!ai.busy && !ai.result) resetAi(!!r.can_ai);
     renderCharacters(r.characters);
     renderLoras(r.loras);
     renderCivitai(r.civitai);
@@ -307,36 +311,213 @@
     disabled: "节点被静音 / 旁路，这张图没用到",
   };
 
+  /* 「汇总 / 分离」两种看法，文本框卡片和 AI 分析卡片共用一个开关。
+   *
+   * 分离：每个文本框（或 AI 拆出来的每一段）单独列出，看得清来源，但框多的时候
+   *       一长串，想直接拿整条提示词反而不方便。
+   * 汇总：按采样阶段拼成一条，和加这张卡片之前的旧版一样——主采样的就是上面
+   *       两栏，这里只补二次采样 / Detailer 各自的那一条。
+   * 选哪种记在配置里（meta_view_mode），下次打开还是上次的选择；默认汇总。 */
+  function viewMode() { return App.cfg.meta_view_mode === "split" ? "split" : "merged"; }
+
+  function syncViewChips() {
+    document.querySelectorAll("[data-meta-view]").forEach((b) =>
+      b.classList.toggle("on", b.dataset.metaView === viewMode()));
+  }
+
+  function setViewMode(mode) {
+    if (mode === viewMode()) return;
+    App.cfg.meta_view_mode = mode;
+    // 存不上也不影响这次使用，只是下次打开回到之前的选择
+    Promise.resolve(App.api.update_config({ meta_view_mode: mode })).catch(() => {});
+    syncViewChips();
+    renderBoxes();
+    renderAi();
+  }
+
+  /* 一格提示词：正负标签 + 来源 + 阶段 + 复制按钮 + 正文 + 备注。
+   * 文本框清单、按阶段汇总、AI 拆出来的分段都用这一个样子。 */
+  function slotHtml(o, i) {
+    const tag = `<span class="box-tag" data-pol="${App.esc(o.pol)}"` +
+      (o.guess ? ` title="连线和字段名都看不出正负，这是按内容里的关键词猜的"` : "") +
+      `>${BOX_POL[o.pol] || BOX_POL.unknown}${o.guess ? "？" : ""}</span>`;
+    return `<div class="char-slot${o.idle ? " box-idle" : ""}"><div class="char-head">${tag}` +
+      (o.where ? `<span class="box-where">${App.esc(o.where)}</span>` : "") +
+      (o.stage ? `<span class="box-stage">${App.esc(o.stage)}</span>` : "") +
+      (o.text ? `<button class="btn btn-xs" data-copy="${i}">复制</button>` : "") + `</div>` +
+      (o.text ? `<div class="char-body box-body">${App.esc(o.text)}</div>` : "") +
+      (o.note ? `<div class="char-neg">${App.esc(o.note)}</div>` : "") + `</div>`;
+  }
+
+  function fillSlots(el, items, tailHtml) {
+    el.innerHTML = items.map(slotHtml).join("") + (tailHtml || "");
+    el.querySelectorAll("[data-copy]").forEach((btn) =>
+      btn.addEventListener("click", () => {
+        const it = items[+btn.dataset.copy];
+        App.copy(it.text || "", it.tip || "已复制");
+      }));
+  }
+
+  let boxData = { boxes: [], stages: [], prompt: "", negative: "" };
+
   function renderBoxes(boxes, r) {
+    if (r) {
+      boxData = { boxes: boxes || [], stages: r.text_stages || [],
+        prompt: (r.prompt || "").trim(), negative: (r.negative || "").trim() };
+    }
     const card = $("#meta-boxes-card"), box = $("#meta-boxes");
-    boxes = boxes || [];
+    const all = boxData.boxes;
     // 最普通的图（一个正向框 + 一个负向框，内容就是上面两栏）不再重复显示一遍
-    const shown = [(r.prompt || "").trim(), (r.negative || "").trim()];
-    const trivial = boxes.length <= 2 && boxes.every((b) =>
+    const shown = [boxData.prompt, boxData.negative];
+    const trivial = all.length <= 2 && all.every((b) =>
       b.status === "used" && !b.note && !b.guess && b.stages.length <= 1 && shown.indexOf((b.text || "").trim()) >= 0);
-    if (!boxes.length || trivial) { card.hidden = true; box.innerHTML = ""; return; }
+    if (!all.length || trivial) { card.hidden = true; box.innerHTML = ""; return; }
     card.hidden = false;
+    syncViewChips();
 
-    const idleN = boxes.filter((b) => BOX_IDLE[b.status]).length;
-    $("#meta-boxes-hint").textContent = `工作流里共 ${boxes.length} 个文本框` +
-      (idleN ? `，其中 ${idleN} 个没参与出图` : "") + "；上面两栏是主采样器实际拼出来的那一条";
+    const idleN = all.filter((b) => BOX_IDLE[b.status]).length;
+    $("#meta-boxes-hint").textContent = `工作流里共 ${all.length} 个文本框` +
+      (idleN ? `，其中 ${idleN} 个没参与出图` : "");
 
-    box.innerHTML = boxes.map((b, i) => {
-      const idle = BOX_IDLE[b.status];
-      const tag = `<span class="box-tag" data-pol="${App.esc(b.polarity)}"` +
-        (b.guess ? ` title="连线和字段名都看不出正负，这是按内容里的关键词猜的"` : "") +
-        `>${BOX_POL[b.polarity] || BOX_POL.unknown}${b.guess ? "？" : ""}</span>`;
-      const where = [b.title, `${b.class_type || "节点"} #${b.node_id}`, b.field].filter(Boolean).join(" · ");
-      const stage = idle ? idle : (b.stages || []).join(" / ");
-      const note = b.note ? `<div class="char-neg">${App.esc(b.note)}</div>` : "";
-      return `<div class="char-slot${idle ? " box-idle" : ""}">
-        <div class="char-head">${tag}<span class="box-where">${App.esc(where)}</span>` +
-        (stage ? `<span class="box-stage">${App.esc(stage)}</span>` : "") +
-        (b.text ? `<button class="btn btn-xs" data-box-copy="${i}">复制</button>` : "") + `</div>` +
-        (b.text ? `<div class="char-body box-body">${App.esc(b.text)}</div>` : "") + note + `</div>`;
-    }).join("");
-    box.querySelectorAll("[data-box-copy]").forEach((btn) =>
-      btn.addEventListener("click", () => App.copy(boxes[+btn.dataset.boxCopy].text || "", "已复制这个文本框的内容")));
+    if (viewMode() === "split") {
+      fillSlots(box, all.map((b) => {
+        const idle = BOX_IDLE[b.status];
+        return {
+          pol: b.polarity, guess: b.guess, idle: !!idle, text: b.text, note: b.note,
+          where: [b.title, `${b.class_type || "节点"} #${b.node_id}`, b.field].filter(Boolean).join(" · "),
+          stage: idle || (b.stages || []).join(" / "),
+          tip: "已复制这个文本框的内容",
+        };
+      }), `<div class="box-foot">上面「正向 / 负向」两栏是主采样器实际拼出来的那一条。</div>`);
+      return;
+    }
+
+    // 汇总：主采样的那一条就是上面两栏，不重复；只列其它阶段自己拼出来、且和主采样不一样的
+    const items = [];
+    boxData.stages.filter((s) => !s.main).forEach((s) => {
+      const pos = (s.positive || "").trim(), neg = (s.negative || "").trim();
+      if (pos && pos !== boxData.prompt) {
+        items.push({ pol: "positive", where: s.stage, text: pos, tip: `已复制「${s.stage}」的正向提示词` });
+      }
+      if (neg && neg !== boxData.negative) {
+        items.push({ pol: "negative", where: s.stage, text: neg, tip: `已复制「${s.stage}」的负向提示词` });
+      }
+    });
+    fillSlots(box, items, `<div class="box-foot">已按采样阶段拼成一条：主采样的正向 / 负向就是上面两栏` +
+      (items.length ? "，其它阶段用了不同提示词的列在这里" : "，其它阶段没有另外的提示词") +
+      (idleN ? `；另有 ${idleN} 个文本框没参与出图，没有算进来` : "") +
+      `。想看每个文本框各自的内容，切到「分离」。</div>`);
+  }
+
+  /* ================= AI 分析 =================
+   *
+   * 规则解析只能如实列出「有哪些文本框、怎么连的」；让大模型把整张节点图读一遍，
+   * 它能直接说出最终的正向 / 负向、用了哪些 LoRA。要用户点了才跑（要花他自己的
+   * Key 的钱，也要把工作流内容发出去），结果单独放这张卡片，不覆盖上面的规则解析。 */
+  const AI_HINT = "会把这张图的工作流内容（提示词、模型名、节点参数）发给你在「启动器设置 → 报错诊断」里设置的 AI 接口，按你自己的 Key 计费。";
+  let ai = { job: null, busy: false, result: null };
+
+  function resetAi(canAi) {
+    ai = { job: null, busy: false, result: null };
+    $("#meta-ai-card").hidden = !canAi;
+    $("#meta-ai").innerHTML = "";
+    $("#meta-ai-status").textContent = AI_HINT;
+    const btn = $("#meta-ai-run");
+    btn.disabled = false; btn.textContent = "开始分析";
+    syncViewChips();
+  }
+
+  function aiStatus(html) { $("#meta-ai-status").innerHTML = html; }
+
+  function aiDone(result, cached) {
+    ai.busy = false; ai.job = null; ai.result = result;
+    const btn = $("#meta-ai-run");
+    btn.disabled = false; btn.textContent = "重新分析";
+    aiStatus(App.esc(`由 ${result.by || "AI"} 分析${cached ? "（这张图刚分析过，直接用了上次的结果）" : ""}。` +
+      "AI 可能看错，结果仅供参考，拿不准时以上面的规则解析和实际工作流为准。"));
+    renderAi();
+  }
+
+  function aiFail(msg, needKey) {
+    ai.busy = false; ai.job = null;
+    const btn = $("#meta-ai-run");
+    btn.disabled = false; btn.textContent = ai.result ? "重新分析" : "开始分析";
+    aiStatus(`<span class="meta-warn">${App.esc(msg || "分析失败")}</span>` +
+      (needKey ? ` <button class="btn btn-xs btn-accent" id="meta-ai-setup">去设置</button>` : ""));
+    const go = $("#meta-ai-setup");
+    if (go) go.addEventListener("click", () => {
+      App.showPage("launcher");
+      const key = $("#dg-key");
+      if (key) { key.scrollIntoView({ block: "center" }); key.focus(); }
+    });
+  }
+
+  async function runAi() {
+    if (ai.busy) return;
+    const force = !!ai.result;      // 已经有结果了还点 = 重新分析，不用上次存的
+    ai.busy = true;
+    const btn = $("#meta-ai-run");
+    btn.disabled = true; btn.textContent = "分析中…";
+    aiStatus("正在整理工作流…");
+    const my = seq;                 // 等结果的时候用户可能换图，对不上就丢掉
+    let r;
+    try { r = await App.api.meta_ai_analyze(force); }
+    catch (e) { if (my === seq) aiFail("分析失败：" + e.message); return; }
+    if (my !== seq) return;
+    if (!r || !r.ok) { aiFail((r && r.error) || "分析失败", r && r.need_key); return; }
+    if (r.result) { aiDone(r.result, r.cached); return; }
+    ai.job = r.job;
+    aiStatus(App.esc(`正在请求 ${r.model || "AI"}，一般要十几秒到一分钟，可以先看别的…`));
+  }
+
+  function renderAi() {
+    const box = $("#meta-ai"), res = ai.result;
+    if (!res) { box.innerHTML = ""; return; }
+    const split = viewMode() === "split";
+    const part = (pol) => (p) => ({ pol: pol, where: p.node, stage: p.stage, text: p.text, note: p.note,
+      tip: "已复制这一段提示词" });
+    const items = split
+      ? (res.positive_parts || []).map(part("positive")).concat((res.negative_parts || []).map(part("negative")))
+      : [res.positive && { pol: "positive", text: res.positive, tip: "已复制 AI 整理的正向提示词" },
+         res.negative && { pol: "negative", text: res.negative, tip: "已复制 AI 整理的负向提示词" }].filter(Boolean);
+
+    const loras = res.loras || [];
+    const on = loras.filter((l) => l.enabled);
+    let tail = "";
+    if (loras.length) {
+      tail += `<div class="ai-sub">LORA` +
+        (on.length ? ` <button class="btn btn-xs" id="meta-ai-lora-all">全部复制调用</button>` : "") + `</div>` +
+        loras.map((l, i) => {
+          const w = (l.weight == null) ? "" : `<span class="dim">强度 ${l.weight}` +
+            (l.clip_weight == null ? "" : ` / CLIP ${l.clip_weight}`) + `</span>`;
+          const off = l.enabled ? "" : `　<span class="dim">未启用</span>`;
+          const node = split && l.node ? `　<span class="dim">${App.esc(l.node)}</span>` : "";
+          return `<div class="tw-row"><span class="tw-text${l.enabled ? "" : " ai-off"}">${App.esc(l.name)}</span>${w}${off}${node}
+            <button class="btn btn-xs" data-ai-lora="${i}">复制调用</button></div>`;
+        }).join("");
+    }
+    const rows = (res.model ? [["模型", res.model]] : []).concat(res.params || []);
+    if (rows.length) {
+      tail += `<div class="ai-sub">关键设置</div><table class="data-table"><tbody>` + rows.map(([k, v]) =>
+        `<tr><td class="dim" style="white-space:nowrap">${App.esc(k)}</td><td>${App.esc(v)}</td></tr>`).join("") +
+        `</tbody></table>`;
+    }
+    if ((res.notes || []).length) {
+      tail += `<div class="ai-sub">说明</div>` +
+        res.notes.map((n) => `<div class="box-foot">· ${App.esc(n)}</div>`).join("");
+    }
+    if (!items.length && !tail) tail = `<div class="box-foot">AI 没有从这个工作流里找到提示词或 LoRA。</div>`;
+
+    fillSlots(box, items, tail);
+    if (res.summary) box.insertAdjacentHTML("afterbegin", `<div class="ai-summary">${App.esc(res.summary)}</div>`);
+    box.querySelectorAll("[data-ai-lora]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const l = loras[+b.dataset.aiLora];
+        App.copy(App.loraTag(l.name, l.weight == null ? 1 : l.weight), "已复制 LoRA 调用格式");
+      }));
+    const allBtn = $("#meta-ai-lora-all");
+    if (allBtn) allBtn.addEventListener("click", () =>
+      App.copy(App.loraTags(on), `已复制 ${on.length} 个 LoRA 的调用格式，粘进 WebUI 提示词即可全部调用`));
   }
 
   function renderCharacters(chars) {
@@ -644,7 +825,16 @@
       $("#meta-send-comfy").addEventListener("click", (e) =>
         App.sendTo("comfy", { from: "meta", name: cur.name || "" }, e.currentTarget));
 
+      document.querySelectorAll("[data-meta-view]").forEach((b) =>
+        b.addEventListener("click", () => setViewMode(b.dataset.metaView)));
+      $("#meta-ai-run").addEventListener("click", runAi);
+
       /* ---- 后端推来的事件 ---- */
+      App.on("meta", "ai_result", (e) => {
+        if (!ai.job || e.job !== ai.job) return;    // 换过图了，或者是上一次请求迟到的结果
+        if (e.ok) aiDone(e.result || {}, false);
+        else aiFail(e.error || "分析失败");
+      });
       App.on("meta", "missing_row", (e) => {
         const row = missingRows.find((r) => r.idx === e.idx);
         if (!row) return;

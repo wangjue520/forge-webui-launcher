@@ -947,8 +947,18 @@
               <textarea id="meta-neg" readonly class="ta-sm"></textarea>
             </div>
             <div class="card" id="meta-boxes-card" hidden>
-              <div class="card-title">提示词文本框<span class="card-title-hint" id="meta-boxes-hint"></span></div>
+              <div class="card-title">提示词文本框<span class="card-title-hint" id="meta-boxes-hint"></span>
+                <span class="chips meta-view" title="汇总：按采样阶段拼成一条，和旧版一样；分离：每个文本框单独列出。选择会记住">
+                  <button class="chip" data-meta-view="merged">汇总</button><button class="chip" data-meta-view="split">分离</button></span></div>
               <div id="meta-boxes"></div>
+            </div>
+            <div class="card" id="meta-ai-card" hidden>
+              <div class="card-title">AI 分析<span class="card-title-hint">让 AI 读一遍工作流，理出正向 / 负向 / LoRA</span>
+                <span class="chips meta-view" title="汇总：正向、负向各一条；分离：按来源的文本框逐段列出。选择会记住">
+                  <button class="chip" data-meta-view="merged">汇总</button><button class="chip" data-meta-view="split">分离</button></span>
+                <button class="btn btn-xs btn-accent" id="meta-ai-run">开始分析</button></div>
+              <div class="hint" id="meta-ai-status">会把这张图的工作流内容（提示词、模型名、节点参数）发给你在「启动器设置 → 报错诊断」里设置的 AI 接口，按你自己的 Key 计费。</div>
+              <div id="meta-ai"></div>
             </div>
             <div class="card" id="meta-chars-card" hidden>
               <div class="card-title">角色提示词<span class="card-title-hint">NovelAI V4 / V4.5 / V5 的多角色插槽</span></div>

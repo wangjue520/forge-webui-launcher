@@ -10,6 +10,7 @@ from .common import safe_int, safe_float
 from .webui_parser import _LORA_TAG_RE
 from .civitai_air import scan_json as _scan_civitai_air, text_has_marker as _air_marker_in_text
 from .comfy_text_boxes import (collect_text_boxes as _collect_text_boxes, join_boxes as _join_boxes,
+                               find_stage_roots as _find_stage_roots,
                                is_text_key as _is_text_key, looks_like_prompt as _looks_like_prompt)
 
 # 通用回溯排除: 文件名类键名 / 文件名类值后缀 / 非文本链接键
@@ -771,6 +772,11 @@ class ComfyUIParser:
     
         meta.positive_prompt = pos_prompt.strip()
         meta.negative_prompt = neg_prompt.strip()
+        try:
+            meta.text_stages = ComfyUIParser._stage_summaries(
+                nodes, all_samplers, meta.text_boxes, meta.positive_prompt, meta.negative_prompt)
+        except Exception:
+            meta.text_stages = []
         meta.params = params
         # 内嵌 LoRA 标签: 正/负提示词文本中的 <lora:name:weight> 与图节点提取结果去重合并
         ComfyUIParser._merge_prompt_lora_tags(params, meta.positive_prompt, meta.negative_prompt)
@@ -791,6 +797,38 @@ class ComfyUIParser:
         except Exception:
             pass
         return meta
+
+    @staticmethod
+    def _stage_summaries(nodes: Dict[str, Any], all_samplers: List[Tuple[str, Dict[str, Any]]],
+                         boxes: List[Dict[str, Any]], main_pos: str, main_neg: str) -> List[Dict[str, Any]]:
+        """每个采样阶段各自拼出来的正向 / 负向 (「汇总」视图用)。
+
+        逐个文本框的清单看得清来源, 但想直接复制「二次采样用的整条正向」时还得自己拼。
+        这里按阶段把提示词拼成一条: 主采样就是已经算好的主提示词; 其余阶段照主采样
+        同样的办法回溯 (保留合并节点自己的分隔符), 回溯不到再用文本框清单里的那几段补。
+        没有任何提示词的阶段不出现在结果里。
+        """
+        main_id = str(all_samplers[0][0]) if all_samplers else None
+        out: List[Dict[str, Any]] = []
+        for label, nid, node in _find_stage_roots(nodes, all_samplers):
+            if nid == main_id:
+                pos, neg, is_main = main_pos, main_neg, True
+            else:
+                inp = ComfyUIParser._flatten_sampler_inputs(nodes, node.get("inputs") or {})
+                sides = {}
+                for pol in ("positive", "negative"):
+                    v = inp.get(pol)
+                    if isinstance(v, str):
+                        text = v
+                    elif isinstance(v, (list, tuple)) and v:
+                        text = ComfyUIParser._trace_text(nodes, v, polarity=pol)
+                    else:
+                        text = ""
+                    sides[pol] = text.strip() or _join_boxes(boxes, pol, stage=label)
+                pos, neg, is_main = sides["positive"], sides["negative"], False
+            if pos or neg:
+                out.append({"stage": label, "main": is_main, "positive": pos, "negative": neg})
+        return out
 
     @staticmethod
     def _negative_zeroed(nodes: Dict[str, Any], all_samplers: List[Tuple[str, Dict[str, Any]]]) -> bool:

@@ -1434,6 +1434,41 @@ def _api_deploy_check_dir(self, target):
     return {"ok": True, "status": "ok", "message": "目录为空或不存在，可以直接克隆到这里"}
 
 
+def _nvidia_precheck_issues(branch, issues):
+    """
+    部署预检里和 N 卡型号有关的提醒（下载几个 GB 之前说清楚）：
+      · 显卡太老，现在的 torch 都不支持 → 提醒；「驱动太旧」那条去掉（这类卡没有新驱动可升）
+      · RTX 50 系选了 Forge Classic → Classic 写死的 torch 2.3.1+cu121 没有 50 系的内核
+      · 老架构卡 → 说明会自动装 cu126 版；驱动已经带得动 CUDA 12 的话去掉「驱动太旧」那条（那是 cu130 的要求）
+    """
+    try:
+        import cuda_compat as cc
+        gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
+        if cc.is_unsupported_gpu():
+            issues = [i for i in issues if i.get("id") != "old_driver"]
+            issues.append({"level": "warn", "id": "gpu_unsupported",
+                           "text": cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu)})
+        elif cc.is_blackwell_gpu():
+            if branch == "classic":
+                issues.append({
+                    "level": "warn", "id": "classic_rtx50",
+                    "text": f"这张显卡（{gpu}）是 RTX 50 系，而 Forge Classic 固定用 torch 2.3.1（CUDA 12.1），"
+                            "里面没有 50 系能用的内核：能装上、能打开界面，但一出图就报 no kernel image。\n\n"
+                            "50 系请在上面的程序里选 Forge Neo 或 ComfyUI。"})
+        elif cc.is_legacy_gpu():
+            driver = cc.driver_cuda_version()
+            if driver and driver[0] >= 12:
+                issues = [i for i in issues if i.get("id") != "old_driver"]
+            if branch != "classic":
+                issues.append({
+                    "level": "warn", "id": "gpu_legacy",
+                    "text": f"这张显卡（{gpu}）架构比较老，新版 CUDA 的 torch 已经不支持它。不用担心——"
+                            f"部署时会自动改装老卡专用的 {cc.LEGACY_TAG} 版 torch，不需要自己处理。"})
+    except Exception:
+        pass
+    return issues
+
+
 def _api_deploy_precheck(self, target, branch, use_portable, gpu_backend=None, amd_gfx=None):
     branch, _variant = _split_deploy_key(branch)
     target = (target or "").strip()
@@ -1512,6 +1547,8 @@ def _api_deploy_precheck(self, target, branch, use_portable, gpu_backend=None, a
                 if i.get("id") == "no_nvidia":
                     i["text"] = (f"检测到的是 AMD 显卡（{amd[0]['name']}），但上面「显卡」选的是 NVIDIA。"
                                  "按 N 卡部署只能用 CPU 出图，非常慢——建议把「显卡」改成 AMD 再部署。")
+    if gpu_backend != "rocm":
+        issues = _nvidia_precheck_issues(branch, issues)
 
     has_error = any(i["level"] == "error" for i in issues)
     return {"ok": not has_error, "issues": issues, "already_installed": already_installed}
@@ -2821,9 +2858,7 @@ COMFY_REF = "master"
 COMFY_TORCH_TAG = "cu130"
 COMFY_TORCH_TAG_LEGACY = "cu126"
 
-# 名字命中这些的就是 CUDA 13 不再支持的老架构卡
-_LEGACY_GPU_RE = re.compile(
-    r"GTX?\s*(9\d\d|10\d\d)\b|TITAN\s+X|TITAN\s+V\b|Tesla\s+[PM]\d+", re.IGNORECASE)
+# 哪些卡算老架构、哪些算 50 系，统一由 cuda_compat 按显卡的计算能力判断（is_legacy_gpu 等）
 
 
 def _nvidia_gpu_names():
@@ -2851,13 +2886,15 @@ def _nvidia_gpu_names():
 
 def _pick_comfy_torch_tag(log):
     """按本机显卡和驱动选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）"""
-    names = _nvidia_gpu_names()
-    if names and any(_LEGACY_GPU_RE.search(n) for n in names):
-        log(f"[部署] 检测到老架构显卡（{'、'.join(names)}），CUDA 13 已不支持这些卡，"
-            f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
-        return COMFY_TORCH_TAG_LEGACY
     try:
         import cuda_compat as cc
+        gpu = "、".join(cc.gpu_names())
+        if cc.is_unsupported_gpu():
+            log("[部署] 注意：" + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " ") + "\n")
+        elif cc.is_legacy_gpu():
+            log(f"[部署] 检测到老架构显卡（{gpu}），新版 CUDA 的 torch 已不支持这些卡，"
+                f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
+            return COMFY_TORCH_TAG_LEGACY
         driver = cc.driver_cuda_version()
         tag = cc.supported_tag(COMFY_TORCH_TAG, driver)
         if tag != COMFY_TORCH_TAG:
@@ -2867,6 +2904,35 @@ def _pick_comfy_torch_tag(log):
     except Exception:
         pass
     return COMFY_TORCH_TAG
+
+
+def _env_torch_problem(py):
+    """
+    py 所在环境里已装的 CUDA 版 torch 这台电脑带不动的原因（给日志用的一句话）；没问题 / 没装返回 ""。
+    只看「能换一版 torch 解决」的情况：老架构卡配了新 torch、50 系配了老 torch、驱动带不动。
+    以前部署和「切换显卡环境」只看 torch.cuda.is_available()，而架构对不上时它照样是 True
+    （出图才报 no kernel image），于是「已安装，跳过」，启动前检查让用户重新部署也修不好。
+    """
+    try:
+        import cuda_compat as cc
+        base = os.path.dirname(os.path.abspath(py))
+        cands = [os.path.join(base, "Lib", "site-packages"),                     # 便携 / 嵌入式 Python
+                 os.path.join(os.path.dirname(base), "Lib", "site-packages")]    # venv\Scripts\python.exe
+        ver, tag = cc.installed_torch_tag([c for c in cands if os.path.isdir(c)])
+        if not ver or not tag:
+            return ""
+        gpu = "、".join(cc.gpu_names()) or "这张显卡"
+        why = cc.gpu_tag_mismatch(tag)
+        if why == "legacy":
+            return f"已装的 torch {ver}+{tag} 不支持老架构显卡（{gpu}），要换成 {cc.LEGACY_TAG} 版"
+        if why == "blackwell":
+            return f"已装的 torch {ver}+{tag} 太旧，不支持 RTX 50 系显卡（{gpu}），要换成 {cc.BLACKWELL_MIN_TAG} 及以上的版本"
+        need, driver = cc.tag_cuda(tag), cc.driver_cuda_version()
+        if not why and need and driver and driver[0] < need[0]:
+            return f"已装的 torch {ver}+{tag} 需要 CUDA {need[0]}，显卡驱动最高只支持 CUDA {cc.fmt_cuda(driver)}"
+    except Exception:
+        pass
+    return ""
 
 
 def _cached_archive_ok(path, expected_sha, log):
@@ -3210,6 +3276,15 @@ def _deploy_flow_comfy(self, target, use_portable):
                                       "torch", "torchvision", "torchaudio"],
                                  target, log, env=env, timeout=600)
             has_torch = False
+        elif has_torch and not amd_rocm.is_rocm(dcfg):
+            # CUDA 认得到不等于能出图：显卡架构和 torch 对不上时也要换装
+            why = _env_torch_problem(py)
+            if why:
+                log(f"[部署] {why}，卸载后重装 ...\n")
+                self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y",
+                                          "torch", "torchvision", "torchaudio"],
+                                     target, log, env=env, timeout=600)
+                has_torch = False
         if has_torch:
             log("[部署] torch 已安装，跳过\n")
         else:
@@ -3737,6 +3812,16 @@ def _install_cuda_torch_comfy(self, py, cwd, log, env, cfg):
     return False
 
 
+def _api_torch_restore_dismiss(self, root):
+    """启动前提示「驱动已升级，可以换回默认 torch」时用户选了「保持现状」：这个目录不再提示"""
+    try:
+        import cuda_compat as cc
+        cc.dismiss_fallback((root or "").strip())
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True}
+
+
 def _api_gpu_switch(self, target, backend, gfx=None):
     """把某个安装目录的环境切换成 N 卡（CUDA）或 A 卡（ROCm）版 torch，并更新对应实例的设置"""
     target = (target or "").strip()
@@ -3807,9 +3892,12 @@ def _gpu_switch_flow(self, target, kind, cfg, iid):
             ok = _install_rocm_torch(self, py, cfg.get("amd_gfx"), target, log, env)
         else:
             info = amd_rocm.probe_torch(py, env=env)
-            if info.get("backend") == "cuda":
+            why = _env_torch_problem(py) if info.get("backend") == "cuda" else ""
+            if info.get("backend") == "cuda" and not why:
                 log(f"[环境] 已经是 CUDA 版 torch {info.get('version')}，不用重装\n")
             else:
+                if why:
+                    log(f"[环境] {why}，重新安装 ...\n")
                 if info.get("installed"):
                     _uninstall_torch(self, py, target, log, env)
                 if comfy:
@@ -4581,6 +4669,8 @@ def _catalog_dirs(self, role, folder=None):
     look = [dest] if dest else []
     inst = ml.instance_model_dirs(self.cfg, cm.comfy_layout)
     look += [inst[k] for k in keys if k in inst]
+    # ComfyUI 桌面版：实例自带的 models 和共享目录都算「已经下过」，免得另一边有了还重下一遍
+    look += [d for k, d, _src in ml.instance_extra_model_dirs(self.cfg, cm.comfy_layout) if k in keys]
     root = _models_root(self.cfg)
     if root and folder and not role:
         look.append(os.path.join(root, *folder.split("/")))
@@ -5003,9 +5093,29 @@ def _api_models_categories(self):
             if k in dirs:
                 cats.append({"label": label, "path": dirs[k], "is_lora": is_lora, "key": k})
         base = cm.comfy_layout(root)[0]
-        # ComfyUI 桌面版实例：「其他」分类也从共享模型目录里找
-        models_dir = comfy_desktop.model_dirs(root)[0] or (os.path.join(base, "models") if base else "")
-        if models_dir and os.path.isdir(models_dir):
+        # ComfyUI 桌面版实例：实例自带的 models 和共享目录 ComfyUI 两边都读，两边都列出来
+        # （以前每个分类只列一边，塞在另一边的模型在这里看不到）
+        desk_roots = comfy_desktop.search_roots(root)
+        src_label = {"own": "实例自带", "shared": "共享目录"}
+        if len(desk_roots) > 1:
+            own_norm = os.path.normcase(os.path.abspath(comfy_desktop.own_models_dir(root)))
+            labels = {k: (label, is_lora) for k, label, is_lora, *_ in ml.LIBRARY_CATEGORIES}
+            extras = ml.instance_extra_model_dirs(self.cfg, cm.comfy_layout)
+            both = {k for k, _d, _s in extras}
+            for c in cats:   # 两边都有的分类：原来那一条也标上是哪一边，免得列表里出现两个一样的名字
+                if c["key"] in both:
+                    c["label"] += f"（{src_label['own' if ml._under(c['path'], own_norm) else 'shared']}）"
+            for k, d, src in extras:
+                label, is_lora = labels[k]
+                name = os.path.basename(d)
+                tail = src_label[src] + (f" / {name}" if name in ("unet", "clip", "t2i_adapter") else "")
+                cats.append({"label": f"{label}（{tail}）", "path": d, "is_lora": is_lora, "key": k})
+            other_roots = [(d, f"（{src_label[s]}）") for d, s in desk_roots]
+        else:
+            other_roots = [(os.path.join(base, "models") if base else "", "")]
+        for models_dir, suffix in other_roots:
+            if not models_dir or not os.path.isdir(models_dir):
+                continue
             for name in sorted(os.listdir(models_dir)):
                 sub = os.path.join(models_dir, name)
                 if not os.path.isdir(sub) or any(_same_path(sub, c["path"]) for c in cats):
@@ -5015,7 +5125,7 @@ def _api_models_categories(self):
                 except OSError:
                     has_model = False
                 if has_model:
-                    cats.append({"label": f"其他: {name}", "path": sub, "is_lora": "lora" in name.lower(),
+                    cats.append({"label": f"其他: {name}{suffix}", "path": sub, "is_lora": "lora" in name.lower(),
                                  "key": ml.library_key_for_folder("models/" + name)})
         self._models_categories = cats
         return {"ok": True, "root": root, "categories":
@@ -7216,7 +7326,8 @@ def _trainer_gpu_torch(self):
     """按显卡推荐 PyTorch 的 CUDA 版本（nvidia-smi 只查一次）"""
     if getattr(self, "_trainer_torch_rec", None) is None:
         try:
-            self._trainer_torch_rec = lt.recommend_torch(_nvidia_gpu_names())
+            import cuda_compat as cc
+            self._trainer_torch_rec = lt.recommend_torch(cc.gpu_info())
         except Exception:
             self._trainer_torch_rec = "cu128"
     return self._trainer_torch_rec
@@ -7275,6 +7386,9 @@ def _api_trainer_deploy(self, root=None, torch="auto"):
     self._emit("deploy", "state", running=True, **self._deploy_info)
     for it in issues:   # 中文 / 空格路径：sd-scripts 等训练引擎在这种路径下容易出怪问题
         self._emit("deploy", "log", text="[提示] " + re.sub(r"\s*\n+\s*", " ", it["text"]) + "\n")
+    warn = lt.torch_warning()   # 显卡太老 / 驱动太旧：训练器的 torch 装上也用不了显卡，先说清楚
+    if warn:
+        self._emit("deploy", "log", text="[提示] " + warn + "\n")
     try:
         self._spawn(lambda: lt.deploy_flow(self, root, variant), name="trainer-deploy")
     except Exception:
@@ -7731,6 +7845,8 @@ def _api_meta_load(self, path):
         "prompt": meta["prompt"],
         "negative": meta["negative"],
         "text_boxes": meta.get("text_boxes") or [],
+        "text_stages": meta.get("text_stages") or [],
+        "can_ai": bool(meta.get("can_ai")),
         "rows": meta["rows"],
         "loras": meta["loras"],
         "characters": meta["characters"],
@@ -8466,6 +8582,8 @@ def _meta_response(meta, path):
         "prompt": meta["prompt"],
         "negative": meta["negative"],
         "text_boxes": meta.get("text_boxes") or [],
+        "text_stages": meta.get("text_stages") or [],
+        "can_ai": bool(meta.get("can_ai")),
         "rows": meta["rows"],
         "loras": meta["loras"],
         "characters": meta["characters"],
@@ -8527,6 +8645,62 @@ def _api_meta_deep(self, path):
     只在前端直读什么都没读出来时才调，属于兜底而不是主路径。
     """
     return _api_meta_load(self, path)
+
+
+def _api_meta_ai_analyze(self, force=False):
+    """
+    让 AI 分析当前这张图里的 ComfyUI 工作流（理出正向 / 负向 / LoRA / 关键参数）。
+
+    用的是报错诊断那套 AI 设置（启动器设置 → 报错诊断里填的 Key），不另外配。
+    请求要等十几秒到一分钟，放后台线程跑，结果用 meta / ai_result 事件推回去；
+    job 是这次请求的编号——用户中途换了图，前端按编号把迟到的结果丢掉。
+    同一张图同一个模型分析过就直接给上次的结果（force=True 重新分析），不重复花钱。
+    """
+    import meta_ai as mai
+    m = getattr(self, "_meta_meta", None)
+    shown = getattr(self, "_meta_current", None)
+    if m is None or not shown:
+        return {"ok": False, "error": "请先打开一张图片"}
+    if not mai.has_workflow(m):
+        return {"ok": False, "error": "这张图里没有 ComfyUI 工作流，AI 分析只支持 ComfyUI 出的图"}
+    try:
+        _ai_sync(self)      # Key 在 LoRA 训练器里改过的话先同步过来
+    except Exception:
+        pass
+    conf = dl.resolve(self.cfg)
+    if not conf:
+        return {"ok": False, "need_key": True,
+                "error": "还没有设置 AI：到「启动器设置 → 报错诊断」选一个服务商并填 API Key"}
+    try:
+        text = mai.digest(m, shown)
+    except mai.TooLarge as e:
+        return {"ok": False, "error": str(e)}
+    model = conf[2]
+    key = mai.cache_key(text, model)
+    cache = getattr(self, "_meta_ai_cache", None)
+    if cache is None:
+        cache = self._meta_ai_cache = collections.OrderedDict()
+    if not force and key in cache:
+        return {"ok": True, "cached": True, "result": cache[key], "model": model}
+
+    job = f"{time.time_ns():x}"
+
+    def work():
+        try:
+            result = mai.analyze(self.cfg, text)
+        except dl.LlmError as e:
+            self._emit("meta", "ai_result", job=job, ok=False, error=str(e))
+            return
+        except Exception as e:
+            self._emit("meta", "ai_result", job=job, ok=False, error=f"分析出错：{type(e).__name__}: {e}")
+            return
+        cache[key] = result
+        while len(cache) > 30:      # 只留最近的几十条，够在几张图之间来回看
+            cache.popitem(last=False)
+        self._emit("meta", "ai_result", job=job, ok=True, result=result)
+
+    self._spawn(work, name="meta-ai")
+    return {"ok": True, "job": job, "model": model}
 
 
 # ============================================================
@@ -10478,6 +10652,7 @@ for _name, _fn in {
     "deploy_status": _api_deploy_status,
     "deploy_gpu_detect": _api_deploy_gpu_detect,
     "gpu_switch": _api_gpu_switch,
+    "torch_restore_dismiss": _api_torch_restore_dismiss,
     "deploy_venv_check": _api_deploy_venv_check,
     "deploy_venv_delete": _api_deploy_venv_delete,
     "deploy_patch_hashlib": _api_deploy_patch_hashlib,
@@ -10565,6 +10740,7 @@ for _name, _fn in {
     "meta_load": _api_meta_load,
     "meta_parse": _api_meta_parse,
     "meta_deep": _api_meta_deep,
+    "meta_ai_analyze": _api_meta_ai_analyze,
     "meta_preview": _api_meta_preview,
     "_make_preview": _make_preview,
     "reveal_image": _api_reveal_image,

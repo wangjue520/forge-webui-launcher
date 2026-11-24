@@ -116,16 +116,11 @@ def supported(model, ver, kind):
 
 
 def sm_from_name(name):
-    """nvidia-smi 太老查不到 compute_cap 时，按显卡型号粗估架构（只用来挑默认精度）"""
-    n = (name or "").upper()
-    for key, sm in (("RTX 50", 12.0), ("RTX PRO", 12.0), ("B200", 10.0), ("B100", 10.0), ("H100", 9.0),
-                    ("H200", 9.0), ("RTX 40", 8.9), ("L40", 8.9), ("L4", 8.9), ("ADA", 8.9), ("RTX 30", 8.6),
-                    ("A100", 8.0), ("A10", 8.6), ("A40", 8.6), ("A6000", 8.6), ("RTX 20", 7.5),
-                    ("GTX 16", 7.5), ("T4", 7.5), ("TITAN RTX", 7.5), ("V100", 7.0), ("GTX 10", 6.1),
-                    ("P40", 6.1), ("P100", 6.0), ("GTX 9", 5.2)):
-        if key in n:
-            return sm
-    return None
+    """nvidia-smi 太老查不到 compute_cap 时，按显卡型号粗估架构（只用来挑默认精度）。
+    型号表和选 torch 用的是同一张（cuda_compat.sm_from_name）：以前这里自己有一份，
+    RTX 5000 Ada / Quadro RTX 5000 会被 "RTX 50" 当成 50 系，默认选上只有 50 系能跑的量化格式"""
+    import cuda_compat
+    return cuda_compat.sm_from_name(name)
 
 
 def make_ctx(kind, vram_gb=None, ram_gb=None, sm=None, gguf_node=True):

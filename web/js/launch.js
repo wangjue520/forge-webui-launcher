@@ -155,6 +155,16 @@
         ]);
         if (v === "driver") { if (issue.url) App.api.open_url(issue.url); return; }
         if (v !== "anyway") return;
+      } else if (issue.id === "torch_restore") {
+        // 驱动升级后把之前换装的兼容版 torch 换回默认版：换不换由用户定，选「保持现状」以后不再问
+        const v = await App.modal("可以换回默认的 torch 了", App.esc(issue.text), [
+          { id: "restore", label: "换回并启动", kind: "primary" },
+          { id: "keep", label: "保持现状启动" },
+          { id: "cancel", label: "取消" },
+        ]);
+        if (v === "keep") {
+          try { await App.api.torch_restore_dismiss(issue.root || root); } catch (e) { /* 记不下来就下次再问 */ }
+        } else if (v !== "restore") return;
       } else if (issue.id === "port_occupied") {
         const v = await App.modal("检测到残留进程", App.esc(issue.text), [
           { id: "kill", label: "结束并启动", kind: "danger" },
