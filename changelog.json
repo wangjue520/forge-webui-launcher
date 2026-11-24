@@ -1,6 +1,17 @@
 {
   "entries": [
     {
+      "version": "3.1.035",
+      "count": 213,
+      "date": "2026-11-24",
+      "title": "图片信息页：ComfyUI 工作流里的每个提示词文本框都单独列出来",
+      "items": [
+        "图片信息页新增「提示词文本框」：ComfyUI 工作流里拉了多个文本框时逐个列出，写明来自哪个节点、是正向还是负向、用在主采样 / 二次采样 / Detailer 哪一步，每个框可以单独复制；没接到采样器或被静音的框也会列出，并标明这张图没用到",
+        "能读到更多接法：文本拼接、字符串 / Primitive 节点、通配符、翻译和反推 / LLM 节点，SDXL / Flux / SD3 / HiDream 的多格编码节点，Reroute、Set / Get 节点和子图；没见过的第三方节点也会按连线和内容识别",
+        "修好几种读错的情况：Efficient Loader 的正向被读成负向、SDXL Prompt Styler 的负向读成正向、负向接了 ConditioningZeroOut 时负向栏被填进别的正向文本、直接拖入 Kontext / Qwen Edit 工作流 .json 时提示词读成了选项值"
+      ]
+    },
+    {
       "version": "3.1.033",
       "count": 211,
       "date": "2026-11-21",

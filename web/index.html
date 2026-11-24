@@ -946,6 +946,10 @@
               <div class="card-title">负向提示词</div>
               <textarea id="meta-neg" readonly class="ta-sm"></textarea>
             </div>
+            <div class="card" id="meta-boxes-card" hidden>
+              <div class="card-title">提示词文本框<span class="card-title-hint" id="meta-boxes-hint"></span></div>
+              <div id="meta-boxes"></div>
+            </div>
             <div class="card" id="meta-chars-card" hidden>
               <div class="card-title">角色提示词<span class="card-title-hint">NovelAI V4 / V4.5 / V5 的多角色插槽</span></div>
               <div id="meta-chars"></div>
@@ -988,7 +992,7 @@
               <button class="btn btn-sm" id="meta-copy-neg" disabled>复制负向</button>
               <button class="btn btn-sm btn-accent" id="meta-copy-all" disabled>复制全部原始参数</button>
             </div>
-            <div class="hint">支持的来源：A1111 / Forge / reForge、ComfyUI（真正遍历工作流图去追提示词和 LoRA 链，不是按节点名硬猜；覆盖 Flux / SD3.5 / Qwen-Image 等新模型与 WAN / HunyuanVideo / LTXV 视频工作流，以及 easy-use / Efficiency / rgthree / Inspire / Impact 等主流节点包）、NovelAI V3 到 V5（含多角色插槽）、Fooocus / SwarmUI / InvokeAI / Draw Things / Easy Diffusion，以及隐写 PNG（参数藏在像素里、文本块被剥掉的那种）。LoRA 训练集里只有同名 .txt 的图也会一并读出来。<br>读不出参数的常见原因是截图、微信/QQ 传输、网站二次压缩——这些会把元数据整段抹掉，隐写那条路也救不回来。</div>
+            <div class="hint">支持的来源：A1111 / Forge / reForge、ComfyUI（真正遍历工作流图去追提示词和 LoRA 链，不是按节点名硬猜；覆盖 Flux / SD3.5 / Qwen-Image 等新模型与 WAN / HunyuanVideo / LTXV 视频工作流，以及 easy-use / Efficiency / rgthree / Inspire / Impact 等主流节点包；工作流里有多个文本框时，会在「提示词文本框」里逐个列出，没接线的也在）、NovelAI V3 到 V5（含多角色插槽）、Fooocus / SwarmUI / InvokeAI / Draw Things / Easy Diffusion，以及隐写 PNG（参数藏在像素里、文本块被剥掉的那种）。LoRA 训练集里只有同名 .txt 的图也会一并读出来。<br>读不出参数的常见原因是截图、微信/QQ 传输、网站二次压缩——这些会把元数据整段抹掉，隐写那条路也救不回来。</div>
           </div>
         </div>
       </section>

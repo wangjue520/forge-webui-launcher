@@ -61,6 +61,11 @@ class ImageMetadata:
     # 但这几个键属于"编辑器自有字段"(存成非 NAI 形态时必须丢弃, 否则下次读取
     # NAI 分支会抢先命中、旧提示词复活), 所以得显式带一份原值过来
     source_chunks: Dict[str, str] = field(default_factory=dict)
+    # ComfyUI 图里的每一个提示词文本框 (见 comfy_text_boxes.collect_text_boxes):
+    # positive_prompt / negative_prompt 只是主采样器拼出来的那一条, 一张图里有多个
+    # 文本框 (分段拼接 / 二次采样 / Detailer / 没接上的备用框) 时全部列在这里。
+    # 只读展示用, 写回不看它。仅 ComfyUI 读路径填充, 其他来源为空
+    text_boxes: List[Dict[str, Any]] = field(default_factory=list)
 
 @dataclass
 class LoraTagFrequency:

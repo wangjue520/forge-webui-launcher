@@ -100,6 +100,7 @@
     $("#meta-prompt").value = "";
     $("#meta-neg").value = "";
     $("#meta-settings tbody").innerHTML = "";
+    $("#meta-boxes").innerHTML = ""; $("#meta-boxes-card").hidden = true;
     $("#meta-chars").innerHTML = ""; $("#meta-chars-card").hidden = true;
     $("#meta-loras").innerHTML = ""; $("#meta-lora-card").hidden = true;
     $("#meta-civitai").innerHTML = ""; $("#meta-civitai-card").hidden = true;
@@ -234,6 +235,7 @@
     $("#meta-settings tbody").innerHTML = (r.rows || [])
       .map(([k, v]) => `<tr><td class="dim" style="white-space:nowrap">${App.esc(k)}</td><td>${App.esc(v)}</td></tr>`)
       .join("");
+    renderBoxes(r.text_boxes, r);
     renderCharacters(r.characters);
     renderLoras(r.loras);
     renderCivitai(r.civitai);
@@ -290,6 +292,51 @@
     if (r.from_sidecar) bits.push(`<span class="dim">内容来自同名 .txt，不是图片里读出来的</span>`);
     box.innerHTML = bits.join("　");
     box.hidden = false;
+  }
+
+  /* ComfyUI 工作流里的每个文本框单独列一项。
+   *
+   * 上面「正向 / 负向」两栏是主采样器实际拼出来的那一条；工作流里拉了好几个
+   * 文本框时（分段拼接、二次采样和 Detailer 各有各的提示词、放在一边没接线的
+   * 备用框），只看那两栏分不清哪段来自哪个框，没接线的框更是完全看不到。
+   * 这里每个框标明：正负、节点标题 / 类型 / 编号 / 字段、用在哪个采样阶段，
+   * 没参与出图的压淡显示并写明原因，每个框可以单独复制。 */
+  const BOX_POL = { positive: "正向", negative: "负向", both: "正向 + 负向", unknown: "正负未知" };
+  const BOX_IDLE = {
+    floating: "没有接到采样器，这张图没用到",
+    disabled: "节点被静音 / 旁路，这张图没用到",
+  };
+
+  function renderBoxes(boxes, r) {
+    const card = $("#meta-boxes-card"), box = $("#meta-boxes");
+    boxes = boxes || [];
+    // 最普通的图（一个正向框 + 一个负向框，内容就是上面两栏）不再重复显示一遍
+    const shown = [(r.prompt || "").trim(), (r.negative || "").trim()];
+    const trivial = boxes.length <= 2 && boxes.every((b) =>
+      b.status === "used" && !b.note && !b.guess && b.stages.length <= 1 && shown.indexOf((b.text || "").trim()) >= 0);
+    if (!boxes.length || trivial) { card.hidden = true; box.innerHTML = ""; return; }
+    card.hidden = false;
+
+    const idleN = boxes.filter((b) => BOX_IDLE[b.status]).length;
+    $("#meta-boxes-hint").textContent = `工作流里共 ${boxes.length} 个文本框` +
+      (idleN ? `，其中 ${idleN} 个没参与出图` : "") + "；上面两栏是主采样器实际拼出来的那一条";
+
+    box.innerHTML = boxes.map((b, i) => {
+      const idle = BOX_IDLE[b.status];
+      const tag = `<span class="box-tag" data-pol="${App.esc(b.polarity)}"` +
+        (b.guess ? ` title="连线和字段名都看不出正负，这是按内容里的关键词猜的"` : "") +
+        `>${BOX_POL[b.polarity] || BOX_POL.unknown}${b.guess ? "？" : ""}</span>`;
+      const where = [b.title, `${b.class_type || "节点"} #${b.node_id}`, b.field].filter(Boolean).join(" · ");
+      const stage = idle ? idle : (b.stages || []).join(" / ");
+      const note = b.note ? `<div class="char-neg">${App.esc(b.note)}</div>` : "";
+      return `<div class="char-slot${idle ? " box-idle" : ""}">
+        <div class="char-head">${tag}<span class="box-where">${App.esc(where)}</span>` +
+        (stage ? `<span class="box-stage">${App.esc(stage)}</span>` : "") +
+        (b.text ? `<button class="btn btn-xs" data-box-copy="${i}">复制</button>` : "") + `</div>` +
+        (b.text ? `<div class="char-body box-body">${App.esc(b.text)}</div>` : "") + note + `</div>`;
+    }).join("");
+    box.querySelectorAll("[data-box-copy]").forEach((btn) =>
+      btn.addEventListener("click", () => App.copy(boxes[+btn.dataset.boxCopy].text || "", "已复制这个文本框的内容")));
   }
 
   function renderCharacters(chars) {

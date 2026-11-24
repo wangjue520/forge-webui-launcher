@@ -940,6 +940,22 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
   color: var(--text-faint); word-break: break-word;
 }
 
+/* ComfyUI 的逐个文本框：外框沿用角色卡的 .char-slot，只补正负标签和多行正文 */
+.box-tag {
+  padding: 1px 6px; border: 1px solid currentColor;
+  font-weight: 700; white-space: nowrap;
+}
+.box-tag[data-pol="positive"] { color: var(--ok); }
+.box-tag[data-pol="negative"] { color: var(--bad); }
+.box-tag[data-pol="both"] { color: var(--ink); }
+.box-where { color: var(--ink); min-width: 0; overflow-wrap: anywhere; }
+.box-stage { white-space: nowrap; }
+/* 提示词里的换行有意义（分段写的），不能被折叠；太长的框自己滚，别把整页撑长 */
+.box-body { white-space: pre-wrap; max-height: 220px; overflow: auto; }
+/* 没参与出图的框压淡一档，和真正生效的区分开 */
+.box-idle { opacity: .72; }
+.box-idle .box-where { color: var(--text-faint); }
+
 /* 模态框里展示多行说明（WD14 下载失败的排查步骤等） */
 .modal-pre {
   margin: 0; max-height: 46vh; overflow: auto; white-space: pre-wrap;

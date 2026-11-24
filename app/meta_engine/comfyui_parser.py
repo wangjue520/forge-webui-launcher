@@ -9,6 +9,8 @@ from .metadata_types import SamplerParameters, ImageMetadata
 from .common import safe_int, safe_float
 from .webui_parser import _LORA_TAG_RE
 from .civitai_air import scan_json as _scan_civitai_air, text_has_marker as _air_marker_in_text
+from .comfy_text_boxes import (collect_text_boxes as _collect_text_boxes, join_boxes as _join_boxes,
+                               is_text_key as _is_text_key, looks_like_prompt as _looks_like_prompt)
 
 # 通用回溯排除: 文件名类键名 / 文件名类值后缀 / 非文本链接键
 _NON_PROMPT_KEY_RE = re.compile(r"(_name|_path|_file|_prefix|_dir|^file|^path|^lora|^vae|^ckpt|^unet|^temp_str|^random_template)", re.I)
@@ -105,6 +107,191 @@ class ComfyUIParser:
                 return None
         return data if isinstance(data, dict) else None
 
+    # workflow 格式的 widgets_values 只有值没有键名。这几类节点一个节点上有多格文本,
+    # 按「字符串部件出现的顺序」对上真实字段名 (类名小写 → 字段名序列)。
+    # 不在表里的文本节点走通用逻辑: 第一格记作 text, 其余像提示词的记作 text_2 / text_3
+    _WF_TEXT_WIDGETS = {
+        "cliptextencodesdxl": ("text_g", "text_l"),
+        "cliptextencodeflux": ("clip_l", "t5xxl"),
+        "cliptextencodesd3": ("clip_l", "clip_g", "t5xxl"),
+        "cliptextencodehidream": ("clip_l", "clip_g", "t5xxl", "llama"),
+        "cliptextencodehunyuandit": ("bert", "mt5xl"),
+        "sdxlpromptstyler": ("text_positive", "text_negative"),
+        "wanvideotextencode": ("positive_prompt", "negative_prompt"),
+        "stringconcatenate": ("string_a", "string_b", "delimiter"),
+        # ComfyUI 自带的字符串工具节点: 查找串 / 正则 / JSON 键名不是提示词, 得和正文分开
+        "stringreplace": ("string", "find", "replace"),
+        "regexreplace": ("string", "regex_pattern", "replace"),
+        "regexextract": ("string", "regex_pattern"),
+        "regexmatch": ("string", "regex_pattern"),
+        "stringcontains": ("string", "substring"),
+        "stringcompare": ("string_a", "string_b", "mode"),
+        "stringtrim": ("string", "mode"),
+        "caseconverter": ("string", "mode"),
+        "jsonextractstring": ("json_string", "key"),
+        # 下面两个的文本全靠连线进来, 部件里只有分隔符: 登记进来是为了不让分隔符被当成 text
+        "text concatenate": ("delimiter",),
+        "cr text concatenate": ("separator",),
+    }
+
+    @staticmethod
+    def _flatten_subgraphs(workflow: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+        """把 workflow 里的子图 (definitions.subgraphs) 展开成一层节点列表; 没有子图返回 None。
+
+        新版 ComfyUI 的子图在 workflow 里是「实例节点 (type = 子图 uuid) + 定义」两部分,
+        定义里的节点 id / 连线 id 是子图内部的编号, 和外层不通。不展开的话, 装在子图里的
+        文本框和采样器互相看不见。展开规则与 ComfyUI 前端生成 prompt 时一致:
+          · 内部节点的 id 变成 "实例id:内部id" (嵌套时逐层加前缀)
+          · 内部连线起点是子图输入口 (-10) → 换成实例节点对应输入槽在外层的上游;
+            该槽没接线但提升成了实例上的部件 → 用实例上填的值
+          · 外层连线起点是实例节点 → 换成接到子图输出口 (-20) 的那个内部节点
+        每个展开后的输入槽带上 "_src": [上游id, 槽位] 或 "_value": 字面值, 由调用方直接使用。
+        结构不符合预期时尽量跳过出问题的那一处, 不抛异常。
+        """
+        defs_raw = (workflow.get("definitions") or {}).get("subgraphs") if isinstance(workflow.get("definitions"), dict) else None
+        if not isinstance(defs_raw, list):
+            return None
+        defs = {d["id"]: d for d in defs_raw if isinstance(d, dict) and isinstance(d.get("id"), str)}
+        if not defs:
+            return None
+
+        def parse_links(raw: Any) -> Dict[Any, Tuple[Any, Any, Any, Any]]:
+            # {连线id: (起点节点, 起点槽, 终点节点, 终点槽)}; 外层是数组形式, 子图定义里是对象形式
+            out: Dict[Any, Tuple[Any, Any, Any, Any]] = {}
+            for link in raw if isinstance(raw, list) else []:
+                if isinstance(link, (list, tuple)) and len(link) >= 5:
+                    out[link[0]] = (link[1], link[2], link[3], link[4])
+                elif isinstance(link, dict) and link.get("id") is not None:
+                    out[link["id"]] = (link.get("origin_id"), link.get("origin_slot", 0),
+                                       link.get("target_id"), link.get("target_slot", 0))
+            return out
+
+        def dict_list(v: Any) -> List[Any]:
+            return v if isinstance(v, list) else []
+
+        def make_scope(sub_def: Optional[Dict[str, Any]], nodes_raw: Any, links_raw: Any, prefix: str,
+                       parent: Any, instance: Any, depth: int, off_mode: Any) -> Dict[str, Any]:
+            # off_mode: 外层实例被静音(2) / 旁路(4) 时, 里面的节点一并视为停用
+            return {"def": sub_def or {},
+                    "nodes": {n["id"]: n for n in dict_list(nodes_raw)
+                              if isinstance(n, dict) and n.get("id") is not None},
+                    "links": parse_links(links_raw), "prefix": prefix, "parent": parent,
+                    "instance": instance, "depth": depth, "off_mode": off_mode, "children": {}}
+
+        def child_scope(scope: Dict[str, Any], node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+            nid = node["id"]
+            if nid not in scope["children"]:
+                d = defs.get(node.get("type"))
+                off = node.get("mode") if node.get("mode") in (2, 4) else scope["off_mode"]
+                # depth 上限防「子图定义互相引用」的死循环
+                scope["children"][nid] = make_scope(
+                    d, d.get("nodes"), d.get("links"), f"{scope['prefix']}{nid}:", scope, node,
+                    scope["depth"] + 1, off
+                ) if (d and scope["depth"] < 8) else None
+            return scope["children"][nid]
+
+        def widget_backed_inputs(scope: Dict[str, Any]) -> List[int]:
+            """子图定义里「接到内部某个部件」的输入口序号 (升序)。这些输入口在实例节点上
+            显示成部件, 实例的 widgets_values 就按这个顺序存值。"""
+            if "_wb" not in scope:
+                backed = set()
+                for o, os_, t, ts in scope["links"].values():
+                    if o != -10 or not isinstance(os_, int):
+                        continue
+                    tslots = dict_list((scope["nodes"].get(t) or {}).get("inputs"))
+                    if isinstance(ts, int) and 0 <= ts < len(tslots) and isinstance(tslots[ts], dict) \
+                            and isinstance(tslots[ts].get("widget"), dict):
+                        backed.add(os_)
+                scope["_wb"] = sorted(backed)
+            return scope["_wb"]
+
+        def resolve(scope: Dict[str, Any], origin: Any, oslot: Any, hops: int = 0) -> Tuple[str, Any]:
+            """连线起点 → ("src", [展开后的节点id, 槽位]) / ("value", 字面值) / ("none", None)"""
+            if hops > 64:
+                return "none", None
+            if origin == -10:      # 子图输入口: 到外层找实例节点上同名的输入槽接的是谁
+                inst, parent = scope["instance"], scope["parent"]
+                if inst is None or parent is None or not isinstance(oslot, int):
+                    return "none", None
+                # 实例节点的 inputs 不一定列全、顺序也不保证和定义一致 (真实模板里只列了
+                # 一部分), 所以按名字对, 不能按序号对
+                def_inputs = dict_list(scope["def"].get("inputs"))
+                name = def_inputs[oslot].get("name") if (0 <= oslot < len(def_inputs)
+                                                         and isinstance(def_inputs[oslot], dict)) else None
+                for s in dict_list(inst.get("inputs")):
+                    if isinstance(s, dict) and name is not None and s.get("name") == name \
+                            and s.get("link") in parent["links"]:
+                        po, ps, _t, _ts = parent["links"][s["link"]]
+                        return resolve(parent, po, ps, hops + 1)
+                # 没接线: 这个输入口提升成了实例上的部件, 值填在实例节点上
+                named = inst.get("widgets_values_named")
+                if isinstance(named, dict) and name in named:
+                    return "value", named[name]
+                wv = dict_list(inst.get("widgets_values"))
+                proxies = (inst.get("properties") or {}).get("proxyWidgets") if isinstance(inst.get("properties"), dict) else None
+                idx = None
+                if isinstance(proxies, list) and proxies and len(proxies) == len(wv):
+                    # 新版前端: properties.proxyWidgets 逐项对应 widgets_values,
+                    # ["-1", 输入口名] 是提升上来的子图输入, [内部节点id, 部件名] 的值存在内部节点上
+                    for i, p in enumerate(proxies):
+                        if isinstance(p, (list, tuple)) and len(p) >= 2 and str(p[0]) == "-1" and p[1] == name:
+                            idx = i
+                            break
+                else:
+                    # 没有 proxyWidgets 的版本: 按「接到内部部件的输入口」的先后顺序存值
+                    backed = widget_backed_inputs(scope)
+                    if oslot in backed and len(backed) == len(wv):
+                        idx = backed.index(oslot)
+                if idx is not None and isinstance(wv[idx], (str, int, float)):
+                    return "value", wv[idx]
+                return "none", None
+            node = scope["nodes"].get(origin)
+            if node is None:
+                return "none", None
+            if node.get("type") in defs:   # 起点是另一个子图实例: 钻进去找接到它输出口的内部节点
+                sub = child_scope(scope, node)
+                if sub is None:
+                    return "none", None
+                # 输出槽和定义的输出口始终按序号一一对应 (输出常有重名, 不能按名字对)
+                for o, os_, t, ts in sub["links"].values():
+                    if t == -20 and ts == oslot:
+                        return resolve(sub, o, os_, hops + 1)
+                return "none", None
+            return "src", [f"{scope['prefix']}{origin}", oslot]
+
+        flat: List[Dict[str, Any]] = []
+
+        def emit(scope: Dict[str, Any]) -> None:
+            for nid, node in scope["nodes"].items():
+                if node.get("type") in defs:
+                    sub = child_scope(scope, node)
+                    if sub is not None:
+                        emit(sub)
+                    continue
+                # 浅拷贝后再改: 原始 workflow 还要原样用于「复制全部原始参数」和写回, 不能动
+                copy = dict(node)
+                copy["id"] = f"{scope['prefix']}{nid}"
+                if scope["off_mode"] and node.get("mode") not in (2, 4):
+                    copy["mode"] = scope["off_mode"]
+                slots = []
+                for s in node.get("inputs") if isinstance(node.get("inputs"), list) else []:
+                    if not isinstance(s, dict):
+                        slots.append(s)
+                        continue
+                    s2 = dict(s)
+                    s2.pop("link", None)
+                    if s.get("link") in scope["links"]:
+                        o, os_, _t, _ts = scope["links"][s["link"]]
+                        kind, val = resolve(scope, o, os_)
+                        if kind == "src": s2["_src"] = val
+                        elif kind == "value": s2["_value"] = val
+                    slots.append(s2)
+                copy["inputs"] = slots
+                flat.append(copy)
+
+        emit(make_scope(None, workflow.get("nodes"), workflow.get("links"), "", None, None, 0, None))
+        return flat
+
     @staticmethod
     def _workflow_to_nodes(workflow: Dict[str, Any]) -> Dict[str, Any]:
         """将 ComfyUI 前端 workflow 格式 (nodes + links) 转换为标准后端 nodes 节点图"""
@@ -114,6 +301,12 @@ class ComfyUIParser:
         links_list = workflow.get("links", [])
         if not isinstance(nodes_list, list):
             return {}
+        try:
+            flat_nodes = ComfyUIParser._flatten_subgraphs(workflow)
+        except Exception:
+            flat_nodes = None   # 子图结构解析不了就当没有子图, 外层节点照常转译
+        if flat_nodes is not None:
+            nodes_list, links_list = flat_nodes, []
 
         links_map: Dict[Any, List[Any]] = {}
         for link in links_list:
@@ -365,21 +558,62 @@ class ComfyUIParser:
                         inputs.setdefault("s1", nums[2])
                         inputs.setdefault("s2", nums[3])
                 elif not any(nk in clow for nk in ("note", "markdown")) and any(k in clow for k in ("cliptextencode", "prompt", "text", "string", "caption", "textarea", "wildcard")):
-                    for item in wv:
-                        if isinstance(item, str) and item.strip() and not _NON_PROMPT_VAL_RE.search(item.strip()):
-                            inputs.setdefault("text", item)
-                            break
+                    names = ComfyUIParser._WF_TEXT_WIDGETS.get(clow)
+                    if names:
+                        # 多文本框节点: 字符串部件按出现顺序对上真实字段名 (空串也占位, 否则会错位),
+                        # 这样 text_g/text_l、clip_l/t5xxl 每一格都读得到, 而不是只留第一格
+                        for nm, item in zip(names, [v for v in wv if isinstance(v, str)]):
+                            inputs.setdefault(nm, item)
+                    else:
+                        # 类名里的 text 只是 Kontext / Context 的一部分时 (FluxKontextMultiReferenceLatentMethod
+                        # 的部件是下拉选项 "index_timestep_zero"), 第一格得像句子才当提示词,
+                        # 否则这个选项值会被一路回溯成主提示词
+                        by_luck = not any(k in clow.replace("kontext", "").replace("context", "") for k in (
+                            "cliptextencode", "prompt", "text", "string", "caption", "textarea", "wildcard"))
+                        extra = 2
+                        for item in wv:
+                            # 纯标点 (合并节点的分隔符 ", ") 不是提示词, 不能占掉 text
+                            if not (isinstance(item, str) and re.search(r"\w", item)) \
+                                    or _NON_PROMPT_VAL_RE.search(item.strip()):
+                                continue
+                            if by_luck and not _looks_like_prompt(item):
+                                continue
+                            if "text" not in inputs:
+                                inputs["text"] = item
+                            elif _looks_like_prompt(item) and item != inputs["text"]:
+                                # 同一个节点上的第二、三格文本 (WAS Text String 有四格): 主提示词仍只取
+                                # text, 这几格留给文本框清单逐个列出
+                                inputs.setdefault(f"text_{extra}", item)
+                                extra += 1
 
             # 2. 槽位连线输入
-            for inp_slot in n.get("inputs", []) or []:
+            for slot_idx, inp_slot in enumerate(n.get("inputs", []) or []):
                 if isinstance(inp_slot, dict):
-                    name = inp_slot.get("name")
+                    # Reroute 的输入槽名字是空串: 不给个占位名这条线就丢了, 被 Reroute 隔开的
+                    # 文本框全部追不到
+                    name = inp_slot.get("name") or f"_in{slot_idx}"
                     label = str(inp_slot.get("label") or "").lower()
-                    link_id = inp_slot.get("link")
-                    if link_id in links_map:
-                        if name: inputs.setdefault(name, links_map[link_id])  # 同名槽位先到先得, 后者不覆盖
-                        if label in ("positive", "negative", "model", "clip", "vae", "latent"):
-                            inputs.setdefault(label, links_map[link_id])
+                    # 子图展开时已经解析好的上游 (_src) / 提升到子图实例上的部件值 (_value)
+                    if "_value" in inp_slot:
+                        inputs[name] = inp_slot["_value"]
+                        continue
+                    src = inp_slot.get("_src")
+                    if src is None:
+                        link_id = inp_slot.get("link")
+                        if link_id not in links_map:
+                            continue
+                        src = links_map[link_id]
+                    if isinstance(inputs.get(name), str) and (_is_text_key(name) or (
+                            isinstance(inp_slot.get("widget"), dict)
+                            and not re.search(r"_name$|^sampler|^scheduler", name))):
+                        # 字符串部件转成了输入并接了线: 部件里留的是旧值, 以连线为准。
+                        # (采样器名 / 模型名这类下拉值保持原样: 它们的上游通常是 Primitive,
+                        # 值和部件里留的一致, 改走连线反而可能取不到)
+                        inputs[name] = src
+                    else:
+                        inputs.setdefault(name, src)  # 同名槽位先到先得, 后者不覆盖
+                    if label in ("positive", "negative", "model", "clip", "vae", "latent"):
+                        inputs.setdefault(label, src)
 
             mode = n.get("mode", 0)
             nodes[nid] = {
@@ -491,11 +725,43 @@ class ComfyUIParser:
                         else ComfyUIParser._trace_text(nodes, v, polarity="negative")
                 params.refiners.append(refiner)
             
+        # 逐个文本框清单: 主提示词只是主采样器拼出来的那一条, 分段拼接 / 二次采样 /
+        # Detailer / 没接上的备用框在这里各占一项。它是附加信息, 出任何岔子都不能
+        # 连累上面已经拿到的主结果, 所以整个包在 try 里
+        try:
+            meta.text_boxes = _collect_text_boxes(nodes, meta.raw_workflow_json, all_samplers)
+        except Exception:
+            meta.text_boxes = []
+
         # 兜底查找: 正/负各自补齐
         if not pos_prompt or not neg_prompt:
             fb_pos, fb_neg = ComfyUIParser._fallback_scan_prompts(nodes)
-            pos_prompt, neg_prompt = pos_prompt or fb_pos, neg_prompt or fb_neg
-                
+            # 兜底是全图扫描按标题和关键词猜的。工作流里有好几个文本框、负向又是空的
+            # (Flux / Z-Image 常把负向接到 ConditioningZeroOut) 时, 它会把另一个正向框
+            # 当成负向填进来。文本框清单里已经确认接在另一极性上的文本不能拿来补这一边;
+            # 负向明确被清零时也不补
+            used_pos = {b["text"] for b in meta.text_boxes
+                        if b.get("status") == "used" and b.get("polarity") in ("positive", "both")}
+            used_neg = {b["text"] for b in meta.text_boxes
+                        if b.get("status") == "used" and b.get("polarity") in ("negative", "both")}
+            if not pos_prompt and fb_pos not in used_neg:
+                pos_prompt = fb_pos
+            if not neg_prompt and fb_neg not in used_pos \
+                    and not ComfyUIParser._negative_zeroed(nodes, all_samplers):
+                neg_prompt = fb_neg
+        # 上面两层都没拿到 (文本填在名单外的字段名里 / 条件走的不是 positive·negative 键):
+        # 用文本框清单里确认接到主采样器的那几段补上, 不覆盖已有结果
+        if not pos_prompt: pos_prompt = _join_boxes(meta.text_boxes, "positive")
+        if not neg_prompt: neg_prompt = _join_boxes(meta.text_boxes, "negative")
+        if not pos_prompt and not all_samplers:
+            # 图里没有采样器 (整张图由一个云端 API 节点生成): 提示词填在那个节点的
+            # prompt 字段上, 字段名常带前缀 ("model.prompt"), 上面的固定字段表认不出
+            for b in meta.text_boxes:
+                if "prompt" in b.get("field", "").lower() and "system" not in b["field"].lower() \
+                        and b.get("polarity") != "negative" and b.get("text"):
+                    pos_prompt = b["text"]
+                    break
+
         if not params.size: params.size = ComfyUIParser._find_any_latent_size(nodes)
         if not params.model_name:
             m_name, loras = ComfyUIParser._find_any_model_and_loras(nodes)
@@ -525,6 +791,18 @@ class ComfyUIParser:
         except Exception:
             pass
         return meta
+
+    @staticmethod
+    def _negative_zeroed(nodes: Dict[str, Any], all_samplers: List[Tuple[str, Dict[str, Any]]]) -> bool:
+        """主采样器的负向条件是不是直接来自 ConditioningZeroOut (= 明确没有负向提示词)"""
+        if not all_samplers:
+            return False
+        inp = ComfyUIParser._flatten_sampler_inputs(nodes, all_samplers[0][1].get("inputs") or {})
+        link = inp.get("negative")
+        if not (isinstance(link, (list, tuple)) and link):
+            return False
+        src = nodes.get(str(link[0]))
+        return isinstance(src, dict) and "conditioningzeroout" in str(src.get("class_type", "")).lower()
 
     @staticmethod
     def _merge_prompt_lora_tags(params: SamplerParameters, pos_prompt: str, neg_prompt: str) -> None:
@@ -606,6 +884,9 @@ class ComfyUIParser:
             if "positive" not in cur and "negative" not in cur \
                     and isinstance(cur.get("conditioning"), (list, tuple)):
                 flat.setdefault("positive", cur["conditioning"])
+            # DualCFGGuider (HiDream E1 / 图像编辑类): 只有 negative, 正向条件叫 cond1
+            if "positive" not in cur and isinstance(cur.get("cond1"), (list, tuple)):
+                flat.setdefault("positive", cur["cond1"])
 
             for k in ComfyUIParser._ALIAS_INPUT_KEYS:
                 v = cur.get(k)
@@ -622,6 +903,8 @@ class ComfyUIParser:
                 if "positive" not in sub and "negative" not in sub \
                         and isinstance(sub.get("conditioning"), (list, tuple)):
                     flat.setdefault("positive", sub["conditioning"])
+                if "positive" not in sub and isinstance(sub.get("cond1"), (list, tuple)):
+                    flat.setdefault("positive", sub["cond1"])
 
                 for sk, sv in sub.items():
                     # 别名键本身不落地为最终值 (嵌套别名会让 _resolve_* 多穿一层拿到错误值);
@@ -1034,14 +1317,21 @@ class ComfyUIParser:
                 return ComfyUIParser._trace_text(nodes, inp["llm_hidden_states"], visited, depth + 1, polarity=polarity)
 
         # 0e. 显式空字符串控件守卫: 若文本编码节点控件显式填写为空串, 直接返回空, 防止回退到图像/蒙版链接
+        #     文本部件被转成输入并接了线时不适用: 部件里残留的空串是旧值, 真正的文本在上游
         if any(k in clow for k in ("textencode", "cliptext", "prompt", "text")) and not any(nk in clow for nk in ("note", "markdown")):
             wv = inp.get("_widgets_values")
-            if isinstance(wv, list) and len(wv) > 0 and wv[0] == "":
+            if isinstance(wv, list) and len(wv) > 0 and wv[0] == "" \
+                    and not isinstance(inp.get("text"), (list, tuple)):
                 return ""
 
         # 0f. 节点同时持有 positive 与 negative 输入链接时按极性严格分流 (如 Inpaint/FaceDetailer/自定义条件路由节点)
+        #     调用方给了极性就以它为准, 槽位号只在极性未知时才拿来猜: Efficient Loader 的
+        #     正向条件在 1 号输出槽, 按「1 号槽 = 负向」猜会把正向读成负向 (正负两栏都是负向词)
         if "positive" in inp and "negative" in inp:
-            eff_k = "negative" if (slot == 1 or polarity == "negative") else "positive"
+            if polarity in ("positive", "negative"):
+                eff_k = polarity
+            else:
+                eff_k = "negative" if slot == 1 else "positive"
             if isinstance(inp[eff_k], (list, tuple)):
                 return ComfyUIParser._trace_text(nodes, inp[eff_k], visited, depth + 1, polarity=eff_k)
             elif isinstance(inp[eff_k], str) and inp[eff_k].strip():
@@ -1115,11 +1405,13 @@ class ComfyUIParser:
                     return "\n".join(dict.fromkeys(parts))
 
         # 4. 直接文本字段 (用户填写的提示词控件, 含第三方与中文字段名)
+        #    字段的正负看整个键名而不是只看开头: text_positive / text_negative (SDXL Prompt Styler)
+        #    开头都是 text, 只看开头的话取负向时会先命中 text_positive, 负向栏读出正向词
         if polarity == "positive":
-            target_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if not any(k.lower().startswith(nk) for nk in ("negative", "neg", "负"))]
+            target_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if ComfyUIParser._field_polarity(k) != "negative"]
         elif polarity == "negative":
-            neg_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if any(k.lower().startswith(nk) for nk in ("negative", "neg", "负"))]
-            other_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if not any(k.lower().startswith(pk) for pk in ("positive", "pos", "正")) and k not in neg_fields]
+            neg_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if ComfyUIParser._field_polarity(k) == "negative"]
+            other_fields = [k for k in ComfyUIParser._PROMPT_TEXT_FIELDS if ComfyUIParser._field_polarity(k) is None]
             target_fields = neg_fields + other_fields
         else:
             target_fields = ComfyUIParser._PROMPT_TEXT_FIELDS
@@ -1142,7 +1434,7 @@ class ComfyUIParser:
                                 "magicprompt", "randomgenerator", "combinatorialgenerator",
                                 "internvl", "gpt", "llava", "onebuttonprompt")):
                             dynamic_src = c
-                sub_pol = "negative" if any(k.lower().startswith(nk) for nk in ("negative", "neg", "负")) else ("positive" if any(k.lower().startswith(pk) for pk in ("positive", "pos", "正")) else polarity)
+                sub_pol = ComfyUIParser._field_polarity(k) or polarity
                 if res := ComfyUIParser._trace_text(nodes, val, visited, depth + 1, polarity=sub_pol): return res
 
         # 5. 变长/多路合并节点 (conditioning1..N / text_a..d / prompt_1..5): 取合并后提示词
@@ -1178,7 +1470,9 @@ class ComfyUIParser:
                 return v.strip()
 
         # 7. 兜底取 _widgets_values: 若文本编码器连线输入未产出文本, 取该节点自身填写的提示词控件文本 (排除 loader 与非提示词配置)
-        if any(k in clow for k in ("textencode", "cliptext", "prompt", "text")) and "loader" not in clow and not any(nk in clow for nk in ("note", "markdown")):
+        #    (类名里的 text 只是 Kontext / Context 的一部分时不算: FluxKontextMultiReferenceLatentMethod 的
+        #    部件是下拉选项 "index_timestep_zero", 不是提示词)
+        if any(k in clow.replace("kontext", "").replace("context", "") for k in ("textencode", "cliptext", "prompt", "text")) and "loader" not in clow and not any(nk in clow for nk in ("note", "markdown")):
             wv = inp.get("_widgets_values")
             if isinstance(wv, list):
                 for item in wv:
@@ -1193,6 +1487,14 @@ class ComfyUIParser:
             return f"（运行时由 {dynamic_src} 生成）"
 
         return ""
+
+    @staticmethod
+    def _field_polarity(k: str) -> Optional[str]:
+        """提示词字段名自带的正负含义 ("negative_prompt" / "text_negative" / "负向" → negative)"""
+        low = k.lower()
+        if "negative" in low or low.startswith(("neg", "负")): return "negative"
+        if "positive" in low or low.startswith(("pos", "正")): return "positive"
+        return None
 
     @staticmethod
     def _trace_dual_clip(inp: Dict[str, Any], nodes: Dict[str, Any], visited: set, depth: int = 0, polarity: Optional[str] = None) -> str:

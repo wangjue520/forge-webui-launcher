@@ -190,6 +190,50 @@ def _build_rows(m):
     return rows
 
 
+def _collect_text_boxes(m):
+    """
+    ComfyUI 工作流里的每一个提示词文本框（给前端单独渲染，可分别复制）。
+
+    "prompt" / "negative" 两栏只是主采样器实际拼出来的那一条。用户在工作流里
+    拉了好几个文本框时（分段拼接、二次采样 / Detailer 各有各的提示词、放在
+    一边没接线的备用框），只看那两栏会觉得「有些框没读出来」，所以这里每个框
+    单独列一项，说明它在哪个节点、是正向还是负向、有没有真的参与出图。
+
+    每项：{"node_id","class_type","title","field","text",
+           "polarity": positive|negative|both|unknown, "guess": bool,
+           "status": used|floating|disabled|unknown, "stages": [..], "note": str}
+    """
+    out = []
+    for b in (getattr(m, "text_boxes", None) or []):
+        if not isinstance(b, dict):
+            continue
+        ctype = b.get("class_type") or ""
+        title = b.get("title") or ""
+        note = ""
+        if b.get("stale"):
+            note = ("这段文字取自工作流里的显示节点，是上一次运行留下的输出，"
+                    "不一定是这张图实际用的那一段")
+        elif b.get("runtime") and not b.get("text"):
+            note = f"这段提示词由 {ctype} 在运行时生成，图片里没有保存结果"
+        elif b.get("runtime"):
+            note = (f"这是填在 {ctype} 上的内容；实际送进模型的文字由它在运行时生成"
+                    "（通配符展开 / 翻译 / LLM 扩写），图片里没有保存")
+        out.append({
+            "node_id": b.get("node_id") or "",
+            "class_type": ctype,
+            # 没改过名的节点标题就是类型名，重复显示一遍没有意义
+            "title": "" if title == ctype else title,
+            "field": b.get("field") or "",
+            "text": b.get("text") or "",
+            "polarity": b.get("polarity") or "unknown",
+            "guess": bool(b.get("guess")),
+            "status": b.get("status") or "unknown",
+            "stages": list(b.get("stages") or []),
+            "note": note,
+        })
+    return out
+
+
 def _collect_loras(m):
     """LoRA 列表（给前端单独渲染，带权重）。"""
     out = []
@@ -456,6 +500,7 @@ def extract_image_metadata(path):
       "tone": "webui",               # 徽章配色
       "has_meta": True,              # 是否读出了生成参数
       "prompt": str, "negative": str,
+      "text_boxes": [{...}],         # ComfyUI 的逐个文本框，见 _collect_text_boxes
       "rows": [[键, 值], ...],       # 参数表
       "loras": [{"name","weight","hash"}],
       "characters": [{"index","prompt","negative_prompt","center"}],   # NovelAI 多角色
@@ -514,6 +559,7 @@ def present(m):
         "has_meta": has_meta,
         "prompt": m.positive_prompt or "",
         "negative": m.negative_prompt or "",
+        "text_boxes": _collect_text_boxes(m),
         "rows": _build_rows(m) if has_meta else [],
         "loras": _collect_loras(m),
         "characters": list(m.character_prompts or []),
