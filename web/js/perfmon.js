@@ -1,7 +1,9 @@
 /* perfmon.js — 侧栏性能监控（所有主题通用）
  *
  *  5 项指标：GPU 温度 / GPU 占用 / 显存温度 / 显存占用 / 系统内存占用
- *  每项一行：名称 + 当前值 + 最近约 60 秒的 sparkline（纯 canvas 手写）。
+ *  每项一行：名称 + 当前值 + 最近约 60 秒的 sparkline（内联 SVG）。
+ *  以前用 canvas 画：WebView2 的 canvas 走 GPU，生图 / 训练把显卡占满、驱动重置之后，
+ *  画布偶尔整块变成白底、只剩一条灰线，要重开窗口才好（群友截图）。SVG 不依赖 GPU 画布，颜色也直接用 CSS 变量。
  *
  *  数据：前端就绪后调 api.perf_start()（后端起采样线程、返回已有历史），
  *        之后每秒收到 perf/sample 事件。
@@ -48,6 +50,14 @@
     return n;
   }
 
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function svgEl(tag, attrs, parent) {
+    var n = document.createElementNS(SVGNS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { n.setAttribute(k, attrs[k]); });
+    if (parent) parent.appendChild(n);
+    return n;
+  }
+
   function build() {
     box = el("div", "pm-box", panel);
     var head = el("div", "pm-title", box);
@@ -59,7 +69,11 @@
       el("span", "pm-label", h).textContent = m.label;
       m.valEl = el("b", "pm-val", h);
       m.valEl.textContent = "--";
-      m.cv = el("canvas", "pm-spark", row);
+      m.cv = svgEl("svg", { "class": "pm-spark", "aria-hidden": "true" }, row);
+      svgEl("line", { "class": "pm-grid" }, m.cv);
+      m.areaEl = svgEl("path", { "class": "pm-area" }, m.cv);
+      m.lineEl = svgEl("path", { "class": "pm-ln" }, m.cv);
+      m.dotEl = svgEl("rect", { "class": "pm-dot", width: 3, height: 3 }, m.cv);
       m.row = row;
       m.hist = [];
     });
@@ -87,36 +101,23 @@
   function render() {
     raf = 0;
     if (!box || document.hidden || panel.classList.contains("pm-collapsed") || panel.classList.contains("pm-off")) return;
-    var cs = getComputedStyle(panel);
-    function v(name, def) { return (cs.getPropertyValue(name) || "").trim() || def; }
-    var col = {
-      line: v("--pm-line", "#fff200"), fill: v("--pm-fill", "rgba(255,242,0,.12)"),
-      grid: v("--pm-grid", "rgba(255,255,255,.08)"), hot: v("--pm-hot", "#ff5a4e"),
-      round: v("--pm-dot", "square") === "round",
-    };
-    METRICS.forEach(function (m) { if (!m.row.hidden) draw(m, col); });
+    var round = (getComputedStyle(panel).getPropertyValue("--pm-dot") || "").trim() === "round";
+    METRICS.forEach(function (m) { if (!m.row.hidden) draw(m, round); });
   }
 
-  function draw(m, col) {
+  function f1(n) { return Math.round(n * 10) / 10; }
+
+  // 坐标直接用 CSS 像素（viewBox = 实际宽高），线宽、端点不会被拉伸
+  function draw(m, round) {
     var cv = m.cv, w = cv.clientWidth, h = cv.clientHeight;
     if (!w || !h) return;
-    // 后备缓冲按实际屏幕像素算（兼容界面缩放和高 DPI），不然会糊
-    var r = cv.getBoundingClientRect();
-    var k = (r.width / w || 1) * (window.devicePixelRatio || 1);
-    var W = Math.max(1, Math.round(w * k)), H = Math.max(1, Math.round(h * k));
-    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
-    var g = cv.getContext("2d");
-    g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, W, H);
-    g.setTransform(k, 0, 0, k, 0, 0);
-
-    // 中线（虚线网格）
-    g.strokeStyle = col.grid; g.lineWidth = 1; g.setLineDash([2, 3]);
-    g.beginPath(); g.moveTo(0, Math.round(h / 2) + .5); g.lineTo(w, Math.round(h / 2) + .5); g.stroke();
-    g.setLineDash([]);
+    cv.setAttribute("viewBox", "0 0 " + w + " " + h);
+    var mid = Math.round(h / 2) + .5;
+    var grid = cv.firstChild;
+    grid.setAttribute("x1", 0); grid.setAttribute("x2", w);
+    grid.setAttribute("y1", mid); grid.setAttribute("y2", mid);
 
     var hist = m.hist, n = hist.length;
-    if (!n) return;
     var step = (w - 3) / (N - 1), off = N - n, segs = [], cur = null;
     for (var i = 0; i < n; i++) {
       var val = hist[i];
@@ -124,30 +125,24 @@
       var t = (val - m.lo) / (m.hi - m.lo);
       t = t < 0 ? 0 : t > 1 ? 1 : t;
       if (!cur) { cur = []; segs.push(cur); }
-      cur.push([(off + i) * step + 1, 1.5 + (1 - t) * (h - 3)]);
+      cur.push([f1((off + i) * step + 1), f1(1.5 + (1 - t) * (h - 3))]);
     }
-    var last = hist[n - 1];
-    var line = last != null && last >= m.warn ? col.hot : col.line;
-    g.lineWidth = 1.3; g.lineJoin = "round"; g.lineCap = "round";
+    var area = "", line = "";
     segs.forEach(function (s) {
-      // 面积
-      g.beginPath();
-      g.moveTo(s[0][0], h);
-      s.forEach(function (p) { g.lineTo(p[0], p[1]); });
-      g.lineTo(s[s.length - 1][0], h);
-      g.closePath();
-      g.fillStyle = col.fill; g.fill();
-      // 折线
-      g.beginPath();
-      s.forEach(function (p, j) { if (j) g.lineTo(p[0], p[1]); else g.moveTo(p[0], p[1]); });
-      g.strokeStyle = line; g.stroke();
+      var pts = s.map(function (p) { return p[0] + " " + p[1]; });
+      line += "M" + pts.join("L");
+      area += "M" + s[0][0] + " " + h + "L" + pts.join("L") + "L" + s[s.length - 1][0] + " " + h + "Z";
     });
-    // 最新一点
+    m.areaEl.setAttribute("d", area);
+    m.lineEl.setAttribute("d", line);
+    var last = n ? hist[n - 1] : null;
     if (last != null && segs.length) {
       var s = segs[segs.length - 1], p = s[s.length - 1];
-      g.fillStyle = line;
-      if (col.round) { g.beginPath(); g.arc(p[0], p[1], 2, 0, Math.PI * 2); g.fill(); }
-      else g.fillRect(p[0] - 1.5, p[1] - 1.5, 3, 3);
+      m.dotEl.setAttribute("x", p[0] - 1.5); m.dotEl.setAttribute("y", p[1] - 1.5);
+      m.dotEl.setAttribute("rx", round ? 1.5 : 0);
+      m.dotEl.style.display = "";
+    } else {
+      m.dotEl.style.display = "none";
     }
   }
 

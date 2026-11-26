@@ -230,7 +230,7 @@
     });
     let t = n ? `还要下载 ${n} 个文件，共 ${GB(need)}` : "选中的文件都已经下好了";
     if (n && S.diskFree != null) t += `　·　模型盘剩余 ${GB(S.diskFree)}`;
-    if (n && gguf && S.info.kind === "comfyui" && !S.info.gguf_node) t += "　·　选了 GGUF：ComfyUI 要先在「常用插件」装 ComfyUI-GGUF";
+    if (n && gguf && S.info.kind === "comfyui" && !S.info.gguf_node) t += "　·　选了 GGUF：ComfyUI 要先在「插件管理」装 ComfyUI-GGUF";
     const el = $("#mc-total");
     el.textContent = t;
     el.dataset.status = n && S.diskFree != null && S.diskFree < need + 2 * 1073741824 ? "bad" : "";

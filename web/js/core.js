@@ -344,7 +344,7 @@
     civitai: "模型下载 · 常用模型 / Civitai / liblib",
     models: "模型管理",
     outputs: "输出管理",
-    extensions: "常用插件",
+    extensions: "插件管理",
     wd14: "图片反推",
     meta: "图片信息",
   };
@@ -568,11 +568,17 @@
   const LOCAL_API = new Set(["remote_call", "open_url", "exit_app", "request_exit_confirm", "drop_files",
     "drop_debug", "handle_dropped_paths", "launcher_check_update", "launcher_update", "launcher_restart",
     "choose_files", "choose_images", "log_frontend", "activity_entries", "activity_clear", "activity_open"]);
+  // 图片反推 / 图片信息：处理的是这台电脑上的图片，整页在本机跑（模型、设置、选文件夹、定位文件都是本机的）
+  const LOCAL_PREFIX = ["wd14_", "caption_", "meta_"];
+  const LOCAL_PAGES = new Set(["wd14", "meta"]);
+  const LOCAL_ON_PAGE = new Set(["choose_directory", "reveal_image", "reveal_in_explorer"]);
   function makeRemoteApi(local) {
     return new Proxy(local, {
       get(t, name) {
         if (typeof name !== "string" || name.startsWith("link_") || LOCAL_API.has(name)) return t[name];
         if (!(name in t)) return t[name];
+        if (LOCAL_PREFIX.some((p) => name.startsWith(p))) return t[name];
+        if (LOCAL_ON_PAGE.has(name) && LOCAL_PAGES.has(App.currentPage)) return t[name];
         if (name === "choose_directory") {
           return async () => {
             App.toast("正在控制远程主机：请直接在输入框里填主机上的路径", "", 5000);

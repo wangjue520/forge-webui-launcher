@@ -19,6 +19,11 @@
   let isLibrary = false;   // 当前管理的是共享模型库
   let pendingSelect = "";  // 上传完成后要选中的文件路径
   let hasPreview = false;  // 选中的模型当前有没有预览图
+  // 视图：list 表格 / grid 图标（带预览图）。每台电脑自己记
+  let mdView = (() => { try { return localStorage.getItem("md-view") === "grid" ? "grid" : "list"; } catch (e) { return "list"; } })();
+  let previews = {};       // 模型路径 → {f, t} / null（models_previews 的结果）
+  let previewsFor = null;  // previews 是哪一份 files 的
+  let gridObserver = null;
   const IMG_RE = /\.(png|jpe?g|webp|gif)$/i;
 
   function tbody() { return $("#md-files tbody"); }
@@ -43,7 +48,7 @@
     if (sel.selectedIndex < 0) sel.value = "";
   }
 
-  function renderTable() {
+  function sortedRows() {
     const rows = filtered();
     rows.sort((a, b) => {
       let va = a[sortKey], vb = b[sortKey];
@@ -53,7 +58,16 @@
       if (va > vb) return sortAsc ? 1 : -1;
       return 0;
     });
-    tbody().innerHTML = rows.map((f) =>
+    return rows;
+  }
+
+  function renderTable() {
+    const rows = sortedRows();
+    $("#md-files").closest(".table-wrap").hidden = mdView === "grid";
+    $("#md-grid").hidden = mdView !== "grid";
+    if (mdView === "grid") renderGrid(rows);
+    else $("#md-grid").innerHTML = "";
+    tbody().innerHTML = mdView === "grid" ? "" : rows.map((f) =>
       `<tr data-path="${App.esc(f.path)}">
         <td>${App.esc(f.rel)}</td>
         <td class="dim">${App.esc(f.base || "未知")}</td>
@@ -67,6 +81,7 @@
       </tr>`).join("");
     $("#md-count").textContent = `共 ${files.length} 个文件` +
       (rows.length !== files.length ? `，筛选后 ${rows.length} 个` : "");
+    markSelected();
     tbody().querySelectorAll("tr").forEach((tr) => {
       tr.addEventListener("click", () => selectRow(tr.dataset.path, tr));
       tr.querySelectorAll("[data-act]").forEach((b) =>
@@ -75,6 +90,108 @@
           rowAction(b.dataset.act, tr.dataset.path);
         }));
     });
+  }
+
+  /* ---------- 图标视图 ---------- */
+  function markSelected() {
+    const p = selected && selected.path;
+    $$("#md-files tbody tr, #md-grid .md-card").forEach((el) => el.classList.toggle("selected", !!p && el.dataset.path === p));
+  }
+
+  function renderGrid(rows) {
+    const box = $("#md-grid");
+    if (gridObserver) gridObserver.disconnect();
+    box.innerHTML = rows.map((f) => {
+      const name = f.rel.split(/[\\/]/).pop().replace(/\.[^.]+$/, "");
+      const sub = f.rel.includes("\\") || f.rel.includes("/") ? f.rel.replace(/[\\/][^\\/]*$/, "") : "";
+      return `<div class="md-card" data-path="${App.esc(f.path)}" title="${App.esc(f.rel)}\n${App.esc(f.size_text)} · ${App.esc(f.mtime_text)}">` +
+        `<div class="md-thumb"><span class="md-noimg">${App.esc(f.base || "无预览")}</span></div>` +
+        `<div class="md-cap"><b>${App.esc(name)}</b>` +
+        `<span>${App.esc([f.base || "未知", sub].filter(Boolean).join(" · "))}</span></div></div>`;
+    }).join("");
+    if (!rows.length) return;
+    gridObserver = new IntersectionObserver((ents) => {
+      ents.forEach((en) => {
+        if (!en.isIntersecting) return;
+        gridObserver.unobserve(en.target);
+        loadThumb(en.target);
+      });
+    }, { root: $("#md-grid"), rootMargin: "300px 0px" });
+    box.querySelectorAll(".md-card").forEach((el) => gridObserver.observe(el));
+    ensurePreviews();
+  }
+
+  // 一次要回当前分类所有模型的预览图地址（只是查文件在不在，很快）；拿到后补上已经在可视区的卡片
+  async function ensurePreviews() {
+    if (previewsFor === files) return;
+    const want = files;
+    previewsFor = want;
+    let r;
+    try { r = await App.api.models_previews(want.map((f) => f.path)); } catch (e) { r = null; }
+    if (want !== files) return;
+    previews = (r && r.items) || {};
+    $$("#md-grid .md-card[data-wait]").forEach((el) => { el.removeAttribute("data-wait"); loadThumb(el); });
+  }
+
+  const thumbJobs = [];
+  let thumbBusy = 0;
+  function loadThumb(card) {
+    if (previewsFor !== files || !(card.dataset.path in previews)) { card.dataset.wait = "1"; return; }
+    const pv = previews[card.dataset.path];
+    if (!pv) { card.classList.add("no-preview"); return; }
+    const img = new Image();
+    img.alt = "";
+    img.onload = () => showThumb(card, img);
+    img.onerror = () => { thumbJobs.push({ card, pv }); pumpThumbs(); };   // 还没有缩略图缓存 → 现做一张
+    img.src = pv.t;
+  }
+  function showThumb(card, img) {
+    const box = card.querySelector(".md-thumb");
+    if (!box) return;
+    box.innerHTML = "";
+    box.appendChild(img);
+    card.classList.add("has-preview");
+  }
+  function pumpThumbs() {
+    while (thumbBusy < 3 && thumbJobs.length) {
+      const job = thumbJobs.shift();
+      if (!job.card.isConnected) continue;
+      thumbBusy++;
+      makeThumb(job).finally(() => { thumbBusy--; pumpThumbs(); });
+    }
+  }
+  // 原图缩到 360px 宽，显示出来，同时传回文件服务存成缩略图（下次直接读）
+  function makeThumb({ card, pv }) {
+    return new Promise((resolve) => {
+      const src = new Image();
+      src.crossOrigin = "anonymous";
+      src.onload = () => {
+        const w = Math.min(360, src.naturalWidth || 360);
+        const h = Math.max(1, Math.round(w * (src.naturalHeight || 1) / (src.naturalWidth || 1)));
+        const cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(src, 0, 0, w, h);
+        cv.toBlob((blob) => {
+          if (!blob) { showThumb(card, src); resolve(); return; }
+          const img = new Image();
+          img.alt = "";
+          img.src = URL.createObjectURL(blob);
+          showThumb(card, img);
+          fetch(pv.t, { method: "POST", body: blob, headers: { "Content-Type": "image/webp" } }).catch(() => {}).finally(resolve);
+        }, "image/webp", 0.85);
+      };
+      src.onerror = () => {
+        const box = card.querySelector(".md-thumb");
+        if (box) box.innerHTML = `<span class="md-noimg">${pv.video ? "视频预览" : "预览图读不了"}</span>`;
+        resolve();
+      };
+      src.src = pv.f;
+    });
+  }
+  function refreshCardPreview(path) {
+    // 换了 / 删了预览图：重新查这一个
+    previewsFor = null;
+    if (mdView === "grid") renderTable();
   }
 
   function rowAction(act, path) {
@@ -88,9 +205,8 @@
   }
 
   async function selectRow(path, tr) {
-    tbody().querySelectorAll("tr").forEach((r) => r.classList.remove("selected"));
-    if (tr) tr.classList.add("selected");
     selected = files.find((f) => f.path === path) || null;
+    markSelected();
     ["#md-open", "#md-dl", "#md-copy-name", "#md-hash-lookup", "#md-delete", "#md-preview-set"].forEach((s) => ($(s).disabled = !selected));
     $("#md-preview-del").disabled = true;
     $("#md-copy-lora").disabled = !selected || !curIsLora;
@@ -260,8 +376,8 @@
       if (pendingSelect) {
         const want = pendingSelect;
         pendingSelect = "";
-        const tr = Array.from(tbody().querySelectorAll("tr")).find((t) => t.dataset.path === want);
-        if (tr) { tr.scrollIntoView({ block: "center" }); selectRow(want, tr); }
+        const el = $$("#md-files tbody tr, #md-grid .md-card").find((t) => t.dataset.path === want);
+        if (el) { el.scrollIntoView({ block: "center" }); selectRow(want, el); }
       }
     } catch (e) {
       $("#md-count").textContent = "读取失败：" + e.message;
@@ -405,6 +521,7 @@
       if (r && r.ok) {
         App.toast("已设置预览图（旧的已放进回收站）", "ok");
         if (selected && selected.path === target) selectRow(target, tbody().querySelector("tr.selected"));
+        refreshCardPreview(target);
       } else App.toast((r && r.error) || "设置预览图失败", "error", 5000);
     } catch (e) { App.toast("设置预览图失败：" + e.message, "error"); }
   }
@@ -557,6 +674,22 @@
       });
       $("#md-filter").addEventListener("input", renderTable);
       $("#md-base").addEventListener("change", renderTable);
+      const applyViewChips = () => $$("#md-viewsw [data-mdview]").forEach((b) => b.classList.toggle("on", b.dataset.mdview === mdView));
+      applyViewChips();
+      $("#md-viewsw").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-mdview]");
+        if (!b || b.dataset.mdview === mdView) return;
+        mdView = b.dataset.mdview;
+        try { localStorage.setItem("md-view", mdView); } catch (err) {}
+        applyViewChips();
+        renderTable();
+        const cur = selected && $$(mdView === "grid" ? "#md-grid .md-card" : "#md-files tbody tr").find((el) => el.dataset.path === selected.path);
+        if (cur) cur.scrollIntoView({ block: "center" });
+      });
+      $("#md-grid").addEventListener("click", (e) => {
+        const card = e.target.closest(".md-card");
+        if (card) selectRow(card.dataset.path, null);
+      });
 
       // 预览图可收起（窗口小或触发词多时给详情区腾地方），状态本地记住
       const store = (k, v) => { try { localStorage.setItem(k, v); } catch (e) {} };
@@ -588,7 +721,7 @@
         if (!(await App.confirm("移除预览图", "把这个模型的预览图放进回收站？", "移除"))) return;
         try {
           const r = await App.api.models_remove_preview(target);
-          if (r && r.ok) { App.toast("已移除预览图", "ok"); selectRow(target, tbody().querySelector("tr.selected")); }
+          if (r && r.ok) { App.toast("已移除预览图", "ok"); selectRow(target, tbody().querySelector("tr.selected")); refreshCardPreview(target); }
           else App.toast((r && r.error) || "移除失败", "error");
         } catch (e) { App.toast("移除失败：" + e.message, "error"); }
       });

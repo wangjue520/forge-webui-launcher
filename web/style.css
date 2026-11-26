@@ -707,6 +707,23 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .meta-left { display: flex; flex-direction: column; gap: 10px; }
 .meta-right { min-width: 0; }
 
+/* ============ 模型管理：图标视图 ============ */
+.md-viewsw { flex: none; }
+.md-grid {
+  flex: 1; min-height: 0; overflow-y: auto; align-content: start;
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 10px;
+  padding: 2px 4px 2px 0;
+}
+.md-card { cursor: pointer; border: 1px solid var(--line); background: var(--panel); min-width: 0; display: flex; flex-direction: column; }
+.md-card:hover { border-color: var(--ink); }
+.md-card.selected { border-color: var(--ink); box-shadow: inset 0 0 0 2px var(--yel), 0 0 0 1px var(--ink); }
+.md-thumb { aspect-ratio: 3 / 4; display: flex; align-items: center; justify-content: center; overflow: hidden; background: var(--panel-2); }
+.md-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.md-noimg { padding: 6px; font: 10.5px var(--mono); color: var(--text-faint); text-align: center; word-break: break-all; }
+.md-cap { padding: 5px 7px 6px; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.md-cap b { font-size: 12px; line-height: 1.35; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-all; }
+.md-cap span { font: 10.5px var(--mono); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
 /* ============ 扩展列表 ============ */
 .ext-item {
   position: relative;
@@ -738,6 +755,19 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(255
 .ext-upd-err { color: var(--bad); cursor: help; }
 .ext-variant { margin-top: 6px; font-size: 12px; color: var(--warn); }
 .ext-other { padding: 9px 14px; }
+/* 插件管理：安装新插件（搜索 / 粘贴地址）、已安装 / 推荐两栏 */
+.ext-find-row { flex-wrap: nowrap; }
+.ext-find-row input { flex: 1; min-width: 0; }
+#ext-results { margin-top: 6px; max-height: 460px; overflow-y: auto; }
+#ext-results:empty { display: none; }
+#ext-results .ext-item { margin-bottom: 6px; align-items: center; }
+.ext-hit-meta { margin-left: 10px; font: 11px var(--mono); color: var(--text-faint); }
+.ext-hit .ext-desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ext-hit-btns { display: flex; gap: 6px; flex-shrink: 0; }
+.ext-viewbar { margin: 4px 0 2px; align-items: center; }
+.ext-viewbar #ext-filter { flex: 0 1 260px; margin-left: auto; }
+.ext-view .chip em { font-style: normal; opacity: .75; }
+.ext-status.ext-cnr { background: transparent; color: var(--ink); outline: 1px solid var(--line-2, var(--line)); outline-offset: -1px; }
 /* 版本选择列表（版本管理页 / 插件「版本…」弹窗） */
 .ver-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 .ver-list { max-height: 340px; overflow-y: auto; border: 1px solid var(--line); padding: 4px 10px; }
@@ -1298,6 +1328,13 @@ textarea.ta-prompt {
 .pm-row.na .pm-val { color: var(--pm-text); opacity: .8; }
 .pm-row.hot .pm-val { color: var(--pm-hot); }
 .pm-spark { display: block; width: 100%; height: 20px; margin-top: 3px; background: var(--pm-bg); }
+.pm-spark { overflow: hidden; }
+.pm-spark .pm-grid { stroke: var(--pm-grid); stroke-width: 1; stroke-dasharray: 2 3; }
+.pm-spark .pm-area { fill: var(--pm-fill); stroke: none; }
+.pm-spark .pm-ln { fill: none; stroke: var(--pm-line); stroke-width: 1.3; stroke-linejoin: round; stroke-linecap: round; }
+.pm-spark .pm-dot { fill: var(--pm-line); }
+.pm-row.hot .pm-spark .pm-ln { stroke: var(--pm-hot); }
+.pm-row.hot .pm-spark .pm-dot { fill: var(--pm-hot); }
 
 /* 极简 / 液态玻璃（data-ui-base="minimal"）：跟随它们的配色变量 */
 [data-ui-base="minimal"] .perf-mon {
@@ -1458,6 +1495,7 @@ textarea.ta-prompt {
 
 /* ============ 局域网 / 广域网联动（js/link.js） ============ */
 body.remote-mode [data-local-only] { display: none !important; }
+.link-local-hint { margin: 0 0 10px; }
 body:not(.remote-mode) [data-remote-only] { display: none !important; }
 .link-banner { border-color: var(--yel); }
 .link-banner b { color: #f1f2ee; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

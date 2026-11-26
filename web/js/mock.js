@@ -225,6 +225,13 @@
         window.App.onEvent({ scope: "h3dl", type: "log", text: "[H3] (1/3) minimax_h3_fl2va_pruned-Q4_K.gguf → 共享模型库/checkpoints（10.64 GB）\n" });
         return ok({ ok: true });
       },
+      // 侧栏性能监控：每秒一条假采样
+      perf_start: () => {
+        const mk = () => ({ gpu: true, gpu_temp: 50 + Math.random() * 6, gpu_util: 10 + Math.random() * 30, mem_temp: null,
+          vram_used: 5600 + Math.random() * 200, vram_total: 24576, ram_used: 36000 + Math.random() * 500, ram_total: 65536 });
+        if (!window.__mockPerf) window.__mockPerf = setInterval(() => window.App.onEvent({ scope: "perf", type: "sample", sample: mk() }), 1000);
+        return ok({ ok: true, history: Array.from({ length: 30 }, mk) });
+      },
       h3_models_cancel: () => { window.App.onEvent({ scope: "h3dl", type: "done", ok: false, cancelled: true }); return ok({ ok: true }); },
       // 常用模型目录：从仓库根目录起预览服务时直接读真实的 app/model_catalog.json（默认精度按 24GB 粗选）
       model_catalog_info: () => fetch("../app/model_catalog.json").then((r) => r.json()).then((cat) => {
@@ -363,9 +370,13 @@
         return ok({ ok: true, total_text: "1.2 GB" });
       },
       models_list: () => ok({ ok: true, is_lora: false, files: [
-        { path: "", rel: "（演示数据）v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
-        { path: "", rel: "（演示数据）ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
-      ], total: 2, no_info: 1, is_lora: false }),
+        { path: "m1", rel: "（演示数据）v1-5.safetensors", base: "SD 1.5", size: 2140000000, size_text: "1.99 GB", mtime_text: "2025-11-02 14:20" },
+        { path: "m2", rel: "（演示数据）ponyDiffusionV6.safetensors", base: "Pony", size: 6780000000, size_text: "6.32 GB", mtime_text: "2025-12-18 09:41" },
+        { path: "m3", rel: "画风\（演示数据）watercolor_style_v2.safetensors", base: "Illustrious", size: 228000000, size_text: "217 MB", mtime_text: "2026-10-02 11:05" },
+      ], total: 3, no_info: 1, is_lora: false }),
+      // 图标视图：拿开屏图当预览图演示（/t 不存在 → 网页现做缩略图）
+      models_previews: (paths) => ok({ ok: true, items: Object.fromEntries((paths || []).map((p, i) =>
+        [p, i === 1 ? null : { f: "media/vector-splash-" + (i ? "last" : "first") + ".jpg", t: "media/_no_thumb_" + i + ".webp" }])) }),
       ext_list: () => ok({ ok: true, has_root: true, comfy: false,
         target: { id: "demo", name: "Forge Neo（演示）", kind: "forge", kind_label: "Forge Neo", root: "D:\\demo", target_dir: "D:\\demo\\extensions", running: false },
         items: [
@@ -379,8 +390,19 @@
       ], others: [
         { folder: "sd-webui-my-thing-main", rel: "sd-webui-my-thing-main", is_git: false, branch: "", short: "", pinned: false, remote: "", disabled: true, update: {} },
         { folder: "sd-webui-other", rel: "sd-webui-other", is_git: true, branch: "master", short: "1234567", pinned: false, remote: "https://github.com/x/sd-webui-other.git", disabled: false, update: { behind: 0 } },
+        { folder: "comfyui-kjnodes", rel: "comfyui-kjnodes", is_git: false, branch: "", short: "", pinned: false, remote: "", disabled: false,
+          cnr: { id: "comfyui-kjnodes", version: "1.5.0", tracked: true }, update: { behind: 1, cnr: true, latest_short: "1.5.5", latest_date: "2026-11-17" } },
       ] }),
-      ext_repo_versions: () => ok({ ok: true, local: { is_git: true, branch: "main", short: "a1b2c3d", commit: "a1b2c3d", date: "2026-08-01 10:00", subject: "（演示）fix", remote: "https://github.com/Bing-su/adetailer.git", dirty: [] },
+      ext_search: (q) => ok(/^https?:/.test(q) ? { ok: true, url: q, folder: q.split("/").pop(), items: [] } : { ok: true, source: "WebUI 扩展索引", items: [
+        { name: "ADetailer", url: "https://github.com/Bing-su/adetailer", desc: "Auto detecting, masking and inpainting with detection model.", tags: ["editing", "manipulations"], installed: true },
+        { name: "sd-webui-regional-prompter", url: "https://github.com/hako-mikan/sd-webui-regional-prompter", desc: "set prompt to divided region（演示）", tags: ["prompting"], installed: false },
+        { id: "comfyui-gguf", name: "ComfyUI-GGUF", author: "city96", version: "1.1.10", downloads: 1234567, stars: 2900, url: "https://github.com/city96/ComfyUI-GGUF", desc: "GGUF Quantization support for native ComfyUI models", installed: false },
+      ] }),
+      ext_install_url: () => ok({ ok: true }),
+      ext_install_registry: () => ok({ ok: true }),
+      ext_uninstall: () => ok({ ok: true }),
+      ext_repo_versions: (rel) => rel === "comfyui-kjnodes" ? ok({ ok: true, local: { is_git: false }, cnr: { id: "comfyui-kjnodes", version: "1.5.0" },
+        versions: [{ version: "1.5.5", date: "2026-11-17", url: "x" }, { version: "1.5.4", date: "2026-11-12", url: "x" }, { version: "1.5.0", date: "2026-10-01", url: "x" }, { version: "1.4.9", date: "2026-09-01", url: "x", deprecated: true }] }) : ok({ ok: true, local: { is_git: true, branch: "main", short: "a1b2c3d", commit: "a1b2c3d", date: "2026-08-01 10:00", subject: "（演示）fix", remote: "https://github.com/Bing-su/adetailer.git", dirty: [] },
         remote: { ok: true, branch: "main", behind: 2, current: "a1b2c3d",
           commits: [{ commit: "e4f5a6b", short: "e4f5a6b", date: "2026-09-30 12:00", subject: "（演示）新功能" }, { commit: "c0ffee1", short: "c0ffee1", date: "2026-09-20 12:00", subject: "（演示）修 bug" }, { commit: "a1b2c3d", short: "a1b2c3d", date: "2026-08-01 10:00", subject: "（演示）fix" }],
           tags: [{ name: "v25.3.0", commit: "e4f5a6b0" }, { name: "v25.2.0", commit: "0000000" }], branches: [{ name: "main", commit: "e4f5a6b" }] },

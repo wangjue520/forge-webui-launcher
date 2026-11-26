@@ -106,7 +106,9 @@
   }
 
   /* ---------- H3 视频模型一键下载（当前实例是 Forge Neo H3 才显示） ---------- */
-  const h3 = { info: null, running: false, log: null, prog: null, states: {}, inited: false };
+  // pick：用户在卡片上改过的勾选 / 档位（id → {checked, q}）。切页面回来会重新读一遍信息、整张卡重画，
+  // 以前直接按默认值画，界面变回默认，用户以为选择丢了（群友反馈）
+  const h3 = { info: null, running: false, log: null, prog: null, states: {}, inited: false, pick: {} };
   const GB = (n) => (n / 1073741824).toFixed(n >= 10 * 1073741824 ? 1 : 2) + " GB";
   const H3_STATE_TEXT = { ok: "已下载", part: "下了一部分，会续传", diff: "已有同名文件但大小不对，会重新下载",
     downloading: "下载中…", error: "失败" };
@@ -177,11 +179,13 @@
       const hasQ = it.files.length > 1;
       const have = it.files.find((f) => f.state === "ok");
       // 默认档位：已经下过哪一档就选哪一档，否则按内存给的建议
-      const q = have && have.q ? have.q : (defaults[it.id] || it.quant_default);
+      const mine = h3.pick[it.id] || {};
+      let q = have && have.q ? have.q : (defaults[it.id] || it.quant_default);
+      if (mine.q && it.files.some((f) => f.q === mine.q)) q = mine.q;
       const sel = hasQ ? `<select data-h3="${it.id}">` + it.files.map((f) =>
         `<option value="${App.esc(f.q)}"${f.q === q ? " selected" : ""}>${App.esc(f.q)}　${GB(f.size)}` +
         `${f.note ? "　" + App.esc(f.note) : ""}${f.state === "ok" ? "　✓" : ""}</option>`).join("") + `</select>` : "<span></span>";
-      const checked = it.required || it.default || !!have;
+      const checked = it.required || ("checked" in mine ? mine.checked : (it.default || !!have));
       return `<div class="h3-row" data-id="${it.id}">` +
         `<label class="chk-row${it.required ? " locked" : ""}"><input type="checkbox" data-h3="${it.id}"` +
         `${checked ? " checked" : ""}${it.required ? " disabled" : ""}><i></i>` +
@@ -231,7 +235,12 @@
     h3.log = App.pageLog("h3dl", "H3 模型下载");
     h3.prog = App.progress($("#h3-progress"));
     h3.prog.hide();
-    $("#h3-list").addEventListener("change", () => {
+    $("#h3-list").addEventListener("change", (e) => {
+      const el = e.target.closest && e.target.closest("[data-h3]");
+      if (el) {
+        const p = h3.pick[el.dataset.h3] || (h3.pick[el.dataset.h3] = {});
+        if (el.tagName === "SELECT") p.q = el.value; else p.checked = el.checked;
+      }
       if (h3.info) h3.info.items.forEach(h3RenderRow);
       h3Total();
     });

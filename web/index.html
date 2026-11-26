@@ -65,9 +65,9 @@
       <button class="nav-item" data-page="civitai"><svg><use href="#i-download"/></svg><span>模型下载</span><em class="nav-tag">C站 / liblib</em></button>
       <button class="nav-item" data-page="models"><svg><use href="#i-models"/></svg><span>模型管理</span></button>
       <button class="nav-item" data-page="outputs"><svg><use href="#i-grid"/></svg><span>输出管理</span></button>
-      <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>常用插件</span></button>
-      <button class="nav-item" data-page="wd14" data-local-only><svg><use href="#i-tag"/></svg><span>图片反推</span></button>
-      <button class="nav-item" data-page="meta" data-local-only><svg><use href="#i-image"/></svg><span>图片信息</span></button>
+      <button class="nav-item" data-page="extensions"><svg><use href="#i-puzzle"/></svg><span>插件管理</span></button>
+      <button class="nav-item" data-page="wd14"><svg><use href="#i-tag"/></svg><span>图片反推</span></button>
+      <button class="nav-item" data-page="meta"><svg><use href="#i-image"/></svg><span>图片信息</span></button>
     </nav>
     <!-- 性能监控：内容由 js/perfmon.js 生成，占满导航与状态栏之间的空白，放不下时自动减行/隐藏 -->
     <section class="perf-mon" id="perf-mon" aria-label="性能监控"></section>
@@ -485,7 +485,7 @@
         </div>
 
         <div class="card" id="deploy-nodes-card" hidden>
-          <div class="card-title">随部署一起安装的常用节点<span class="card-title-hint">装进新实例的 custom_nodes，节点依赖一并装好；之后可在「常用插件」页增减</span></div>
+          <div class="card-title">随部署一起安装的常用节点<span class="card-title-hint">装进新实例的 custom_nodes，节点依赖一并装好；之后可在「插件管理」页增减</span></div>
           <div id="deploy-nodes"></div>
           <details class="deploy-nodes-more">
             <summary>更多可选节点</summary>
@@ -555,7 +555,7 @@
               <button class="btn" id="ver-fix-variant" hidden>不切换，按实际源码改实例类型</button>
             </div>
           </div>
-          <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「常用插件」页管理。</div>
+          <div class="hint hint-block">在原来的目录里直接更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本：只换源码，venv、模型、插件、出图都不动，不用重装。切换前的版本会自动记下来，换完不满意可以一键回到原来的版本。你改过的源码文件（比如 webui-user.bat）会先备份，切换后自动合并回去。插件的版本在「插件管理」页管理。</div>
 
           <div class="card">
             <div class="card-title">当前版本<span class="card-title-hint" id="ver-check-hint"></span></div>
@@ -718,6 +718,9 @@
             <div class="row">
               <input type="text" id="md-filter" placeholder="输入关键字过滤文件名…">
               <select id="md-base"><option value="">全部</option></select>
+              <span class="chips md-viewsw" id="md-viewsw" title="列表 / 图标视图（图标视图显示预览图）">
+                <button class="chip" data-mdview="list">列表</button><button class="chip" data-mdview="grid">图标</button>
+              </span>
             </div>
             <div class="table-wrap">
               <table class="data-table" id="md-files">
@@ -731,6 +734,7 @@
                 <tbody></tbody>
               </table>
             </div>
+            <div class="md-grid" id="md-grid" hidden></div>
             <div class="hint" id="md-count"></div>
           </div>
           <div class="models-detail">
@@ -755,7 +759,7 @@
         </div>
       </section>
 
-      <!-- ======== 常用插件 ======== -->
+      <!-- ======== 插件管理 ======== -->
       <section class="page" id="page-extensions">
         <div class="card ext-target-card">
           <div class="card-title">安装到<span class="card-title-hint" id="ext-target-hint"></span></div>
@@ -766,6 +770,20 @@
           </div>
           <div class="ext-target-path" id="ext-target-path"></div>
           <div class="hint" id="ext-target-warn" data-status="warn" hidden></div>
+        </div>
+        <div class="card ext-find-card">
+          <div class="card-title">安装新插件<span class="card-title-hint" id="ext-find-hint"></span></div>
+          <div class="row ext-find-row">
+            <input type="text" id="ext-q" placeholder="搜索插件名字 / 关键词，或者粘贴 GitHub 地址" autocomplete="off" spellcheck="false">
+            <button class="btn btn-accent" id="ext-q-go">搜索</button>
+          </div>
+          <div id="ext-results"></div>
+        </div>
+        <div class="row ext-viewbar">
+          <span class="chips ext-view" id="ext-view">
+            <button class="chip" data-view="installed">已安装<em id="ext-n-installed"></em></button><button class="chip" data-view="catalog">推荐插件</button>
+          </span>
+          <input type="text" id="ext-filter" placeholder="筛选已安装的插件" autocomplete="off" spellcheck="false">
         </div>
         <div class="hint hint-block" id="ext-intro"></div>
         <div id="ext-list"></div>
@@ -784,6 +802,7 @@
 
       <!-- ======== 图片反推（WD14 标签 / 自然语言） ======== -->
       <section class="page" id="page-wd14">
+        <div class="hint link-local-hint" data-remote-only>正在控制远程主机：这一页在<b>这台电脑</b>上运行，反推的是这台电脑上的图片，用的也是这台电脑的模型和显卡。</div>
         <div class="row cap-modebar">
           <span class="chips cap-mode" id="cap-mode">
             <button class="chip" data-mode="tags">标签（WD14）</button><button class="chip" data-mode="text">自然语言</button><button class="chip" data-mode="hybrid">标签 + 自然语言</button>
@@ -922,6 +941,7 @@
 
       <!-- ======== 图片信息 ======== -->
       <section class="page" id="page-meta">
+        <div class="hint link-local-hint" data-remote-only>正在控制远程主机：这一页读的是<b>这台电脑</b>上的图片；「发送到 WebUI / ComfyUI」和「缺失模型检测」要回到本机才能用。</div>
         <div class="meta-layout">
           <div class="meta-left">
             <div class="drop-area" id="meta-drop">
@@ -979,7 +999,7 @@
                 <table class="data-table" id="meta-settings"><tbody></tbody></table>
               </div>
             </div>
-            <div class="card">
+            <div class="card" data-local-only>
               <div class="card-title">缺失模型检测<span class="card-title-hint">从图片元数据里的哈希反查 Civitai，一键补齐本地没有的模型</span></div>
               <div class="hint">A1111/Forge 格式的元数据带哈希（文件内容的指纹），能精确匹配自动下载；ComfyUI 工作流通常不存哈希，缺失的模型会显示「按名字搜索」——哈希在 Civitai 上查不到的（未公开/已删除/地区专属模型）同样会显示。这条路径不保证精确匹配（Civitai 上同名模型不少见），需要你从候选里手动选一个确认，不会替你自动下载。</div>
               <div class="row">
@@ -1010,7 +1030,7 @@
 
       <!-- ======== 实例管理（多实例） ======== -->
       <section class="page" id="page-instances">
-        <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、常用插件、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。要更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本，点实例下面或「部署新的实例」旁边的「版本管理…」。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
+        <div class="hint hint-block">每个实例就是一套 ComfyUI 或 WebUI 安装，可以同时运行（端口自动错开）。侧栏顶部可以切换「当前实例」：一键启动、插件管理、模型管理这几页都针对当前实例；「高级选项」页顶部可以单独选择要设置的实例，不用切来切去。部署新的实例也在这里（装了第二个实例后，侧栏的「环境部署」会自动收进本页）。要更新 / 切换 / 回滚 WebUI 或 ComfyUI 的版本，点实例下面或「部署新的实例」旁边的「版本管理…」。同一块显卡同时跑两个实例很容易爆显存，请留意。</div>
         <div id="inst-list"></div>
         <!-- LoRA 训练器：不是实例，单独一行（trainer.js） -->
         <div id="inst-trainer"></div>
