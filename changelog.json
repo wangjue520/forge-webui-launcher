@@ -1,6 +1,16 @@
 {
   "entries": [
     {
+      "version": "3.1.041",
+      "count": 219,
+      "date": "2026-11-26",
+      "title": "仓库改名为 wwy-launcher，中文全称「WWY AI 绘画启动器/工具箱」",
+      "items": [
+        "GitHub 仓库从 forge-webui-launcher 改名为 wwy-launcher，旧链接会自动跳转，已经装好的启动器照常检查更新，不用重新下载",
+        "新下载的压缩包解压出来叫 wwy-launcher-main；放在文件夹旁边的「启动WWY启动器.bat」新旧两个文件夹名都认"
+      ]
+    },
+    {
       "version": "3.1.039",
       "count": 217,
       "date": "2026-11-26",
