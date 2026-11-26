@@ -20,7 +20,7 @@ Windows 桌面程序（pywebview），代码在启动器目录的 `app/`（Pytho
 - 版本管理（versions）：WebUI / ComfyUI 本体检查更新、切换版本 / 回滚、换仓库
 - 模型下载（civitai）：输入 Civitai / liblib 网址下载，Civitai API Key、liblib token；H3 视频模型一键下载
 - 模型管理（models）：按类别浏览模型、哈希查 Civitai 信息、共享模型库（多个实例共用一套模型）
-- 常用插件（extensions）：给当前实例装 / 停用 / 更新 / 换版本 WebUI 扩展或 ComfyUI 节点
+- 插件管理（extensions）：给当前实例搜索安装 / 停用 / 卸载 / 更新 / 换版本 WebUI 扩展或 ComfyUI 节点（含 Manager 从注册表装的）
 - 输出管理、WD14 反推、图片信息（读 PNG 生成参数、缺失模型检测）
 
 ## 网络（用户大多在国内）

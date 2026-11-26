@@ -19,6 +19,7 @@ _emit() -> window.App.onEvent({scope, type, ...}) 推送给前端。
 """
 import base64
 import collections
+import io
 import concurrent.futures
 import json
 import os
@@ -58,6 +59,7 @@ import diagnose_llm as dl
 import version_manager as vm
 import h3_models as h3m
 import model_catalog as mc
+import plugin_registry as plreg
 import amd_rocm
 import netspeed
 import lora_trainer as lt
@@ -605,7 +607,7 @@ class LauncherApi:
         self._import_cancel = False
         self._dnd_state = None          # pywebview 的拖放路径池，由 webview_main 注入
 
-        # 常用插件
+        # 插件管理
         self._ext_thread = None
         self._ext_cancel = False
         self._ext_proc = None
@@ -3342,7 +3344,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             log("[部署] 常用节点：" + comfy_nodes.summary_text(res) + "\n")
             comfy_nodes.fix_rgthree_compat(target, lambda m: log(m.replace("[启动器]", "[部署]")))
             if res["failed"]:
-                log("[部署] 失败的节点可以之后在「常用插件」页重新安装\n")
+                log("[部署] 失败的节点可以之后在「插件管理」页重新安装\n")
             # Manager 是日常使用频率最高的节点，明确告知最终状态，免得用户
             # 打开 ComfyUI 才发现没有
             if comfy_nodes.MANAGER_ID in node_ids:
@@ -3352,7 +3354,7 @@ def _deploy_flow_comfy(self, target, use_portable):
                         "入口在网页顶栏的「管理扩展功能」按钮（新版界面不再叫 Manager）\n")
                 else:
                     log("[部署] 注意：ComfyUI-Manager 没能装上（上面日志有原因），"
-                        "网络好转后可到「常用插件」页勾选重装\n")
+                        "网络好转后可到「插件管理」页勾选重装\n")
         if dcfg.get("diag_comfy_bridge", True):
             comfy_bridge.ensure(target, lambda m: log(m.replace("[启动器]", "[部署]")))
 
@@ -5490,6 +5492,65 @@ def _clear_previews(model_path):
     return removed
 
 
+class _ModelPreviewFiles:
+    """
+    模型管理「图标视图」的预览图：交给 output_index 的本地文件服务（/f 原图、/t 缩略图缓存）。
+    id 按路径算、跨次启动不变，网页生成的缩略图存盘后下次直接用；文件名里带预览图的修改时间，换了图自动失效。
+    id 加一个很大的偏移，和输出管理的 id（数据库自增）不会撞到同一个缩略图文件。
+    """
+    BASE = 3_000_000_000
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.paths = {}
+
+    def add(self, path):
+        import zlib
+        oid = self.BASE + zlib.crc32(os.path.normcase(os.path.abspath(path)).encode("utf-8", "replace"))
+        with self.lock:
+            self.paths[oid] = path
+        return oid
+
+    def path_of(self, oid):
+        with self.lock:
+            p = self.paths.get(oid)
+        if not p:
+            return None, None
+        try:
+            return p, int(os.path.getmtime(p))
+        except OSError:
+            return None, None
+
+
+def _api_models_previews(self, paths):
+    """
+    图标视图：一批模型的预览图地址 {模型路径: {f: 原图, t: 缩略图} 或 None}。
+    缩略图第一次由网页把原图缩小后传回来存着（启动器环境里没有图片库），之后直接读缓存。
+    """
+    if getattr(self, "_mprev", None) is None:
+        self._mprev = _ModelPreviewFiles()
+        _srv, self._mprev_base, self._mprev_token = oi.start_file_server(self._mprev)
+    out = {}
+    for mp in (paths or [])[:5000]:
+        hit = None
+        for cand in _preview_candidates(mp):
+            if os.path.isfile(cand):
+                hit = cand
+                break
+        if not hit:
+            out[mp] = None
+            continue
+        oid = self._mprev.add(hit)
+        try:
+            v = int(os.path.getmtime(hit))
+        except OSError:
+            v = 0
+        q = f"?t={self._mprev_token}&v={v}"
+        out[mp] = {"f": f"{self._mprev_base}/f/{oid}{q}", "t": f"{self._mprev_base}/t/{oid}{q}",
+                   "video": _preview_is_video(hit)}
+    return {"ok": True, "items": out}
+
+
 def _api_models_set_preview(self, path, src="", b64_data=""):
     """
     把一张图设成模型的预览图。图片来源二选一：src（本机图片路径，选文件 / 拖进来的），
@@ -6265,11 +6326,11 @@ def _api_open_output_folder(self, which):
 
 
 # ============================================================
-# 常用插件
+# 插件管理
 # ============================================================
 
 def _ext_target(self, iid=None):
-    """「常用插件」页的安装目标实例：(实例配置, 实例信息 dict)。iid 为空 = 当前实例"""
+    """「插件管理」页的安装目标实例：(实例配置, 实例信息 dict)。iid 为空 = 当前实例"""
     iid = iid or self.cfg.get("active_instance")
     # 先按目录重新认一遍这个实例的类型：记录错了的话，扩展会装进错的目录
     # （ComfyUI 实例被当成 WebUI → 往 ComfyUI 根目录建 extensions/）
@@ -6404,6 +6465,8 @@ def _ext_repo_payload(self, r, disabled_names=()):
             "pinned": bool(r["is_git"] and r.get("commit") and not r.get("branch")),
             "remote": r["remote"],
             "disabled": r["disabled"] or r["folder"].lower() in disabled_names,
+            # ComfyUI-Manager 从注册表装的节点（zip，没有 .git）：{id, version}
+            "cnr": None if r["is_git"] else plreg.read_cnr(r["path"]),
             "update": upd}
 
 
@@ -6504,7 +6567,7 @@ def _stream_cmd(self, scope, program, args, cwd, env=None, timeout=None, cancell
 
 
 def _ext_run_cmd(self, program, args, cwd, env=None, timeout=None):
-    """「常用插件」页跑命令"""
+    """「插件管理」页跑命令"""
     def set_proc(p):
         self._ext_proc = p
     return _stream_cmd(self, "ext", program, args, cwd, env, timeout,
@@ -6541,8 +6604,9 @@ def _ext_resolve_repo(info, rel):
     return p if os.path.isdir(p) else None
 
 
-def _api_ext_install(self, names, iid=None, nodes=None):
-    """nodes：ComfyUI 不在目录表里的节点（报错诊断查到的缺失节点），格式同 comfy_nodes.CATALOG 的条目"""
+def _api_ext_install(self, names, iid=None, nodes=None, extra=None):
+    """nodes：ComfyUI 不在目录表里的节点（报错诊断查到的缺失节点 / 按地址装的），格式同 comfy_nodes.CATALOG 的条目；
+    extra：WebUI 不在推荐清单里的扩展 [(名字, git 地址, 文件夹名)]（插件管理页按地址 / 搜索装的）"""
     if _ext_busy(self):
         return {"ok": False, "error": "已有插件任务在进行中"}
     cfg, info, comfy_dir = _ext_target(self, iid)
@@ -6606,6 +6670,11 @@ def _api_ext_install(self, names, iid=None, nodes=None):
         if _ext_match(e, scanned):
             continue  # 已安装的（包括用户自己装的、文件夹名不一样的）自动跳过
         selected.append((e["name"], e["url"], e["folder"]))
+    for name, url, folder in extra or []:
+        slug = vm.repo_slug(url)
+        if any((slug and r["slug"] == slug) or r["key"] == vm.folder_key(folder) for r in scanned):
+            continue
+        selected.append((name, url, folder))
     if not selected:
         return {"ok": False, "error": "请先勾选要安装的扩展（已安装的会自动跳过）"}
 
@@ -6695,6 +6764,14 @@ def _api_ext_repo_versions(self, rel, iid=None):
     env = _ext_env(cfg, info)
     local = vm.local_info(git_exe, repo, env)
     if not local.get("is_git"):
+        cnr = plreg.read_cnr(repo)
+        if cnr:
+            try:
+                vs = plreg.registry_versions(lambda u: _pr_get_json(self, u), cnr["id"])
+            except Exception as e:
+                return {"ok": True, "local": local, "cnr": cnr, "versions": [],
+                        "error": f"连不上 ComfyUI 注册表（api.comfy.org）：{e}"}
+            return {"ok": True, "local": local, "cnr": cnr, "versions": vs}
         return {"ok": True, "local": local, "remote": None, "history": []}
     log = lambda t: self._emit("ext", "log", text=t)
     log(f"\n[插件] 获取「{os.path.basename(repo)}」的版本列表 ...\n")
@@ -6731,9 +6808,16 @@ def _api_ext_check_updates(self, iid=None):
     cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
     if err:
         return {"ok": False, "error": err}
-    repos = [r for r in vm.scan_repos(info["target_dir"]) if r["is_git"] and r["remote"]]
+    repos = []
+    for r in vm.scan_repos(info["target_dir"]):
+        if r["is_git"] and r["remote"]:
+            repos.append(r)
+        elif not r["is_git"]:
+            c = plreg.read_cnr(r["path"])
+            if c:
+                repos.append(dict(r, cnr=c))
     if not repos:
-        return {"ok": False, "error": "这个实例里没有可检查的 git 插件"}
+        return {"ok": False, "error": "这个实例里没有可检查的插件（git 装的或 ComfyUI 注册表版）"}
     self._ext_cancel = False
 
     def work():
@@ -6748,6 +6832,8 @@ def _api_ext_check_updates(self, iid=None):
         def one(r):
             if self._ext_cancel:
                 return
+            if r.get("cnr"):
+                return one_cnr(r)
             chk = vm.check(quiet, git_exe, r["path"], r["remote"], sources, lambda t: None, env,
                            cancelled=lambda: self._ext_cancel)
             key = os.path.normcase(r["path"])
@@ -6761,6 +6847,25 @@ def _api_ext_check_updates(self, iid=None):
                 self._ext_updates[key] = {"error": chk.get("error"), "checked": time.strftime("%H:%M")}
                 log(f"[插件] {r['folder']}：检查失败（{chk.get('error')}）\n")
             self._emit("ext", "update_status", rel=r["rel"], update=self._ext_updates[key])
+
+        def one_cnr(r):
+            c = r["cnr"]
+            key = os.path.normcase(r["path"])
+            try:
+                node = plreg.registry_node(lambda u: _pr_get_json(self, u), c["id"])
+                lv = (node or {}).get("latest_version") or {}
+                latest = str(lv.get("version") or "")
+                newer = plreg.is_newer(latest, c["version"])
+                s = {"behind": 1 if newer else 0, "cnr": True, "latest_short": latest,
+                     "latest_date": str(lv.get("createdAt") or "")[:10], "checked": time.strftime("%H:%M")}
+                if newer:
+                    n_upd[0] += 1
+                    log(f"[插件] {r['folder']}：有新版本 {c['version'] or '?'} → {latest}（注册表）\n")
+            except Exception as e:
+                s = {"error": f"注册表查询失败：{e}", "checked": time.strftime("%H:%M")}
+                log(f"[插件] {r['folder']}：注册表查询失败（{e}）\n")
+            self._ext_updates[key] = s
+            self._emit("ext", "update_status", rel=r["rel"], update=s)
 
         try:
             with ThreadPoolExecutor(max_workers=4) as pool:
@@ -6813,7 +6918,20 @@ def _api_ext_switch(self, rels, target=None, iid=None):
                 name = os.path.basename(repo)
                 local = vm.local_info(git_exe, repo, env, with_dirty=False)
                 if not local.get("is_git"):
-                    log(f"\n[插件] {name}：不是 git 安装的（zip 解压 / Manager 注册表版），没法用这里更新\n")
+                    cnr = plreg.read_cnr(repo) if comfy else None
+                    if not cnr:
+                        log(f"\n[插件] {name}：不是 git 安装的（zip 解压的），没法用这里更新\n")
+                        continue
+                    want = target.get("version") if target.get("kind") == "cnr" else None
+                    log(f"\n[插件] ===== {name}（注册表版 {cnr['version'] or '?'}）=====\n")
+                    res = _cnr_install(self, cfg, info, comfy_dir, cnr["id"], want, repo, log, run, env,
+                                       sources, current=cnr["version"])
+                    if res.get("ok"):
+                        ok += 1
+                        self._ext_updates.pop(os.path.normcase(repo), None)
+                    else:
+                        fail += 1
+                        log(f"[插件] {name}：{res.get('error')}\n")
                     continue
                 if batch and not local.get("branch"):
                     log(f"\n[插件] {name}：固定在 {local.get('short')}，批量更新跳过（要更新请单独点它的「版本」）\n")
@@ -6850,6 +6968,212 @@ def _api_ext_switch(self, rels, target=None, iid=None):
 
     self._emit("ext", "state", running=True)
     self._ext_thread = self._spawn(work, name="ext-switch")
+    return {"ok": True}
+
+
+# ---------------------------------------------------------- 注册表 / 搜索 / 按地址装 / 卸载 ----
+def _pr_get_json(self, url, timeout=20):
+    """插件管理联网查询：GitHub 上的文件走加速代理，注册表（api.comfy.org）直接请求"""
+    if "githubusercontent.com" in url or "//github.com/" in url:
+        data = _diag_fetch_json(self, url)
+        if data is None:
+            raise RuntimeError("GitHub 直连和加速地址都没连上")
+        return data
+    import requests
+    r = requests.get(url, timeout=timeout, headers={"User-Agent": "WWY-Launcher"})
+    if r.status_code != 200:
+        raise RuntimeError(f"HTTP {r.status_code}")
+    return r.json()
+
+
+def _pr_download(self, url, log, cancelled=lambda: False):
+    """下载注册表的 zip（几百 KB 到几十 MB），每 20% 报一次进度"""
+    import requests
+    with requests.get(url, timeout=(15, 60), stream=True, headers={"User-Agent": "WWY-Launcher"}) as r:
+        if r.status_code != 200:
+            raise RuntimeError(f"下载失败：HTTP {r.status_code}")
+        total = int(r.headers.get("content-length") or 0)
+        buf, got, mark = io.BytesIO(), 0, 0.2
+        for chunk in r.iter_content(256 * 1024):
+            if cancelled():
+                raise RuntimeError("已取消")
+            buf.write(chunk)
+            got += len(chunk)
+            if total and got / total >= mark:
+                log(f"  已下载 {got * 100 // total}%（{got / 1048576:.1f} / {total / 1048576:.1f} MB）\n")
+                mark += 0.2
+        return buf.getvalue()
+
+
+def _cnr_install(self, cfg, info, comfy_dir, node_id, version, dest, log, run, env, sources, current=None):
+    """装 / 换注册表版节点：下 zip → 整包替换（旧版挪到备份）→ 装依赖。version 为空 = 最新"""
+    get = lambda u: _pr_get_json(self, u)
+    try:
+        url, ver = plreg.registry_download_url(get, node_id, version)
+    except Exception as e:
+        return {"ok": False, "error": f"查不到下载地址：{e}"}
+    if current and ver == current:
+        log(f"[插件] 已经是 {ver}，不用换\n")
+        return {"ok": True, "unchanged": True}
+    log(f"[插件] 下载 {node_id} {ver}：{url}\n")
+    try:
+        data = _pr_download(self, url, log, lambda: self._ext_cancel)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = os.path.join(VERSION_BACKUP_DIR, "plugins", os.path.basename(dest), f"{current or 'old'}-{stamp}")
+        n = plreg.install_zip(data, dest, backup_dir=backup if os.path.isdir(dest) else None,
+                           log=lambda m: log("[插件] " + m))
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    log(f"[插件] 已解压 {n} 个文件 → {dest}\n")
+    if not self._ext_cancel:
+        bad = comfy_nodes.install_node_deps(dest, comfy_dir, cm.comfy_python(cfg, info["root"]), run, log, env,
+                                            lambda: self._ext_cancel, sources, _pip_mirror_argsets(cfg))
+        if bad:
+            log(f"[插件] 有依赖没装上：{'、'.join(bad)}\n")
+    log(f"[插件] {node_id}：{(current + ' → ') if current else ''}{ver}\n")
+    return {"ok": True, "version": ver}
+
+
+def _ext_installed_keys(info):
+    """已装插件的特征（判断搜索结果是不是已经装了）：仓库地址、文件夹名、注册表 id"""
+    slugs, keys, ids = set(), set(), set()
+    for r in vm.scan_repos(info.get("target_dir")):
+        if r["slug"]:
+            slugs.add(r["slug"])
+        keys.add(r["key"])
+        c = None if r["is_git"] else plreg.read_cnr(r["path"])
+        if c:
+            ids.add(c["id"])
+    return slugs, keys, ids
+
+
+def _api_ext_search(self, query, iid=None):
+    """
+    插件管理页的「安装新插件」：粘贴的是 git 地址就直接返回地址；否则联网搜索——
+    ComfyUI 搜 Comfy 注册表（和 Manager 同一个源），WebUI 搜 A1111 官方扩展索引
+    """
+    cfg, info, comfy_dir = _ext_target(self, iid)
+    q = (query or "").strip()
+    if not q:
+        return {"ok": False, "error": "输入插件名字、关键词，或者粘贴 GitHub 地址"}
+    url = plreg.normalize_git_url(q)
+    if url:
+        return {"ok": True, "url": url, "folder": plreg.repo_folder(url), "items": []}
+    comfy = info["kind"] == "comfyui"
+    try:
+        if comfy:
+            items = plreg.registry_search(lambda u: _pr_get_json(self, u), q)
+        else:
+            idx = plreg.load_forge_index(os.path.join(APP_DIR, "launcher_data", "ext_index_webui.json"),
+                                      lambda u: _pr_get_json(self, u))
+            items = plreg.search_items(idx, q)
+    except Exception as e:
+        src = "ComfyUI 注册表（api.comfy.org）" if comfy else "WebUI 扩展索引（GitHub）"
+        return {"ok": False, "error": f"搜索失败：连不上{src}（{e}）。也可以直接粘贴插件的 GitHub 地址安装"}
+    slugs, keys, ids = _ext_installed_keys(info)
+    for it in items:
+        u = it.get("url") or ""
+        it["installed"] = bool((it.get("id") and it["id"].lower() in ids) or (u and vm.repo_slug(u) in slugs)
+                               or (u and vm.folder_key(vm.repo_name(u)) in keys)
+                               or (it.get("id") and vm.folder_key(it["id"]) in keys))
+    return {"ok": True, "items": items, "comfy": comfy,
+            "source": "ComfyUI 注册表" if comfy else "WebUI 扩展索引"}
+
+
+def _api_ext_install_url(self, url, iid=None, name=None):
+    """按 git 地址装任意插件（不在推荐清单里的）"""
+    u = plreg.normalize_git_url(url)
+    if not u:
+        return {"ok": False, "error": "地址不对：要是 https://github.com/作者/仓库 这样的 git 地址"}
+    cfg, info, _cd = _ext_target(self, iid)
+    folder = plreg.repo_folder(u)
+    if info.get("target_dir") and os.path.exists(os.path.join(info["target_dir"], folder)):
+        return {"ok": False, "error": f"插件目录里已经有「{folder}」了"}
+    label = (name or "").strip() or folder
+    if info["kind"] == "comfyui":
+        node = {"id": "url:" + (vm.repo_slug(u) or folder), "name": label,
+                "url": u if u.endswith(".git") or not u.startswith("http") else u + ".git", "folder": folder}
+        return _api_ext_install(self, [], iid, nodes=[node])
+    return _api_ext_install(self, [], iid, extra=[(label, u, folder)])
+
+
+def _api_ext_install_registry(self, node_id, iid=None, url=None, name=None):
+    """从 Comfy 注册表装新节点（和 Manager 一样下 zip，不用连 GitHub）；注册表下不了时退回 git clone"""
+    cfg, info, comfy_dir, git_exe, err = _ext_task_guard(self, iid)
+    if err:
+        return {"ok": False, "error": err}
+    if info["kind"] != "comfyui":
+        return {"ok": False, "error": "注册表只有 ComfyUI 节点"}
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行。装节点要往它的 Python 环境里装依赖，"
+                                      "运行中文件被占用会失败——请先停止这个实例。"}
+    nid = re.sub(r"[^\w.\-]", "_", str(node_id or "")).strip("._")
+    if not nid:
+        return {"ok": False, "error": "节点 id 不对"}
+    dest = os.path.join(info["target_dir"], nid)
+    if os.path.exists(dest):
+        return {"ok": False, "error": f"插件目录里已经有「{nid}」了"}
+    self._ext_cancel = False
+
+    def work():
+        log = lambda t: self._emit("ext", "log", text=t)
+        run = lambda p, a, c, e, t: _ext_run_cmd(self, p, a, c, e, t)
+        env = _ext_env(cfg, info)
+        failed = []
+        try:
+            log(f"\n[插件] 安装 {name or nid}（ComfyUI 注册表）到：{info['target_dir']}\n")
+            os.makedirs(info["target_dir"], exist_ok=True)
+            sources = _gh_sources(cfg, lambda m: log(m + "\n"))
+            res = _cnr_install(self, cfg, info, comfy_dir, nid, None, dest, log, run, env, sources)
+            if not res.get("ok") and not self._ext_cancel and url and plreg.normalize_git_url(url):
+                log(f"[插件] 注册表没装上（{res.get('error')}），改用 git 从源码仓库装 ...\n")
+                u = plreg.normalize_git_url(url)
+                node = {"id": "url:" + nid, "name": name or nid, "folder": plreg.repo_folder(u),
+                        "url": u if u.endswith(".git") else u + ".git"}
+                r2 = comfy_nodes.install([node], comfy_dir, cm.comfy_python(cfg, info["root"]), git_exe,
+                                         run=run, log=log, env=env, cancelled=lambda: self._ext_cancel,
+                                         gh_sources=sources, pip_mirror_argsets=_pip_mirror_argsets(cfg))
+                res = {"ok": bool(r2["ok"] or r2["skipped"]),
+                       "error": "；".join(f"{a}：{b}" for a, b in r2["failed"])}
+            if self._ext_cancel:
+                log("\n[插件] 已取消\n")
+            elif res.get("ok"):
+                log("\n[插件] 安装完成，重启 ComfyUI 后新节点生效。\n")
+            else:
+                failed.append(name or nid)
+                log(f"\n[插件] 安装失败：{res.get('error')}\n")
+            self._emit("ext", "done", failed=failed)
+        except Exception as e:
+            log(f"\n[插件] 安装中途出错：{e}\n{traceback.format_exc()[-1200:]}\n")
+            self._emit("ext", "done", failed=[name or nid], error=str(e))
+        finally:
+            self._ext_proc = None
+            self._emit("ext", "state", running=False)
+
+    self._emit("ext", "state", running=True)
+    self._ext_thread = self._spawn(work, name="ext-registry")
+    return {"ok": True}
+
+
+def _api_ext_uninstall(self, rel, iid=None):
+    """卸载：整个插件文件夹放进回收站（想要回来去回收站还原）。实例运行中不让删"""
+    if _ext_busy(self):
+        return {"ok": False, "error": "已有插件任务在进行中，等它结束再操作"}
+    cfg, info, _cd = _ext_target(self, iid)
+    p = _ext_resolve_repo(info, rel)
+    if not p:
+        return {"ok": False, "error": "插件目录不存在（可能刚被改过），请刷新"}
+    if info["running"]:
+        return {"ok": False, "error": f"「{info['name']}」正在运行，插件文件被占用，请先在「一键启动」页停止它再卸载"}
+    if not ml.send_to_trash(p):
+        return {"ok": False, "error": "没能放进回收站（文件被占用？）。可以点「目录」手动删除"}
+    self._ext_updates.pop(os.path.normcase(p), None)
+    if info["kind"] != "comfyui":
+        try:
+            _webui_set_ext_disabled(info["root"], os.path.basename(p), False)
+        except (OSError, ValueError):
+            pass
+    self._emit("ext", "log", text=f"\n[插件] 已卸载 {os.path.basename(p)}（在回收站里可以还原）\n")
     return {"ok": True}
 
 
@@ -9585,7 +9909,7 @@ def _diag_exec(self, aid, p):
         r = _api_ext_toggle(self, p["rel"], False, p["iid"])
         if not r.get("ok"):
             return r
-        return {"ok": True, "text": f"已停用「{p['rel']}」，可在「常用插件」页重新启用"}
+        return {"ok": True, "text": f"已停用「{p['rel']}」，可在「插件管理」页重新启用"}
     if aid == "download_model":
         return _diag_download(self, p)
     if aid == "comfy_set_mode":
@@ -9609,7 +9933,7 @@ def _diag_exec(self, aid, p):
 
 
 def _diag_comfy_job(self, iid, label, work):
-    """往 ComfyUI 实例的 Python 里装东西（借用「常用插件」页的任务通道：日志、取消、忙碌标记都共用）"""
+    """往 ComfyUI 实例的 Python 里装东西（借用「插件管理」页的任务通道：日志、取消、忙碌标记都共用）"""
     if _ext_busy(self):
         return {"ok": False, "error": "已有插件任务在进行中，等它结束再试"}
     cfg, info, comfy_dir = _ext_target(self, iid)
@@ -10007,10 +10331,16 @@ _LINK_DENY = {
     "reveal_image", "open_output_folder", "ver_open_backup", "ext_open_dir", "trainer_open",
     "log_frontend", "activity_entries", "activity_clear", "activity_open",
 }
-# 远程模式下仍然显示本机事件的 scope（联动自己的状态、本机启动器的自更新）
-_LINK_LOCAL_SCOPES = {"link", "launcher"}
-# 远程模式下界面风格等按本机的来，不去改主机的
-_LINK_LOCAL_CFG = {"ui_theme"}
+# 远程模式下仍然显示本机事件的 scope（联动自己的状态、本机启动器的自更新；
+# 图片反推 / 图片信息两页处理的是这台电脑上的图片，远程时也在本机跑）
+_LINK_LOCAL_SCOPES = {"link", "launcher", "wd14", "caption", "meta"}
+# 远程模式下界面风格等按本机的来，不去改主机的；反推 / 图片信息的设置也是本机的
+_LINK_LOCAL_CFG = {"ui_theme", "meta_view_mode"}
+_LINK_LOCAL_CFG_PREFIX = ("wd14_", "caption_")
+
+
+def _link_local_cfg(key):
+    return key in _LINK_LOCAL_CFG or str(key).startswith(_LINK_LOCAL_CFG_PREFIX)
 _LINK_NO_LOCAL_FILES = "这是主机上的文件 / 文件夹，没法在这台电脑上直接打开；需要的话用「下载到本机」"
 _link_tls = threading.local()
 
@@ -10361,9 +10691,9 @@ def _api_remote_call(self, method, args=None):
 
 def _lk_get_state(self, cli, args):
     st = cli.call("get_state", args)
-    for k in _LINK_LOCAL_CFG:
-        if k in self.cfg:
-            st.setdefault("config", {})[k] = self.cfg[k]
+    for k, v in self.cfg.items():
+        if _link_local_cfg(k):
+            st.setdefault("config", {})[k] = v
     local_ver = updater.get_local_info(self.cfg)
     st["launcher"] = {"version": local_ver["version"], "commit": local_ver["commit"]}
     st["new_machine"] = False
@@ -10373,8 +10703,8 @@ def _lk_get_state(self, cli, args):
 
 def _lk_update_config(self, cli, args):
     changes = args[0] if args and isinstance(args[0], dict) else {}
-    local = {k: v for k, v in changes.items() if k in _LINK_LOCAL_CFG}
-    rest = {k: v for k, v in changes.items() if k not in _LINK_LOCAL_CFG}
+    local = {k: v for k, v in changes.items() if _link_local_cfg(k)}
+    rest = {k: v for k, v in changes.items() if not _link_local_cfg(k)}
     if local:
         self.update_config(local)
     if rest or not local:
@@ -10708,6 +11038,10 @@ for _name, _fn in {
     "ext_replace": _api_ext_replace,
     "ext_open_dir": _api_ext_open_dir,
     "ext_toggle": _api_ext_toggle,
+    "ext_search": _api_ext_search,
+    "ext_install_url": _api_ext_install_url,
+    "ext_install_registry": _api_ext_install_registry,
+    "ext_uninstall": _api_ext_uninstall,
     "ver_info": _api_ver_info,
     "ver_check": _api_ver_check,
     "ver_switch": _api_ver_switch,
@@ -10762,6 +11096,7 @@ for _name, _fn in {
     "launcher_update": _api_launcher_update,
     "launcher_restart": _api_launcher_restart,
     "outputs_info": _api_outputs_info,
+    "models_previews": _api_models_previews,
     "outputs_scan": _api_outputs_scan,
     "outputs_query": _api_outputs_query,
     "outputs_facets": _api_outputs_facets,

@@ -280,7 +280,7 @@ _PAGES = {"launch", "instances", "settings", "launcher", "deploy", "versions", "
 
 ACTIONS = {
     "open_page": {"risk": "ui", "params": "page: launch（一键启动）/ settings（高级选项）/ launcher（启动器设置）/ deploy（环境部署）/ "
-                                    "versions（版本管理）/ civitai（模型下载）/ models（模型管理）/ extensions（常用插件）/ instances（实例管理）",
+                                    "versions（版本管理）/ civitai（模型下载）/ models（模型管理）/ extensions（插件管理）/ instances（实例管理）",
                   "desc": "打开启动器的某个页面（让用户去那里操作）"},
     "open_url": {"risk": "ui", "params": "url: http(s) 网址", "desc": "在浏览器里打开网址（驱动下载页、文档等）"},
     "civitai_redownload": {"risk": "ui", "params": "url: civitai.com 模型页地址",
@@ -763,7 +763,7 @@ def _b_forge_ext(m, text, ctx):
     acts.append(action("open_page", "去插件页更新 / 换版本", page="extensions"))
     return _finding("forge_ext_error", f"扩展「{rel}」报错",
                     f"扩展「{rel}」加载或运行时出错（见证据行和上面的堆栈）。扩展版本和 WebUI 对不上最常见："
-                    "到「常用插件」页更新它，或者先停用。",
+                    "到「插件管理」页更新它，或者先停用。",
                     m.group(0), acts, level="warn", key=f"forge_ext_error:{rel}")
 
 
