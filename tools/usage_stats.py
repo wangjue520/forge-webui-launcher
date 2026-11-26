@@ -11,7 +11,7 @@ import time
 
 import requests
 
-API = "https://api.github.com/repos/wangjue520/forge-webui-launcher/releases/tags/usage-ping"
+API = "https://api.github.com/repos/wangjue520/wwy-launcher/releases/tags/usage-ping"
 CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usage_stats.csv")
 
 

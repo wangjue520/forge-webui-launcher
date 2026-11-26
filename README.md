@@ -1,4 +1,6 @@
-# WWY 启动器（ComfyUI / Forge WebUI）
+# WWY AI 绘画启动器/工具箱（ComfyUI / Forge WebUI）
+
+> 简称「WWY 启动器」。仓库原名 `forge-webui-launcher`，2026-11 改名为 `wwy-launcher`：旧链接、旧版本里的「检查更新」都会自动跳转到新地址，已经装好的不用重新下载。
 
 面向不懂 Python 的用户：界面美观、开箱即用、出错有中文提示。
 一个启动器同时管理 **ComfyUI** 和 **Forge WebUI**（Neo / Classic），支持多实例同时运行；只用一个的话界面和以前一样简单。
@@ -63,18 +65,18 @@
 ### 一、下载并解压
 
 1. 仓库主页 → 绿色 **Code** → **Download ZIP**（或 `git clone`）
-2. 解压到**纯英文路径**，如 `D:\forge-launcher`。避免桌面（中文用户名）、空格、`(1)` 这类括号——路径带中文/括号是绝大多数"莫名报错"的根源
+2. 解压到**纯英文路径**，如 `D:\WWY`。避免桌面（中文用户名）、空格、`(1)` 这类括号——路径带中文/括号是绝大多数"莫名报错"的根源
 3. **不要在压缩包里直接双击运行**，先完整解压
 
 解压出来的结构：
 
 ```
-D:\forge-launcher\
-├─ forge-webui-launcher\    ← 启动器本体（里面的文件不用动）
+D:\WWY\
+├─ wwy-launcher\            ← 启动器本体（里面的文件不用动）
 └─ 启动WWY启动器.bat         ← 把压缩包里的这个 bat 移到文件夹旁边，以后双击它
 ```
 
-`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `forge-webui-launcher` 文件夹），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的这个 bat 效果完全一样。
+`启动WWY启动器.bat` 放在文件夹**旁边**就能用（它会自动找到旁边的 `wwy-launcher` 文件夹，老版本解压出来的 `forge-webui-launcher` 也认），普通用户永远不需要打开启动器文件夹。直接双击文件夹里的这个 bat 效果完全一样。
 
 ### 二、第一次双击 bat
 
@@ -378,7 +380,7 @@ Forge 默认 `output\txt2img-images\` / `output\img2img-images\`（Classic 分�
 `launcher_config.json` 首次运行自动生成（实例表、当前实例、界面风格、全局设置都在里面），全部能在界面上改，不需要手改。
 
 ```
-forge-webui-launcher/
+wwy-launcher/
 ├─ 启动WWY启动器.bat    ← 唯一入口（双击；也可以放到文件夹旁边用，见上文）
 ├─ README.md / LICENSE / requirements.txt
 ├─ version.json         ← 当前版本号（每次更新自动重写）
@@ -415,5 +417,5 @@ forge-webui-launcher/
 
 ## 反馈与贡献
 
-- Bug / 建议：[GitHub Issues](https://github.com/wangjue520/forge-webui-launcher/issues)（附日志或截图最容易解决）
+- Bug / 建议：[GitHub Issues](https://github.com/wangjue520/wwy-launcher/issues)（附日志或截图最容易解决）
 - 欢迎 PR：代码风格跟随现有文件，大改动请先开 Issue 讨论

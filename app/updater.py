@@ -41,7 +41,7 @@ import requests
 
 APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # 项目根目录（代码在 app/ 子目录里）
 
-REPO = "wangjue520/forge-webui-launcher"
+REPO = "wangjue520/wwy-launcher"
 BRANCH = "main"
 REPO_URL = f"https://github.com/{REPO}.git"
 ZIP_URL = f"https://codeload.github.com/{REPO}/zip/refs/heads/{BRANCH}"

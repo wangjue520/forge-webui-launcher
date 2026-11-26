@@ -19,7 +19,7 @@ import time
 
 import requests
 
-REPO = "wangjue520/forge-webui-launcher"
+REPO = "wangjue520/wwy-launcher"
 TAG = "usage-ping"
 USER_URL = f"https://github.com/{REPO}/releases/download/{TAG}/user.txt"
 UPDATE_URL = f"https://github.com/{REPO}/releases/download/{TAG}/update.txt"
