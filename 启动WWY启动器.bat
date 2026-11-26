@@ -23,14 +23,14 @@ if not exist "%TEMP%\" mkdir "%TEMP%" >nul 2>nul
 
 rem 兼容老习惯：这个 bat 被拿到启动器文件夹【旁边】时，自动转交文件夹里的本体
 if not exist "%~dp0app\webview_main.py" (
-    for /d %%d in ("%~dp0forge-webui-launcher*") do (
+    for /d %%d in ("%~dp0wwy-launcher*" "%~dp0forge-webui-launcher*") do (
         if exist "%%d\app\webview_main.py" (
             call "%%d\启动WWY启动器.bat" %*
             exit /b
         )
     )
     echo.
-    echo   [x] 没找到启动器本体：请把这个 bat 放回 forge-webui-launcher 文件夹里（或它旁边）。
+    echo   [x] 没找到启动器本体：请把这个 bat 放回 wwy-launcher 文件夹里（或它旁边）。
     pause
     exit /b 1
 )
