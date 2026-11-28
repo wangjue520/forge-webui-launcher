@@ -260,6 +260,34 @@
 
       <!-- ======== 启动器设置（全局，不属于任何实例） ======== -->
       <section class="page" id="page-launcher">
+        <div class="card about-card" id="about-card">
+          <div class="card-title">关于 · 交流<span class="card-title-hint">免费开源，觉得好用的话帮忙点个 Star，是对作者最大的支持</span></div>
+          <div class="about-rows">
+            <div class="about-row">
+              <span class="about-k">GitHub</span>
+              <span class="about-v">wangjue520/wwy-launcher</span>
+              <button class="btn btn-xs btn-accent" data-about-url="https://github.com/wangjue520/wwy-launcher">⭐ 去点个 Star</button>
+              <button class="btn btn-xs" data-about-copy="https://github.com/wangjue520/wwy-launcher">复制地址</button>
+            </div>
+            <div class="about-row">
+              <span class="about-k">QQ 交流群</span>
+              <span class="about-v about-qq">1103076169</span>
+              <button class="btn btn-xs" data-about-copy="1103076169">复制群号</button>
+              <span class="hint">问题反馈、使用交流、新功能抢先看</span>
+            </div>
+            <div class="about-row">
+              <span class="about-k">视频教程</span>
+              <span class="about-v">B 站 · 作者空间</span>
+              <button class="btn btn-xs" data-about-url="https://space.bilibili.com/441050663">打开 B 站</button>
+            </div>
+            <div class="about-row" data-local-only>
+              <span class="about-k">图文教程</span>
+              <span class="about-v">WWY 启动器 × Anima 完全上手教程（PDF）</span>
+              <button class="btn btn-xs" id="about-pdf">打开 PDF</button>
+            </div>
+          </div>
+        </div>
+
         <div class="card">
           <div class="card-title">启动器更新<span class="card-title-hint">从 GitHub 增量更新启动器本体，不用重新下载整个压缩包</span></div>
           <div class="form-grid">
@@ -718,6 +746,8 @@
             <div class="row">
               <input type="text" id="md-filter" placeholder="输入关键字过滤文件名…">
               <select id="md-base"><option value="">全部</option></select>
+              <select id="md-col" title="只看某个收藏夹里的模型（收藏夹只做记录，不会移动模型文件）"><option value="">全部模型</option></select>
+              <button class="btn btn-xs" id="md-col-manage" title="新建 / 改名 / 删除模型收藏夹">收藏夹…</button>
               <span class="chips md-viewsw" id="md-viewsw" title="列表 / 图标视图（图标视图显示预览图）">
                 <button class="chip" data-mdview="list">列表</button><button class="chip" data-mdview="grid">图标</button>
               </span>
@@ -747,6 +777,7 @@
               </div>
             </div>
             <div class="detail-view" id="md-detail"></div>
+            <div class="md-cols chips" id="md-cols" hidden></div>
             <div class="detail-actions">
               <button class="btn btn-xs" id="md-open" disabled title="在资源管理器中定位" data-local-only>在资源管理器中定位</button>
               <button class="btn btn-xs btn-accent" id="md-dl" disabled title="连同预览图和 Civitai 信息一起下载到这台电脑" data-remote-only>下载到本机</button>
@@ -1128,6 +1159,8 @@
               <span id="out-sel-count">已选 0 张</span>
               <select id="out-sel-col"></select>
               <button class="btn btn-xs" id="out-sel-add">加入收藏夹</button>
+              <button class="btn btn-xs btn-accent" id="out-sel-cmp" title="选 2~4 张，并排 / 滑动对比画面，标出不同的参数">对比</button>
+              <button class="btn btn-xs" id="out-sel-copy" data-local-only title="复制选中的图（Ctrl+C），到文件夹或聊天软件里直接粘贴">复制</button>
               <button class="btn btn-xs btn-accent" id="out-sel-dl" data-remote-only>下载到本机</button>
               <button class="btn btn-xs btn-danger-text" id="out-sel-del">删除（进回收站）</button>
               <button class="btn btn-xs" id="out-sel-clear">取消选择</button>
@@ -1147,6 +1180,7 @@
             <button class="btn btn-xs" id="od-next">下一张 ›</button>
             <button class="btn btn-xs" id="od-open">打开</button>
             <button class="btn btn-xs" id="od-reveal" data-local-only>定位</button>
+            <button class="btn btn-xs" id="od-copy" data-local-only title="复制图片（Ctrl+C）：在文件夹、QQ / 微信、PS 里直接粘贴；也可以直接把图片拖出去">复制图片</button>
             <button class="btn btn-xs btn-accent" id="od-dl" data-remote-only>下载到本机</button>
             <button class="btn btn-xs" id="od-meta" data-local-only>发送到图片信息</button>
             <button class="btn btn-xs btn-accent" id="od-send-webui" data-local-only title="提示词、LoRA、参数和插件状态套到正在运行的 WebUI 文生图">发送到 WebUI</button>
@@ -1159,6 +1193,27 @@
       </section>
     </div>
   </main>
+</div>
+
+<!-- 输出对比（js/outputs.js）：并排 / 滑动对比，缩放平移同步；下面是参数对照，不同的标出来 -->
+<div class="cmp" id="out-compare" hidden>
+  <div class="cmp-tools">
+    <span class="cmp-title">输出对比</span>
+    <span class="cmp-mode" id="cmp-mode">
+      <button class="chip on" data-mode="side" type="button">并排</button>
+      <button class="chip" data-mode="wipe" type="button">滑动对比</button>
+    </span>
+    <span class="cmp-pick" id="cmp-pick" hidden>
+      <select id="cmp-a"></select><span>↔</span><select id="cmp-b"></select>
+    </span>
+    <span class="lb-pct" id="cmp-pct">适应</span>
+    <button class="btn btn-xs" id="cmp-fit" type="button">适应窗口</button>
+    <button class="btn btn-xs" id="cmp-actual" type="button">实际大小</button>
+    <label class="cmp-only"><input type="checkbox" id="cmp-diff-only"> 参数只看不同的</label>
+    <button class="btn btn-xs" id="cmp-close" type="button">关闭</button>
+  </div>
+  <div class="cmp-stage" id="cmp-stage"></div>
+  <div class="cmp-params" id="cmp-params"></div>
 </div>
 
 <!-- 图片放大浏览 -->

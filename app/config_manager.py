@@ -1139,7 +1139,14 @@ def torch_compat_overrides(cfg, root_dir, notes=None):
     """
     返回 (环境变量覆盖, 是否需要重装 torch)。驱动信息拿不到、目标不是 cuXXX、
     用户自己设了 TORCH_COMMAND 时一律不插手。详见 cuda_compat.py。
+    多显卡时只按这个实例指定的那张卡（gpu_device_id）判断。
     """
+    import cuda_compat as cc
+    with cc.device_scope(cfg.get("gpu_device_id")):
+        return _torch_compat_overrides(cfg, root_dir, notes)
+
+
+def _torch_compat_overrides(cfg, root_dir, notes=None):
     if "TORCH_COMMAND" in os.environ:
         return {}, False
     import cuda_compat as cc

@@ -20,6 +20,7 @@ import traceback
 import webbrowser
 
 import config_manager as cm
+import pip_history
 
 WEBUI_ENTRY_SCRIPT = "webui.bat"
 
@@ -82,30 +83,36 @@ def _driver_issue_forge(root, cfg):
         return None   # A 卡环境：没有 NVIDIA 驱动这回事
     try:
         import cuda_compat as cc
-        import torch_bootstrap as tb
-        py = (cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root) or ""
-        ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root, py))
-        _specs, wanted = tb._parse_torch_spec(root)
-        tag = itag or wanted
-        if not tag:
-            return None
-        auto = "TORCH_COMMAND" not in os.environ
-        # 显卡架构和 torch 对不上时能不能自动换装：要看这个 WebUI 默认的 torch（老卡降到 cu126 之后）
-        # 显卡跑不跑得了——Forge Classic 写死 cu121，50 系怎么换都不行
-        gpu_fix = auto and bool(wanted) and cc.gpu_tag_mismatch(cc.effective_tag(wanted)) is None
-        issue = cc.driver_issue(tag, "这个 WebUI ", auto, gpu_fix=gpu_fix)
-        if issue is None and auto and ver and itag and wanted and \
-                cc.fallback_restorable(root, f"{ver}+{itag}", wanted):
-            return {
-                "level": "warn", "id": "torch_restore", "root": root,
-                "text": f"显卡驱动已经升级，带得动这个 WebUI 默认的 torch（{wanted}）了。\n\n"
-                        f"现在环境里还是之前因为驱动太旧换装的兼容版本（torch {ver}+{itag}）。"
-                        "换回默认版本需要下载约 3GB，换回后 SageAttention 这类按 torch 版本配套的加速库才装得上。\n\n"
-                        "选「保持现状」以后不再提醒（想换回时到「环境部署」页对这个目录重新点「开始部署」）。",
-            }
-        return issue
+        with cc.device_scope(cfg.get("gpu_device_id")):   # 多显卡：只看这个实例指定的那张
+            return _driver_issue_forge_scoped(root, cfg)
     except Exception:
         return None
+
+
+def _driver_issue_forge_scoped(root, cfg):
+    import cuda_compat as cc
+    import torch_bootstrap as tb
+    py = (cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root) or ""
+    ver, itag = cc.installed_torch_tag(cc.forge_site_packages(root, py))
+    _specs, wanted = tb._parse_torch_spec(root)
+    tag = itag or wanted
+    if not tag:
+        return None
+    auto = "TORCH_COMMAND" not in os.environ
+    # 显卡架构和 torch 对不上时能不能自动换装：要看这个 WebUI 默认的 torch（老卡降到 cu126 之后）
+    # 显卡跑不跑得了——Forge Classic 写死 cu121，50 系怎么换都不行
+    gpu_fix = auto and bool(wanted) and cc.gpu_tag_mismatch(cc.effective_tag(wanted)) is None
+    issue = cc.driver_issue(tag, "这个 WebUI ", auto, gpu_fix=gpu_fix)
+    if issue is None and auto and ver and itag and wanted and \
+            cc.fallback_restorable(root, f"{ver}+{itag}", wanted):
+        return {
+            "level": "warn", "id": "torch_restore", "root": root,
+            "text": f"显卡驱动已经升级，带得动这个 WebUI 默认的 torch（{wanted}）了。\n\n"
+                    f"现在环境里还是之前因为驱动太旧换装的兼容版本（torch {ver}+{itag}）。"
+                    "换回默认版本需要下载约 3GB，换回后 SageAttention 这类按 torch 版本配套的加速库才装得上。\n\n"
+                    "选「保持现状」以后不再提醒（想换回时到「环境部署」页对这个目录重新点「开始部署」）。",
+        }
+    return issue
 
 
 def _driver_issue_comfy(root, cfg, comfy_dir):
@@ -119,8 +126,9 @@ def _driver_issue_comfy(root, cfg, comfy_dir):
         for v in ("venv", ".venv"):
             cands.append(os.path.join(comfy_dir, v, "Lib", "site-packages"))
         _ver, tag = cc.installed_torch_tag([c for c in cands if os.path.isdir(c)])
-        # ComfyUI 启动时不会自己换 torch；显卡和 torch 对不上的，重新部署会换装（webview_api._comfy_torch_problem）
-        return cc.driver_issue(tag, "ComfyUI ", False, redeploy_fixes=True) if tag else None
+        # ComfyUI 启动时不会自己换 torch；显卡和 torch 对不上的，重新部署会换装（webview_api._env_torch_problem）
+        with cc.device_scope(cfg.get("gpu_device_id")):   # 多显卡：只看这个实例指定的那张
+            return cc.driver_issue(tag, "ComfyUI ", False, redeploy_fixes=True) if tag else None
     except Exception:
         return None
 
@@ -478,6 +486,8 @@ class InstanceRunner:
             if pm:
                 self.port = int(pm.group(1))
         self.set_status("ready", text, url=url)
+        pip_history.record_instance_async(self.api, self.iid,
+                                          f"{self.label()} 启动过程中自己装 / 升级的（启动时会按 requirements 补装依赖）")
         if auto_open and self.remote_started:
             self.emit("open_remote", url=url)
         elif auto_open:
@@ -756,6 +766,13 @@ class InstanceRunner:
             except Exception as e:
                 log(f"[启动器] 检查 ADetailer 模型失败（不影响启动）: {e}\n")
 
+        # 包变化记录（给报错诊断当线索）：启动前拍一次，收上次记录之后别处装的东西。
+        # 同步做（不到一秒），免得和 ComfyUI-Manager 启动时装的混在一起
+        t = pip_history.record_instance_async(self.api, self.iid,
+                                              "启动前：上次记录之后的变化（手动 pip、别的工具装的等）")
+        if t:
+            t.join(timeout=30)
+
         if comfy:
             res = self._spawn_comfy(root, cfg, log)
         else:
@@ -932,7 +949,9 @@ class InstanceRunner:
                 combined = self.output_tail + text
                 self.output_tail = combined[-500:]
                 if not self.fatal_hint and not self.url:
-                    self.fatal_hint = _fatal_hint_for(combined, self.cfg.get("gpu_backend") == "rocm")
+                    import cuda_compat as cc
+                    with cc.device_scope(self.cfg.get("gpu_device_id")):   # 提示里说的是这个实例用的那张卡
+                        self.fatal_hint = _fatal_hint_for(combined, self.cfg.get("gpu_backend") == "rocm")
                 if not self.url:
                     # 单独记住异常，免得长堆栈或 pause 把错误挤出 output_tail；
                     # 通用提示到退出才生成，让后续出现的 nms 等专门提示优先。
@@ -967,6 +986,9 @@ class InstanceRunner:
                                    f"  · {startup_error}\n"
                                    "  · 请查看上方完整错误日志，按报错修复环境后重试；无法判断时请把日志发给维护者")
             self.log(f"\n[启动器] 进程已结束，返回码: {rc}\n")
+            pip_history.record_instance_async(
+                self.api, self.iid, f"{self.label()} 这次运行期间的变化（比如在 ComfyUI-Manager 里装节点时装的依赖）"
+                if comfy else f"{self.label()} 这次运行期间的变化（启动时补装的依赖、扩展自己装的包）")
             if failed_start:
                 self.log(self.fatal_hint + "\n")
                 if "显卡驱动太旧" in self.fatal_hint:

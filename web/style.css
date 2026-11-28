@@ -1182,6 +1182,8 @@ textarea.ta-prompt {
   display: flex; align-items: center; justify-content: center;
 }
 .oc img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* 普通网格的格子已经按原图比例排了（cover 不会裁掉什么）；档案架视图的板子是方的，整张图放进去不裁 */
+#out-grid.shelf .oc img { object-fit: contain; }
 .oc:hover { border-color: var(--ink); }
 .oc:hover::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--yel); }
 .oc-other { font: 700 12px var(--mono); letter-spacing: .15em; color: var(--text-faint); }
@@ -1231,6 +1233,79 @@ textarea.ta-prompt {
 .lb-stage { flex: 1; overflow: hidden; position: relative; cursor: grab; }
 .lb-stage.panning { cursor: grabbing; }
 #lb-img { position: absolute; left: 50%; top: 50%; max-width: none; user-select: none; }
+
+/* 模型管理收藏夹 */
+.md-cols { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 0; }
+.md-cols[hidden] { display: none; }
+.md-star { color: #e0a800; margin-right: 4px; }
+#md-col { width: auto; max-width: 180px; }
+.mcol-list { display: flex; flex-direction: column; gap: 6px; min-width: 360px; max-height: 50vh; overflow: auto; }
+.mcol-row { display: flex; align-items: center; gap: 8px; }
+.mcol-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mcol-row em { font-style: normal; color: var(--text-faint); font-size: 12px; }
+
+/* 收藏夹设置弹窗 / 列表里「复制」标记 */
+.col-dlg { display: flex; flex-direction: column; gap: 8px; min-width: 380px; }
+.col-dlg-k { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+.col-dlg-dir { display: flex; align-items: center; gap: 8px; padding-left: 26px; }
+.col-dlg-dir code { flex: 1; min-width: 0; font-size: 12px; word-break: break-all; color: var(--text-dim); }
+.col-copy { font-style: normal; font-size: 10.5px; color: var(--text-faint); margin-left: 4px; }
+/* 二选一用圆点，别跟能多选的方框混淆 */
+.col-dlg .chk-row input[type="radio"] + i { border-radius: 50%; }
+
+/* 启动器设置 → 关于 · 交流 */
+.about-rows { display: flex; flex-direction: column; gap: 8px; }
+.about-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.about-row[hidden] { display: none; }
+.about-k { width: 80px; flex: none; color: var(--text-dim); font-size: 12.5px; }
+.about-v { font-weight: 600; user-select: text; word-break: break-all; }
+.about-qq { font-family: var(--mono); letter-spacing: .04em; }
+.about-row .hint { margin: 0; }
+
+/* 输出对比（输出管理 → 多选 → 对比）：深色看图区 + 下方参数对照 */
+.cmp { position: fixed; inset: 0; z-index: 88; background: #121316; display: flex; flex-direction: column; color: #e4e5e1; }
+.cmp[hidden] { display: none; }
+.cmp-tools { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 10px 14px; flex: none; }
+.cmp-title { font-weight: 700; margin-right: 6px; }
+.cmp-mode { display: inline-flex; gap: 4px; }
+.cmp-pick { display: inline-flex; gap: 6px; align-items: center; }
+.cmp-pick select { width: auto; max-width: 220px; padding: 3px 26px 3px 8px; font-size: 12px; }
+.cmp-only { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; cursor: pointer; }
+.cmp-tools #cmp-close { margin-left: auto; }
+/* 对比层不管哪个风格都是深色底：浅色风格的按钮是「深色字 + 半透明底」，放这里就看不见了，统一成浅色字
+   （用 id 选择器，压过各风格 :root[data-ui-theme] .btn 的规则） */
+#out-compare .btn { color: #eef0ea; background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .22); box-shadow: none; }
+#out-compare .btn:hover { background: rgba(255, 255, 255, .2); color: #fff; }
+#out-compare .chip:not(.on) { color: #eef0ea; background: rgba(255, 255, 255, .1); border-color: rgba(255, 255, 255, .22); box-shadow: none; }
+#out-compare .chip:not(.on):hover { background: rgba(255, 255, 255, .2); }
+#out-compare .chip.on { color: #121316; background: #ffc400; border-color: #ffc400; box-shadow: none; }
+.cmp-stage { flex: 1; min-height: 0; display: grid; gap: 6px; padding: 0 14px; cursor: grab; user-select: none; touch-action: none; }
+.cmp-stage.cmp-side { grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr)); }
+.cmp-stage.cmp-wipe { grid-template-columns: 1fr; }
+.cmp-stage.panning { cursor: grabbing; }
+.cmp-pane { position: relative; overflow: hidden; background: rgba(255, 255, 255, .04); min-width: 0; }
+.cmp-pane img { position: absolute; left: 0; top: 0; max-width: none; object-fit: contain; pointer-events: none; }
+.cmp-pane video { width: 100%; height: 100%; object-fit: contain; cursor: default; }
+.cmp-tag { position: absolute; left: 8px; top: 8px; max-width: calc(100% - 16px); padding: 2px 8px; font: 12px var(--mono);
+  background: rgba(0, 0, 0, .62); color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; }
+.cmp-tag-r { left: auto; right: 8px; }
+.cmp-line { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, .4); cursor: ew-resize; }
+.cmp-line span { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 28px; height: 28px; border-radius: 50%;
+  background: #fff; color: #121316; display: grid; place-items: center; font-size: 14px; }
+.cmp-missing { position: absolute; inset: 0; display: grid; place-items: center; color: #a9aba6; }
+.cmp-params { flex: none; max-height: 36vh; overflow: auto; padding: 10px 14px 14px; }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 12px; table-layout: fixed; }
+.cmp-table th, .cmp-table td { text-align: left; vertical-align: top; padding: 4px 8px; border-bottom: 1px solid rgba(255, 255, 255, .1);
+  word-break: break-word; user-select: text; }
+.cmp-table th { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-table td:first-child, .cmp-table th:first-child { width: 84px; color: #a9aba6; white-space: nowrap; }
+.cmp-table tr.cmp-diff td { background: rgba(255, 196, 0, .1); }
+.cmp-table tr.cmp-diff td:first-child { color: #ffc400; font-weight: 700; }
+.cmp-table tr.cmp-prompt td { font-family: var(--mono); line-height: 1.6; }
+.cmp-table mark { background: rgba(255, 196, 0, .35); color: inherit; padding: 0 2px; }
+.cmp-none { color: #7d7f7a; }
+.cmp .hint { color: #a9aba6; margin-top: 8px; }
+@media (max-width: 760px) { .cmp-stage.cmp-side { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* 部署页：随 ComfyUI 一起装的节点 */
 #deploy-nodes .chk-row, #deploy-nodes-more .chk-row { align-items: flex-start; margin: 6px 0; }
@@ -1479,6 +1554,8 @@ textarea.ta-prompt {
 .dg-tk-steps { margin: 0 0 8px; padding: 0; list-style: none; font-size: 12px; line-height: 1.7; }
 .dg-tk-steps li { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; padding: 2px 0; color: var(--text-dim); word-break: break-word; }
 .dg-tk-steps .dg-tk-ico { flex: none; width: 14px; text-align: center; color: var(--text-faint); }
+/* 长的一步：文字跟在图标后面折行，不要整段掉到下一行、把图标单独留在上面 */
+.dg-tk-steps li > span:not(.dg-tk-ico):not(.dg-act) { flex: 1 1 0; min-width: 0; }
 .dg-tk-steps .dg-tk-round { margin-top: 6px; font-weight: 700; color: var(--text); }
 .dg-tk-steps .dg-tk-ai { font-size: 11.5px; color: var(--text-faint); padding-left: 14px; }
 .dg-tk-steps .dg-tk-act .dg-tk-ico { color: var(--ok, var(--blue)); }
@@ -1553,3 +1630,51 @@ body:not(.remote-mode) [data-remote-only] { display: none !important; }
 .pk-sum span { word-break: break-word; }
 .pk-k { color: var(--text-faint); white-space: nowrap; }
 .pk-warn { border-left: 4px solid var(--warn); padding: 6px 10px; margin-top: 8px; color: var(--text); background: var(--input-bg); }
+
+/* ============ 宽屏 / 全屏（莱茵 · 分析终端有自己的版式，不参与） ============
+   窗口够宽时不再把每页卡在 1060px：
+   · 一键启动：左边是根目录、参数和启停按钮，右边是运行日志，日志高度跟窗口走、左边滚动时始终可见
+   · 启动器设置 / 高级选项 / 环境部署：卡片排成两列（按列从上往下读，顺序不变）
+   · 插件管理：「安装到」和「搜索」并排，插件列表两列
+   · 其余页面（模型管理、图片反推、图片信息、输出管理……）本来就是自适应的栅格，放宽上限后自然铺开 */
+@media (min-width: 1440px) {
+  :root:not([data-ui-theme="rhine"]) .page { max-width: 1680px; }
+
+  :root:not([data-ui-theme="rhine"]) #page-launch.active {
+    display: grid; grid-template-columns: minmax(520px, 1fr) minmax(520px, 1.15fr);
+    column-gap: 22px; align-items: start;
+  }
+  :root:not([data-ui-theme="rhine"]) #page-launch > * { grid-column: 1; min-width: 0; }
+  /* 日志高度按内容区（#content）自己的可见高度算：各风格的页头高矮不一（矢量、离解的页头很高），
+     用 100vh 减固定值总有风格会被截掉底边。cqh = 内容区高度的 1% */
+  :root:not([data-ui-theme="rhine"]) #content:has(> #page-launch.active) { container-type: size; }
+  :root:not([data-ui-theme="rhine"]) #page-launch > .console-wrap {
+    grid-column: 2; grid-row: 1 / span 30; margin-top: 0;
+    position: sticky; top: 0; display: flex; flex-direction: column;
+    height: calc(100vh - 150px); height: calc(100cqh - 4px); min-height: 420px;
+  }
+  :root:not([data-ui-theme="rhine"]) #page-launch > .console-wrap .console { flex: 1; height: auto; min-height: 0; }
+  :root:not([data-ui-theme="rhine"]) #page-launch .action-row:first-of-type { margin-top: 4px; }
+
+  :root:not([data-ui-theme="rhine"]) :is(#page-launcher, #page-settings, #page-deploy).active { columns: 2; column-gap: 20px; }
+  :root:not([data-ui-theme="rhine"]) :is(#page-launcher, #page-settings, #page-deploy) > * { break-inside: avoid; }
+  /* 两列时每列只有原来一半宽：卡片里原本左右并排的两栏改成上下 */
+  :root:not([data-ui-theme="rhine"]) #page-launcher .link-cols { grid-template-columns: 1fr; }
+
+  :root:not([data-ui-theme="rhine"]) #page-extensions.active {
+    display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr); column-gap: 14px; align-items: start;
+  }
+  :root:not([data-ui-theme="rhine"]) #page-extensions > * { grid-column: 1 / -1; min-width: 0; }
+  :root:not([data-ui-theme="rhine"]) #page-extensions > .ext-target-card { grid-column: 1; }
+  :root:not([data-ui-theme="rhine"]) #page-extensions > .ext-find-card { grid-column: 2; }
+  :root:not([data-ui-theme="rhine"]) #ext-list { columns: 2; column-gap: 14px; }
+  :root:not([data-ui-theme="rhine"]) #ext-list .ext-item { break-inside: avoid; }
+
+  /* 填表类的单页别铺满整个屏幕，读起来太散 */
+  :root:not([data-ui-theme="rhine"]) :is(#page-civitai, #page-versions, #page-instances) { max-width: 1280px; }
+}
+/* 特别宽（2K / 4K 全屏）：日志更宽一些 */
+@media (min-width: 2200px) {
+  :root:not([data-ui-theme="rhine"]) .page { max-width: 2100px; }
+  :root:not([data-ui-theme="rhine"]) #page-launch.active { grid-template-columns: minmax(560px, 1fr) minmax(600px, 1.4fr); }
+}

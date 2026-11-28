@@ -399,7 +399,27 @@ def _free_port(start):
     return start
 
 
-_MAIN_PY_RE = re.compile(r'([A-Za-z]:\\[^"]*?|/[^"\s]*?)[\\/]app[\\/]main\.py', re.IGNORECASE)
+# 命令行里 <训练器目录>\app\main.py 的两种写法：带引号的（路径里有空格），和不带引号的。
+# 以前不带引号时允许跨空格，路径都没空格（最常见）的命令行
+#   D:\T\python\python.exe -I -X utf8 -u D:\T\app\main.py
+# 会从最前面的盘符一路吃到 app\main.py，认出来的「目录」是半条命令行，判断不出在跑的是哪个文件夹。
+# 目录和 app 之间的那个分隔符单独抓出来：训练器直接放在盘符 / 根目录下（C:\app\main.py、/app/main.py）时
+# 目录部分是 "C:" 或空的，要把分隔符补回去才是完整的根目录。
+_MAIN_PY_RE = re.compile(r'"([^"]*?)([\\/])app[\\/]main\.py"'
+                         r'|(?:^|\s)([A-Za-z]:(?:[\\/][^"\s]*?)?|(?:/[^"\s]*?)?)([\\/])app[\\/]main\.py',
+                         re.IGNORECASE)
+
+
+def root_in_cmdline(cmdline):
+    """从进程命令行里取训练器目录；认不出返回 \"\"。"""
+    m = _MAIN_PY_RE.search(cmdline or "")
+    if not m:
+        return ""
+    quoted = m.group(1) is not None
+    root, sep = (m.group(1), m.group(2)) if quoted else (m.group(3), m.group(4))
+    if not root or re.fullmatch(r"[A-Za-z]:", root):
+        return root + sep      # 盘符根 / 文件系统根
+    return root
 
 
 def root_of_pid(pid):
@@ -418,8 +438,7 @@ def root_of_pid(pid):
                 out = f.read().replace(b"\0", b" ").decode("utf-8", "replace")
     except Exception:
         return ""
-    m = _MAIN_PY_RE.search(out)
-    return m.group(1) if m else ""
+    return root_in_cmdline(out)
 
 
 class TrainerRunner:

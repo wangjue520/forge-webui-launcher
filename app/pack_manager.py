@@ -155,10 +155,22 @@ def model_dirs(api, ctx):
         return [("trainer", d, "训练器 models")] if os.path.isdir(d) else []
     import model_library as ml
     out = []
+    def shown(d):
+        # 模型目录不一定在实例里面：ComfyUI 桌面版的共享目录可以在别的盘，跨盘符算不出相对路径（ValueError）
+        try:
+            rel = os.path.relpath(d, ctx["root"])
+        except ValueError:
+            return d
+        return d if rel.startswith("..") else rel
+
     inst = ml.instance_model_dirs(ctx["cfg"], cm.comfy_layout)
     for k in pr.BASE_MODEL_KEYS:
         if k in inst:
-            out.append((k, inst[k], os.path.relpath(inst[k], ctx["root"])))
+            out.append((k, inst[k], shown(inst[k])))
+    # ComfyUI 桌面版两边都读（实例自带的 models 和共享目录），两边的底模都要列进来
+    for k, d, _src in ml.instance_extra_model_dirs(ctx["cfg"], cm.comfy_layout):
+        if k in pr.BASE_MODEL_KEYS:
+            out.append((k, d, shown(d)))
     lib = _wa()._library_path(api)
     if lib:
         for k in pr.BASE_MODEL_KEYS:

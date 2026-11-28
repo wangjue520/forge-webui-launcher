@@ -422,8 +422,23 @@
     loadActivity();
   }
 
+  /* 关于 · 交流：GitHub 点星、QQ 群、教程 */
+  function bindAbout() {
+    document.querySelectorAll("#about-card [data-about-url]").forEach((b) =>
+      b.addEventListener("click", () => App.api.open_url(b.dataset.aboutUrl)));
+    document.querySelectorAll("#about-card [data-about-copy]").forEach((b) =>
+      b.addEventListener("click", () => App.copy(b.dataset.aboutCopy, "已复制：" + b.dataset.aboutCopy)));
+    const pdf = $("#about-pdf");
+    if (pdf) pdf.addEventListener("click", async () => {
+      let r;
+      try { r = await App.api.open_tutorial(); } catch (e) { r = { ok: false, error: e.message }; }
+      if (!r || !r.ok) App.toast((r && r.error) || "打开失败", "error", 6000);
+    });
+  }
+
   App.pages.launcher = {
     init(state) {
+      bindAbout();
       const ms = state.mirror_status;
       if (ms) $("#s-mirror-status").textContent = (typeof ms === "string") ? ms : (ms.text || "");
       $("#s-mirror-redetect").addEventListener("click", redetectMirror);

@@ -11,7 +11,7 @@
    解压后覆盖到启动器目录——但跳过用户私有/运行期生成的内容
    （launcher_config.json、便携 python/、wd14_venv/ 等，见 PRESERVE_TOP）。
 
-版本号规则：BASE_VERSION + 从 BASE_COUNT 起算的三位提交序号（如 3.1.007），每次更新自动累加、
+版本号规则：大版本 + 从这个大版本的起点提交起算的三位序号（如 3.2.007，见 VERSION_ERAS），每次更新自动累加、
 写进项目根目录的 version.json。有 .git 时直接按 git 提交数实时算，
 永远准确；纯 ZIP 用户以 version.json 为准（每次更新时重写）。
 提交数从 GitHub API 分页响应的 Link 头里取（per_page=1 时最后一页
@@ -51,14 +51,23 @@ COMMITS_API = f"https://api.github.com/repos/{REPO}/commits?sha={BRANCH}&per_pag
 VERSION_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/version.json"
 CHANGELOG_RAW = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}/changelog.json"
 
-BASE_VERSION = "3.1"
-# 3.1.000 = main 上第 BASE_COUNT 个提交（发 3.1 的那个 bump 提交），之后每个提交 +1。
-# 3.0.x 时代直接用总提交数（最后一版 3.0.175）；有没有更新始终按总提交数比，跟版本号写法无关
-BASE_COUNT = 178
+# 大版本从哪个提交起算：(起点提交数, 大版本)，新的在前。起点 = 发这个大版本的那个 bump 提交在 main 上的总提交数，
+# 之后每个提交 +1（三位补零）。3.0.x 时代直接用总提交数（最后一版 3.0.175）。
+# 有没有更新始终按总提交数比，跟版本号写法无关；旧提交仍按它当时的大版本显示（3.1 的用户不会被显示成 3.2.000）。
+# 发新的大版本：在最前面加一条 (发版 bump 提交的总提交数, "x.y")
+VERSION_ERAS = [
+    (221, "3.2"),     # 3.2：输出对比、一键修复、pip 变化记录、收藏夹复制 / 模型收藏夹、拖出复制……
+    (178, "3.1"),
+]
+BASE_COUNT, BASE_VERSION = VERSION_ERAS[0]
 
 
 def version_of(count):
-    return f"{BASE_VERSION}.{max(0, int(count) - BASE_COUNT):03d}"
+    count = max(0, int(count))
+    for base, ver in VERSION_ERAS:
+        if count >= base:
+            return f"{ver}.{count - base:03d}"
+    return f"3.0.{count:03d}"
 VERSION_FILE = os.path.join(APP_DIR, "version.json")
 CHANGELOG_FILE = os.path.join(APP_DIR, "changelog.json")
 # 一次最多给界面几条更新内容（隔了很多版才更新的用户也不至于刷一屏）

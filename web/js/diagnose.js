@@ -81,9 +81,79 @@
         "还没有日志：先启动一次，出错后再来诊断。"}${report.lines ? "可以让 AI 结合日志和本地文件再看看。" : ""}</div>`;
     } else {
       box.innerHTML = "";
+      const bar = fixAllBar(fs);
+      if (bar) box.appendChild(bar);
       fs.forEach((f) => box.appendChild(findingCard(f)));
     }
     renderAi();
+  }
+
+  /* ---------- 一键修复：所有能自动做的一次做完（后端 _api_diag_fix_all） ---------- */
+  // 和后端 _FIXALL_SKIP 一致：停用插件是退路，不跟着一键修复做
+  const FX_SKIP = new Set(["restart_instance", "reveal_path", "trash_file", "open_page", "open_url", "civitai_redownload",
+    "ext_disable"]);
+  let fx = null;           // {job, target, steps: [{text, kind, undo}], done: {ok, text}}
+
+  function fixable(fs) {
+    const out = [];
+    fs.forEach((f) => (f.actions || []).forEach((a) => {
+      if (a.aid === "ai_ask") { out.push({ label: "让 AI 找没找到下载地址的模型，找到就下" }); return; }
+      if (FX_SKIP.has(a.aid) || a.risk === "ui" || a.risk === "danger") return;
+      if (a.applied && !a.applied.undone) return;
+      out.push(a);
+    }));
+    return out;
+  }
+
+  function fixAllBar(fs) {
+    const mine = fx && sameTarget(fx.target, target);
+    const items = fixable(fs);
+    if (!items.length && !mine) return null;
+    const el = document.createElement("div");
+    el.className = "dg-card dg-fixall";
+    el.dataset.level = mine && fx.done ? (fx.done.ok ? "ok" : "warn") : "ok";
+    if (mine) {
+      const running = !fx.done;
+      el.innerHTML = `<div class="dg-card-title">${running ? "一键修复进行中…" : (fx.done.ok ? "✓ " : "") + esc(fx.done.text)}</div>
+        <ol class="dg-tk-steps"></ol><div class="dg-actions"></div>`;
+      const ol = $(".dg-tk-steps", el);
+      fx.steps.forEach((s) => {
+        const li = document.createElement("li");
+        li.className = "dg-tk-" + (s.kind || "info");
+        li.innerHTML = `<span class="dg-tk-ico">${TK_ICON[s.kind] || "·"}</span><span>${esc(s.text)}</span>`;
+        if (s.undo) { const w = document.createElement("span"); w.className = "dg-act"; w.appendChild(undoBtn(s.undo, w)); li.appendChild(w); }
+        ol.appendChild(li);
+      });
+      if (running) ol.insertAdjacentHTML("beforeend", `<li class="dg-running">处理中…</li>`);
+      const row = $(".dg-actions", el);
+      if (running) {
+        row.innerHTML = `<button class="btn btn-xs" id="dg-fx-stop">停止</button>`;
+        $("#dg-fx-stop", row).addEventListener("click", (e) => { e.target.disabled = true; App.api.diag_ai_cancel(fx.job); });
+      } else if (items.length) {
+        row.innerHTML = `<button class="btn btn-xs btn-accent" id="dg-fx-go">再一键修复剩下的 ${items.length} 项</button>`;
+        $("#dg-fx-go", row).addEventListener("click", () => startFixAll(items));
+      } else {
+        row.remove();
+      }
+      return el;
+    }
+    el.innerHTML = `<div class="dg-card-title">一键修复 <em class="dg-conf">${items.length} 项</em></div>
+      <div class="dg-card-text">下面每张卡片里的修复一次全做完：缺的模型一起下、缺的节点一次装齐、依赖装好；没找到下载地址的模型先让 AI 去找。要装东西时会先停实例，装完自动重新启动。</div>
+      <div class="dg-actions"><button class="btn btn-xs btn-accent" id="dg-fx-go">一键修复</button></div>`;
+    $("#dg-fx-go", el).addEventListener("click", () => startFixAll(items));
+    return el;
+  }
+
+  async function startFixAll(items) {
+    const ok = await App.confirm("一键修复", "将依次处理：\n" + items.map((a, i) => `${i + 1}. ${a.label}`).join("\n") +
+      "\n\n要装节点 / 依赖时会先停止实例、装完再启动；改过的设置可以在步骤里撤销。不会删除任何文件。", "开始修复");
+    if (!ok) return;
+    const note = await takeInput();
+    let r;
+    try { r = await App.api.diag_fix_all(target, note); } catch (e) { r = { ok: false, error: e.message }; }
+    if (!r || !r.ok) { App.toast((r && r.error) || "启动一键修复失败", "error", 6000); return; }
+    fx = { job: r.job, target: { ...target }, steps: [], done: null };
+    render();
   }
 
   function findingCard(f) {
@@ -568,6 +638,22 @@
         tk.done = { ok: e.ok, text: e.text, steps: e.steps || [] };
         App.toast("AI 接管结束：" + e.text, e.ok ? "ok" : "error", 8000);
         if (!drawer().hidden) { renderAi(); if (sameTarget(target, { type: "inst", iid: e.iid })) run(); }
+      });
+      App.on("diag", "fixall_step", (e) => {
+        if (!fx || fx.job !== e.job) return;
+        fx.steps.push({ text: e.text, kind: e.kind });
+        if (!drawer().hidden) render();
+      });
+      App.on("diag", "fixall_done", (e) => {
+        if (!fx || fx.job !== e.job) return;
+        (e.results || []).forEach((x) => {   // 能撤销的改动把撤销按钮挂到对应那一步上
+          if (!x.undo) return;
+          const s = fx.steps.find((st) => st.text.startsWith(x.label + " → "));
+          if (s) s.undo = x.undo;
+        });
+        fx.done = { ok: e.ok, text: e.text };
+        App.toast("一键修复：" + e.text, e.ok ? "ok" : "error", 8000);
+        if (!drawer().hidden && sameTarget(target, fx.target)) run();   // 重新诊断：修好的问题从列表里消失
       });
       App.on("diag", "download_done", (e) => {
         App.toast(e.ok ? `${e.name} 已下好：在 ComfyUI 网页里按 R 刷新模型列表再运行` :

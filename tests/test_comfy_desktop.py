@@ -185,6 +185,44 @@ class DesktopTest(unittest.TestCase):
         self.assertIn(n(os.path.join(own, "loras")), [n(d) for d in look])
         self.assertIn(n(os.path.join(self.shared, "loras")), [n(d) for d in look])
 
+    def test_reserved_folder_names_do_not_break_yaml(self):
+        # 共享目录里正好有叫 base_path / is_default 的文件夹：不能当成模型类型写进去，会把控制字段盖掉
+        for sub in ("base_path", "is_default", "ipadapter"):
+            os.makedirs(os.path.join(self.shared, sub))
+        self.write({"modelsDirs": [self.shared]}, [self.rec()])
+        primary, dirs = cdk.model_dirs(self.install)
+        self.assertEqual(cdk.extra_folders(dirs), ["ipadapter"])
+        for text in (cdk.yaml_text(dirs, primary), cdk.yaml_text(dirs, primary, ["base_path", "is_default", "x"])):
+            lines = [ln.strip() for ln in text.splitlines()]
+            self.assertEqual(sum(ln.startswith("base_path:") or ln.startswith("'base_path':") for ln in lines), 1)
+            self.assertEqual(sum(ln.startswith("is_default") or ln.startswith("'is_default'") for ln in lines), 1)
+            self.assertIn('base_path: "' + self.shared.replace("\\", "/") + '"', text)
+
+    def test_pack_lists_both_sides_and_other_drives(self):
+        # 制作整合包：桌面版两边的底模都要列；共享目录在别的盘时不能因为算不出相对路径就报错
+        import pack_manager as pkm
+        own = os.path.join(self.install, "ComfyUI", "models")
+        _touch(os.path.join(own, "checkpoints", "a.safetensors"))
+        _touch(os.path.join(self.shared, "checkpoints", "b.safetensors"))
+        self.write({"modelsDirs": [self.shared]}, [self.rec()])
+
+        class Api:
+            cfg = dict(self.cfg(), model_library_enabled=False)
+        ctx = {"kind": "comfyui", "root": self.install, "cfg": Api.cfg}
+        n = os.path.normcase
+        got = {n(d) for k, d, _disp in pkm.model_dirs(Api(), ctx) if k == "checkpoints"}
+        self.assertEqual(got, {n(os.path.join(own, "checkpoints")), n(os.path.join(self.shared, "checkpoints"))})
+        real = os.path.relpath
+
+        def other_drive(path, start=os.curdir):
+            if n(os.path.abspath(path)).startswith(n(self.shared)):
+                raise ValueError("path is on mount 'D:', start on mount 'C:'")
+            return real(path, start)
+        with mock.patch.object(pkm.os.path, "relpath", other_drive):
+            shown = {n(d): disp for k, d, disp in pkm.model_dirs(Api(), ctx) if k == "checkpoints"}
+        self.assertEqual(n(shown[n(os.path.join(self.shared, "checkpoints"))]),
+                         n(os.path.join(self.shared, "checkpoints")))       # 显示成完整路径
+
     def test_shared_off_or_not_desktop_unchanged(self):
         self.write({"modelsDirs": [self.shared]}, [self.rec(useSharedModels=False)])
         self.assertEqual(ml.instance_extra_model_dirs(self.cfg(), cm.comfy_layout), [])

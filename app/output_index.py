@@ -232,6 +232,9 @@ class OutputIndex:
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(_SCHEMA)
         self._migrate_autoincrement()
+        # 收藏夹「收藏时复制一份到文件夹」：老索引没有这一列，补上（空 = 不转移，只记录）
+        if "copy_dir" not in {r[1] for r in self.db.execute("PRAGMA table_info(collections)")}:
+            self.db.execute("ALTER TABLE collections ADD COLUMN copy_dir TEXT DEFAULT ''")
         self.fts = True
         try:
             self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS outputs_fts USING fts5(prompt, negative)")
@@ -491,6 +494,7 @@ class OutputIndex:
                 folders.append(d)
             fidx.append(k)
         return {"ids": [r[0] for r in rows], "kinds": "".join((r[1] or "o")[0] for r in rows),
+                "names": [os.path.basename(r[7] or "") for r in rows],     # 拖出去另存时用原文件名
                 "folders": folders, "fidx": fidx,
                 "ratios": [round((r[2] / r[3]) if r[2] and r[3] else 1, 3) for r in rows],
                 "missing": [r[0] for r in rows if r[4]],
@@ -558,22 +562,43 @@ class OutputIndex:
     # ---------------------------------------------------------- 收藏夹 ----
     def collections(self):
         with self.lock:
-            rows = self.db.execute("""SELECT c.id, c.name, COUNT(i.oid) FROM collections c
+            rows = self.db.execute("""SELECT c.id, c.name, COUNT(i.oid), c.copy_dir FROM collections c
                 LEFT JOIN collection_items i ON i.cid=c.id GROUP BY c.id ORDER BY c.created""").fetchall()
-        return [{"id": r[0], "name": r[1], "count": r[2]} for r in rows]
+        return [{"id": r[0], "name": r[1], "count": r[2], "copy_dir": r[3] or ""} for r in rows]
 
-    def collection_create(self, name):
+    def collection_create(self, name, copy_dir=""):
         name = (name or "").strip()[:40]
         if not name:
             raise ValueError("名字不能为空")
         with self.lock:
             try:
-                cid = self.db.execute("INSERT INTO collections(name, created) VALUES(?,?)",
-                                      (name, time.time())).lastrowid
+                cid = self.db.execute("INSERT INTO collections(name, created, copy_dir) VALUES(?,?,?)",
+                                      (name, time.time(), (copy_dir or "").strip())).lastrowid
             except sqlite3.IntegrityError:
                 raise ValueError("已有同名收藏夹")
             self.db.commit()
         return cid
+
+    def collection_copy_dir(self, cid):
+        with self.lock:
+            r = self.db.execute("SELECT copy_dir FROM collections WHERE id=?", (int(cid),)).fetchone()
+        return (r[0] or "") if r else ""
+
+    def collection_config(self, cid, copy_dir):
+        """收藏时：copy_dir 为空 = 不转移（只记录），否则复制一份到这个文件夹"""
+        with self.lock:
+            self.db.execute("UPDATE collections SET copy_dir=? WHERE id=?", ((copy_dir or "").strip(), int(cid)))
+            self.db.commit()
+
+    def paths_of(self, oids):
+        """id → 还在的文件路径（失效的跳过）"""
+        out = []
+        with self.lock:
+            for oid in oids:
+                r = self.db.execute("SELECT path FROM outputs WHERE id=? AND missing=0", (int(oid),)).fetchone()
+                if r and r[0]:
+                    out.append(r[0])
+        return out
 
     def collection_rename(self, cid, name):
         name = (name or "").strip()[:40]
@@ -596,14 +621,19 @@ class OutputIndex:
             self.db.commit()
 
     def collection_set(self, cid, oids, on):
+        """返回这次真正新加进去的 id（本来就在收藏夹里的不算，复制到文件夹时不重复复制）"""
+        added = []
         with self.lock:
             for oid in oids:
                 if on:
-                    self.db.execute("INSERT OR IGNORE INTO collection_items(cid, oid, added) VALUES(?,?,?)",
-                                    (int(cid), int(oid), time.time()))
+                    cur = self.db.execute("INSERT OR IGNORE INTO collection_items(cid, oid, added) VALUES(?,?,?)",
+                                          (int(cid), int(oid), time.time()))
+                    if cur.rowcount:
+                        added.append(int(oid))
                 else:
                     self.db.execute("DELETE FROM collection_items WHERE cid=? AND oid=?", (int(cid), int(oid)))
             self.db.commit()
+        return added
 
     def collection_paths(self, cid):
         with self.lock:

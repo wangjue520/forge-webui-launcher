@@ -161,6 +161,27 @@ class DetectTest(unittest.TestCase):
         _touch(os.path.join(root, "data", "settings.json"), json.dumps({"port": 28200}))
         self.assertEqual(lt.settings_port(root), 28200)
 
+    def test_root_in_cmdline(self):
+        # 路径都没空格时命令行不带引号：以前会把 python.exe 那一截也算进目录里
+        cases = [
+            (r'D:\T\python\python.exe -I -X utf8 -u D:\T\app\main.py --no-browser --port 7861', r'D:\T'),
+            (r'"D:\My Tools\python\python.exe" -I -X utf8 -u "D:\My Tools\LoRA Trainer\app\main.py" --port 1',
+             r'D:\My Tools\LoRA Trainer'),
+            (r'"C:\Program Files\Python\python.exe" -u D:\T\app\main.py', r'D:\T'),
+            (r'D:\py\python.exe -u "E:\a b\app\main.py"', r'E:\a b'),
+            (r'python.exe -u D:/T/app/main.py', 'D:/T'),
+            ('/usr/bin/python3 -u /home/u/trainer/app/main.py --port 1', '/home/u/trainer'),
+            # 训练器直接放在盘符 / 根目录下
+            (r'C:\python\python.exe C:\app\main.py', 'C:\\'),
+            (r'"C:\py dir\python.exe" "C:\app\main.py"', 'C:\\'),
+            ('python /app/main.py', '/'),
+            (r'python.exe app\main.py', ''),      # 相对路径认不出是哪个目录
+            (r'D:\T\python\python.exe -m http.server', ''),
+            ('', ''), (None, ''),
+        ]
+        for cmdline, want in cases:
+            self.assertEqual(lt.root_in_cmdline(cmdline), want, cmdline)
+
     def test_recommend_torch(self):
         self.assertEqual(lt.recommend_torch(["NVIDIA GeForce GTX 1080 Ti"]), "cu126")
         self.assertEqual(lt.recommend_torch(["NVIDIA GeForce RTX 4090"]), "cu128")

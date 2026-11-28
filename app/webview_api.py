@@ -49,6 +49,7 @@ import vlm_caption_core as vc
 import vlm_caption_service as vcs
 import updater
 import model_library as ml
+import model_favorites
 import output_index as oi
 import comfy_nodes
 import comfy_bridge
@@ -65,6 +66,7 @@ import netspeed
 import lora_trainer as lt
 import pack_manager as pm
 import pack_recipe as pr
+import pip_history
 import remote_link as rl
 from activity_log import ActivityLog
 
@@ -1148,6 +1150,21 @@ class LauncherApi:
             pass
         return {"ok": True}
 
+    def open_tutorial(self):
+        """启动器设置 →「关于 · 交流」：用系统默认程序打开随启动器附带的图文教程 PDF"""
+        d = os.path.join(APP_DIR, "教程Tutorial")
+        pdfs = sorted(f for f in os.listdir(d) if f.lower().endswith(".pdf")) if os.path.isdir(d) else []
+        if not pdfs:
+            return {"ok": False, "error": "启动器文件夹里没有找到教程 PDF（教程Tutorial 文件夹），可以去 GitHub 仓库主页下载"}
+        try:
+            if os.name == "nt":
+                os.startfile(os.path.join(d, pdfs[0]))  # noqa: S606 - 打开启动器自带的教程
+            else:
+                subprocess.Popen(["xdg-open", os.path.join(d, pdfs[0])])
+        except OSError as e:
+            return {"ok": False, "error": f"打开失败：{e}（可以在启动器文件夹的 教程Tutorial 里手动打开）"}
+        return {"ok": True}
+
     def reveal_in_explorer(self, path):
         try:
             if sys.platform == "win32":
@@ -1436,38 +1453,44 @@ def _api_deploy_check_dir(self, target):
     return {"ok": True, "status": "ok", "message": "目录为空或不存在，可以直接克隆到这里"}
 
 
-def _nvidia_precheck_issues(branch, issues):
+def _nvidia_precheck_issues(branch, issues, cfg=None):
     """
     部署预检里和 N 卡型号有关的提醒（下载几个 GB 之前说清楚）：
       · 显卡太老，现在的 torch 都不支持 → 提醒；「驱动太旧」那条去掉（这类卡没有新驱动可升）
       · RTX 50 系选了 Forge Classic → Classic 写死的 torch 2.3.1+cu121 没有 50 系的内核
       · 老架构卡 → 说明会自动装 cu126 版；驱动已经带得动 CUDA 12 的话去掉「驱动太旧」那条（那是 cu130 的要求）
+    cfg：部署配置，多显卡时只按它指定的那张卡（gpu_device_id）判断。
     """
     try:
         import cuda_compat as cc
-        gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
-        if cc.is_unsupported_gpu():
-            issues = [i for i in issues if i.get("id") != "old_driver"]
-            issues.append({"level": "warn", "id": "gpu_unsupported",
-                           "text": cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu)})
-        elif cc.is_blackwell_gpu():
-            if branch == "classic":
-                issues.append({
-                    "level": "warn", "id": "classic_rtx50",
-                    "text": f"这张显卡（{gpu}）是 RTX 50 系，而 Forge Classic 固定用 torch 2.3.1（CUDA 12.1），"
-                            "里面没有 50 系能用的内核：能装上、能打开界面，但一出图就报 no kernel image。\n\n"
-                            "50 系请在上面的程序里选 Forge Neo 或 ComfyUI。"})
-        elif cc.is_legacy_gpu():
-            driver = cc.driver_cuda_version()
-            if driver and driver[0] >= 12:
-                issues = [i for i in issues if i.get("id") != "old_driver"]
-            if branch != "classic":
-                issues.append({
-                    "level": "warn", "id": "gpu_legacy",
-                    "text": f"这张显卡（{gpu}）架构比较老，新版 CUDA 的 torch 已经不支持它。不用担心——"
-                            f"部署时会自动改装老卡专用的 {cc.LEGACY_TAG} 版 torch，不需要自己处理。"})
+        with cc.device_scope((cfg or {}).get("gpu_device_id")):
+            return _nvidia_precheck_issues_scoped(branch, issues, cc)
     except Exception:
-        pass
+        return issues
+
+
+def _nvidia_precheck_issues_scoped(branch, issues, cc):
+    gpu = "、".join(cc.gpu_names()) or "NVIDIA 显卡"
+    if cc.is_unsupported_gpu():
+        issues = [i for i in issues if i.get("id") != "old_driver"]
+        issues.append({"level": "warn", "id": "gpu_unsupported",
+                       "text": cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu)})
+    elif cc.is_blackwell_gpu():
+        if branch == "classic":
+            issues.append({
+                "level": "warn", "id": "classic_rtx50",
+                "text": f"这张显卡（{gpu}）是 RTX 50 系，而 Forge Classic 固定用 torch 2.3.1（CUDA 12.1），"
+                        "里面没有 50 系能用的内核：能装上、能打开界面，但一出图就报 no kernel image。\n\n"
+                        "50 系请在上面的程序里选 Forge Neo 或 ComfyUI。"})
+    elif cc.is_legacy_gpu():
+        driver = cc.driver_cuda_version()
+        if driver and driver[0] >= 12:
+            issues = [i for i in issues if i.get("id") != "old_driver"]
+        if branch != "classic":
+            issues.append({
+                "level": "warn", "id": "gpu_legacy",
+                "text": f"这张显卡（{gpu}）架构比较老，新版 CUDA 的 torch 已经不支持它。不用担心——"
+                        f"部署时会自动改装老卡专用的 {cc.LEGACY_TAG} 版 torch，不需要自己处理。"})
     return issues
 
 
@@ -1550,7 +1573,7 @@ def _api_deploy_precheck(self, target, branch, use_portable, gpu_backend=None, a
                     i["text"] = (f"检测到的是 AMD 显卡（{amd[0]['name']}），但上面「显卡」选的是 NVIDIA。"
                                  "按 N 卡部署只能用 CPU 出图，非常慢——建议把「显卡」改成 AMD 再部署。")
     if gpu_backend != "rocm":
-        issues = _nvidia_precheck_issues(branch, issues)
+        issues = _nvidia_precheck_issues(branch, issues, _deploy_cfg_for(self, target, branch))
 
     has_error = any(i["level"] == "error" for i in issues)
     return {"ok": not has_error, "issues": issues, "already_installed": already_installed}
@@ -2218,6 +2241,13 @@ def _deploy_reconcile_variant(self, target, variant, git_exe, env, log):
 
 
 def _deploy_run_cmd(self, program, args, cwd, log, env=None, timeout=None):
+    """跑一条部署命令（部署、整合包都走这里）。pip install / uninstall 前后各记一次包变化"""
+    src = "整合包部署" if getattr(self, "_deploy_pack", None) else "环境部署"
+    with pip_history.around_pip(program, args, cwd, src, env):
+        return _deploy_run_cmd_raw(self, program, args, cwd, log, env, timeout)
+
+
+def _deploy_run_cmd_raw(self, program, args, cwd, log, env=None, timeout=None):
     """跑一条部署命令，流式回显输出。
 
     timeout 以秒计；网络型命令（git fetch 这类）必须传超时——加速代理
@@ -2500,6 +2530,77 @@ def _api_outputs_detail(self, oid):
     return {"ok": True, **d}
 
 
+def _api_outputs_copy(self, oids):
+    """复制图片：放进系统剪贴板（文件列表 + 单张时再放一份位图），在资源管理器 / 聊天软件里直接粘贴"""
+    import clipboard_win
+    paths = _outidx(self).paths_of([int(o) for o in (oids or [])][:500])
+    ok, text = clipboard_win.copy_files(paths)
+    return {"ok": ok, "text": text, "error": "" if ok else text, "count": len(paths)}
+
+
+def _api_outputs_drag(self, oids):
+    """拖出去：原生拖动这些文件（见 native_drag.py；多选时拖的是选中的全部）"""
+    import native_drag
+    paths = _outidx(self).paths_of([int(o) for o in (oids or [])][:500])
+    return native_drag.start(self._window, paths)
+
+
+def _api_models_collections(self):
+    """模型管理的收藏夹（只记录，不移动文件）"""
+    return {"ok": True, **model_favorites.listing()}
+
+
+def _api_models_collection_op(self, op, cid=None, name="", paths=None, on=True):
+    try:
+        if op == "create":
+            cid = model_favorites.create(name)
+        elif op == "rename":
+            model_favorites.rename(cid, name)
+        elif op == "delete":
+            model_favorites.delete(cid)
+        elif op == "set":
+            model_favorites.set_items(cid, [str(p) for p in (paths or [])], bool(on))
+        else:
+            return {"ok": False, "error": "未知操作"}
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "id": cid, **model_favorites.listing()}
+
+
+_COMPARE_MAX = 4
+
+
+def _compare_extra(path):
+    """索引里没存的采样参数（步数 / CFG / 调度器 / 重绘幅度），对比时现读文件"""
+    out = {"steps": "", "cfg": "", "scheduler": "", "denoise": ""}
+    try:
+        m = me.read_metadata(path, os.path.getsize(path))
+    except Exception:
+        return out
+    p = getattr(m, "params", None)
+    if not p:
+        return out
+    fmt = lambda v: "" if v is None else (f"{v:g}" if isinstance(v, float) else str(v))
+    out.update(steps=fmt(p.steps), cfg=fmt(p.cfg_scale), scheduler=fmt(p.scheduler),
+               denoise=fmt(p.denoising_strength))
+    return out
+
+
+def _api_outputs_compare(self, ids):
+    """输出对比：2~4 张图的详情 + 采样参数，前端并排 / 滑动对比、标出不同的参数"""
+    ids = [int(i) for i in (ids or [])][:_COMPARE_MAX]
+    if len(ids) < 2:
+        return {"ok": False, "error": "至少选 2 张图才能对比"}
+    items = []
+    for oid in ids:
+        d = _api_outputs_detail(self, oid)
+        if not d.get("ok"):
+            return {"ok": False, "error": f"第 {len(items) + 1} 张：{d.get('error')}"}
+        d.update(_compare_extra(d["path"]) if d["exists"] and d["kind"] == "image" else {})
+        items.append(d)
+    return {"ok": True, "items": items}
+
+
 def _api_outputs_reveal(self, oid):
     path, _m = _outidx(self).path_of(int(oid))
     if not path or not os.path.exists(path):
@@ -2539,22 +2640,91 @@ def _api_outputs_collections(self):
     return {"ok": True, "collections": _outidx(self).collections()}
 
 
-def _api_outputs_collection_op(self, op, cid=None, name="", oids=None, on=True):
+def _check_copy_dir(self, d):
+    """收藏夹的「复制到」文件夹：不能放在任何实例的输出目录里（不然复制过去的又被扫描成新图，越收越多）"""
+    d = os.path.abspath(str(d or "").strip())
+    for src in (s for _iid, ds in _output_sources(self) for s in ds):
+        if dg._under(d, src):
+            return f"「复制到」的文件夹不能放在实例的输出目录里（{src}），不然复制过去的图会被当成新出图再收录一遍"
+    return ""
+
+
+def _api_outputs_collection_op(self, op, cid=None, name="", oids=None, on=True, copy_dir=None, copy_existing=False):
+    """收藏夹：create（copy_dir 为空 = 不转移）/ rename / delete / set（加入、移出）/
+    config（改「收藏时复制到哪」，copy_existing 时把已经收藏的也复制过去）"""
     idx = _outidx(self)
+    copied = 0
     try:
+        if op in ("create", "config") and copy_dir:
+            err = _check_copy_dir(self, copy_dir)
+            if err:
+                return {"ok": False, "error": err}
         if op == "create":
-            cid = idx.collection_create(name)
+            cid = idx.collection_create(name, copy_dir or "")
         elif op == "rename":
             idx.collection_rename(cid, name)
         elif op == "delete":
             idx.collection_delete(cid)
         elif op == "set":
-            idx.collection_set(cid, [int(o) for o in (oids or [])], bool(on))
+            added = idx.collection_set(cid, [int(o) for o in (oids or [])], bool(on))
+            dest = idx.collection_copy_dir(cid) if on else ""
+            if dest and added:
+                copied = len(_copy_files_bg(self, idx.paths_of(added), dest, skip_same=True))
+        elif op == "config":
+            idx.collection_config(cid, copy_dir or "")
+            if copy_dir and copy_existing:
+                copied = len(_copy_files_bg(self, idx.collection_paths(cid), copy_dir, skip_same=True))
         else:
             return {"ok": False, "error": "未知操作"}
     except ValueError as e:
         return {"ok": False, "error": str(e)}
-    return {"ok": True, "id": cid, "collections": idx.collections()}
+    return {"ok": True, "id": cid, "collections": idx.collections(), "copying": copied}
+
+
+def _copy_target(dest, p, skip_same):
+    """复制到 dest 的目标路径；同名同大小的已经复制过（skip_same 时）返回 None；同名不同内容的加 _1 _2"""
+    target = os.path.join(dest, os.path.basename(p))
+    if not os.path.exists(target):
+        return target
+    try:
+        if skip_same and os.path.getsize(target) == os.path.getsize(p):
+            return None
+    except OSError:
+        pass
+    root, ext = os.path.splitext(target)
+    k = 1
+    while os.path.exists(f"{root}_{k}{ext}"):
+        k += 1
+    return f"{root}_{k}{ext}"
+
+
+def _copy_files_bg(self, paths, dest, skip_same=False):
+    """后台复制一批文件到 dest，进度和结果走 outputs/export_progress、export_done"""
+    paths = list(paths or [])
+    if not paths:
+        return paths
+
+    def work():
+        n, failed, skipped = 0, 0, 0
+        try:
+            os.makedirs(dest, exist_ok=True)
+        except OSError as e:
+            self._emit("outputs", "export_done", copied=0, failed=len(paths), skipped=0, dest=dest, error=str(e))
+            return
+        for i, p in enumerate(paths, 1):
+            target = _copy_target(dest, p, skip_same)
+            if target is None:
+                skipped += 1
+            else:
+                try:
+                    shutil.copy2(p, target)
+                    n += 1
+                except OSError:
+                    failed += 1
+            self._emit("outputs", "export_progress", i=i, n=len(paths))
+        self._emit("outputs", "export_done", copied=n, failed=failed, skipped=skipped, dest=dest)
+    self._spawn(work, name="outputs-export")
+    return paths
 
 
 def _api_outputs_collection_export(self, cid, dest):
@@ -2564,26 +2734,7 @@ def _api_outputs_collection_export(self, cid, dest):
     paths = _outidx(self).collection_paths(cid)
     if not paths:
         return {"ok": False, "error": "收藏夹是空的"}
-
-    def work():
-        n, failed = 0, 0
-        os.makedirs(dest, exist_ok=True)
-        for i, p in enumerate(paths, 1):
-            target = os.path.join(dest, os.path.basename(p))
-            if os.path.exists(target):
-                root, ext = os.path.splitext(target)
-                k = 1
-                while os.path.exists(f"{root}_{k}{ext}"):
-                    k += 1
-                target = f"{root}_{k}{ext}"
-            try:
-                shutil.copy2(p, target)
-                n += 1
-            except OSError:
-                failed += 1
-            self._emit("outputs", "export_progress", i=i, n=len(paths))
-        self._emit("outputs", "export_done", copied=n, failed=failed, dest=dest)
-    self._spawn(work, name="outputs-export")
+    _copy_files_bg(self, paths, dest)
     return {"ok": True, "count": len(paths)}
 
 
@@ -2886,29 +3037,48 @@ def _nvidia_gpu_names():
     return [x.strip() for x in cm.decode_process_output(r.stdout or b"").splitlines() if x.strip()]
 
 
-def _pick_comfy_torch_tag(log):
-    """按本机显卡和驱动选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）"""
+def _pick_comfy_torch_tag(log, cfg=None):
+    """按本机显卡和驱动选 torch 的 CUDA tag（见 COMFY_TORCH_TAG 注释）。
+    cfg：实例 / 部署配置，多显卡时只按它指定的那张卡（gpu_device_id）选"""
     try:
         import cuda_compat as cc
-        gpu = "、".join(cc.gpu_names())
-        if cc.is_unsupported_gpu():
-            log("[部署] 注意：" + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " ") + "\n")
-        elif cc.is_legacy_gpu():
-            log(f"[部署] 检测到老架构显卡（{gpu}），新版 CUDA 的 torch 已不支持这些卡，"
-                f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
-            return COMFY_TORCH_TAG_LEGACY
-        driver = cc.driver_cuda_version()
-        tag = cc.supported_tag(COMFY_TORCH_TAG, driver)
-        if tag != COMFY_TORCH_TAG:
-            log(f"[部署] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，带不动 {COMFY_TORCH_TAG}，"
-                f"torch 改用 {tag} 系列（想用 {COMFY_TORCH_TAG} 需要把驱动升级到 580 以上）\n")
-            return tag
+        with cc.device_scope((cfg or {}).get("gpu_device_id")):
+            return _pick_comfy_torch_tag_scoped(log, cc)
     except Exception:
         pass
     return COMFY_TORCH_TAG
 
 
-def _env_torch_problem(py):
+def _pick_comfy_torch_tag_scoped(log, cc):
+    gpu = "、".join(cc.gpu_names())
+    if cc.is_unsupported_gpu():
+        log("[部署] 注意：" + cc.UNSUPPORTED_GPU_TEXT.format(gpu=gpu).replace("\n\n", " ") + "\n")
+    elif cc.is_legacy_gpu():
+        log(f"[部署] 检测到老架构显卡（{gpu}），新版 CUDA 的 torch 已不支持这些卡，"
+            f"torch 改用 {COMFY_TORCH_TAG_LEGACY} 系列\n")
+        return COMFY_TORCH_TAG_LEGACY
+    driver = cc.driver_cuda_version()
+    tag = cc.supported_tag(COMFY_TORCH_TAG, driver)
+    if tag != COMFY_TORCH_TAG and cc.gpu_tag_mismatch(tag) == "blackwell":
+        # 50 系 + 只到 CUDA 11 的驱动：按驱动降下去的 cu118 这张卡必然跑不了，装能跑的最低版本，
+        # 升级驱动之后就能用（这种驱动本来也带不动任何 50 系能用的 torch）
+        log(f"[部署] 显卡（{gpu}）是 RTX 50 系，至少要 {cc.BLACKWELL_MIN_TAG} 的 torch；显卡驱动最高只支持 CUDA "
+            f"{cc.fmt_cuda(driver)}，带不动——torch 按 {cc.BLACKWELL_MIN_TAG} 装，请先把显卡驱动升级到 580 以上再使用\n")
+        return cc.BLACKWELL_MIN_TAG
+    if tag != COMFY_TORCH_TAG:
+        log(f"[部署] 显卡驱动最高支持 CUDA {cc.fmt_cuda(driver)}，带不动 {COMFY_TORCH_TAG}，"
+            f"torch 改用 {tag} 系列（想用 {COMFY_TORCH_TAG} 需要把驱动升级到 580 以上）\n")
+        return tag
+    return COMFY_TORCH_TAG
+
+
+def _env_torch_problem(py, cfg=None):
+    import cuda_compat as cc
+    with cc.device_scope((cfg or {}).get("gpu_device_id")):   # 多显卡：只看这个实例指定的那张
+        return _env_torch_problem_scoped(py)
+
+
+def _env_torch_problem_scoped(py):
     """
     py 所在环境里已装的 CUDA 版 torch 这台电脑带不动的原因（给日志用的一句话）；没问题 / 没装返回 ""。
     只看「能换一版 torch 解决」的情况：老架构卡配了新 torch、50 系配了老 torch、驱动带不动。
@@ -3161,7 +3331,7 @@ def _deploy_flow_comfy(self, target, use_portable):
         # ---- 0. 测速：后面每一步都按实测速度选最快的源 ----
         rocm = amd_rocm.is_rocm(dcfg)
         _deploy_speedtest(self, "comfyui", log,
-                          torch_tag=None if rocm else _pick_comfy_torch_tag(lambda m: None),
+                          torch_tag=None if rocm else _pick_comfy_torch_tag(lambda m: None, dcfg),
                           groups=("github", "pypi") if rocm else ("github", "pypi", "torch"))
 
         # ---- 1. 便携 Python / Git ----
@@ -3243,7 +3413,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             py = venv_py
 
         pip_mirror_argsets = []
-        torch_tag = _pick_comfy_torch_tag(log)
+        torch_tag = _pick_comfy_torch_tag(log, dcfg)
         torch_specs = ["torch", "torchvision", "torchaudio"]
         pack_torch = pm.deploy_torch(self, log)   # 按整合包部署：显卡带得动就直接装整合包里的版本，免得装完再换一遍
         if pack_torch:
@@ -3280,7 +3450,7 @@ def _deploy_flow_comfy(self, target, use_portable):
             has_torch = False
         elif has_torch and not amd_rocm.is_rocm(dcfg):
             # CUDA 认得到不等于能出图：显卡架构和 torch 对不上时也要换装
-            why = _env_torch_problem(py)
+            why = _env_torch_problem(py, dcfg)
             if why:
                 log(f"[部署] {why}，卸载后重装 ...\n")
                 self._deploy_run_cmd(py, ["-m", "pip", "uninstall", "-y",
@@ -3797,7 +3967,7 @@ def _install_rocm_torch(self, py, gfx, cwd, log, env):
 
 def _install_cuda_torch_comfy(self, py, cwd, log, env, cfg):
     """ComfyUI 换回 N 卡：按驱动选 CUDA tag 装 torch（镜像优先、官方兜底）"""
-    tag = _pick_comfy_torch_tag(log)
+    tag = _pick_comfy_torch_tag(log, cfg)
     indexes = [f"{mm_official()}/{tag}"]
     try:
         import mirror_manager as mm
@@ -3894,7 +4064,7 @@ def _gpu_switch_flow(self, target, kind, cfg, iid):
             ok = _install_rocm_torch(self, py, cfg.get("amd_gfx"), target, log, env)
         else:
             info = amd_rocm.probe_torch(py, env=env)
-            why = _env_torch_problem(py) if info.get("backend") == "cuda" else ""
+            why = _env_torch_problem(py, cfg) if info.get("backend") == "cuda" else ""
             if info.get("backend") == "cuda" and not why:
                 log(f"[环境] 已经是 CUDA 版 torch {info.get('version')}，不用重装\n")
             else:
@@ -6518,9 +6688,19 @@ def _api_ext_list(self, iid=None):
             "target": info, "disable_all": disable_all}
 
 
+_PIP_SOURCE = {"ext": "插件管理", "ver": "版本管理", "deploy": "环境部署"}
+
+
 def _stream_cmd(self, scope, program, args, cwd, env=None, timeout=None, cancelled=lambda: False,
                 set_proc=lambda p: None):
-    """跑命令：流式写日志到 scope、可取消、有超时（加速代理卡死时不至于永远等）"""
+    """跑命令：流式写日志到 scope、可取消、有超时（加速代理卡死时不至于永远等）。
+    pip install / uninstall 前后各记一次包变化（pip_history，给报错诊断当线索）"""
+    with pip_history.around_pip(program, args, cwd, _PIP_SOURCE.get(scope, scope), env):
+        return _stream_cmd_raw(self, scope, program, args, cwd, env, timeout, cancelled, set_proc)
+
+
+def _stream_cmd_raw(self, scope, program, args, cwd, env=None, timeout=None, cancelled=lambda: False,
+                    set_proc=lambda p: None):
     log = lambda t: self._emit(scope, "log", text=t)
     try:
         proc = subprocess.Popen([program] + list(args), cwd=cwd, env=env,
@@ -9630,7 +9810,7 @@ def _diag_enrich_models(self, f, ctx):
     models = f["facts"].get("models") or []
     mlist = dg.load_model_list(ctx["comfy_dir"], fetch=lambda u: _diag_fetch_json(self, u))
     found, need_search = {}, []
-    for m in models[:8]:
+    for m in models[:12]:
         _sub, name = dg.split_model_name(m["name"])
         hit = dg.model_list_lookup(mlist, name)
         if m.get("url"):
@@ -9647,7 +9827,7 @@ def _diag_enrich_models(self, f, ctx):
                 if hit:
                     found[m["name"]] = hit
     rows, missing = [], []
-    for m in models[:8]:
+    for m in models[:12]:
         _sub, name = dg.split_model_name(m["name"])
         dest = _diag_model_dir(self, ctx, m)
         if m["name"] in found and dest:
@@ -10255,6 +10435,209 @@ def _api_diag_fix(self, aid, params=None):
         return {"ok": False, "error": f"执行出错：{e}"}
 
 
+# ---- 一键修复：把诊断面板里所有能自动做的修复一次做完（缺的模型全下、缺的节点一次装齐、依赖装好），
+#      找不到下载地址的模型先让 AI 找，AI 给的下载也一起做。不用一个一个点、不用来回诊断几遍 ----
+
+# 停用插件是「修不好时的退路」，跟重装依赖是二选一，不能一起做（用户装它就是要用）：留给用户自己点
+_FIXALL_SKIP = {"restart_instance", "ai_ask", "reveal_path", "trash_file", "open_page", "open_url",
+                "civitai_redownload", "ext_disable"}
+_FIXALL_OFFLINE = {"comfy_install_node", "comfy_install_deps", "pip_install", "ext_disable"}   # 要先停实例
+
+
+def _fixall_sig(a):
+    return a["aid"] + json.dumps(a.get("params") or {}, sort_keys=True, ensure_ascii=False)
+
+
+def fixall_plan(findings, extra=()):
+    """诊断发现 + AI 给的动作 → (要执行的动作, 要 AI 去找的说明)。已经自动处理过的、要用户自己点的、重复的都去掉"""
+    acts, asks, seen = [], [], set()
+    for a in [a for f in findings for a in f.get("actions") or []] + list(extra):
+        if a["aid"] == "ai_ask":
+            note = (a.get("params") or {}).get("note")
+            if note and note not in asks:
+                asks.append(note)
+            continue
+        if a["aid"] in _FIXALL_SKIP or a.get("risk") in ("ui", "danger"):
+            continue
+        if a.get("applied") and not a["applied"].get("undone"):
+            continue
+        sig = _fixall_sig(a)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        acts.append(a)
+    return acts, asks
+
+
+def _fixall_wait_ext(self, cancel, limit=3 * 3600):
+    t0 = time.time()
+    while _ext_busy(self):
+        if cancel.wait(1) or time.time() - t0 > limit:
+            return False
+    return True
+
+
+def _fixall_install_nodes(self, iid, acts):
+    """缺的节点合成一个安装任务（插件任务同一时间只能有一个，一个一个点第二个就会报「已有插件任务」）"""
+    ids, nodes = [], []
+    for a in acts:
+        p = a["params"]
+        slug = vm.repo_slug(p["url"])
+        hit = next((n for n in comfy_nodes.CATALOG if n["url"] and vm.repo_slug(n["url"]) == slug), None)
+        if hit:
+            ids.append(hit["id"])
+        else:
+            folder = p["url"].rstrip("/").rsplit("/", 1)[-1]
+            nodes.append({"id": "diag:" + slug, "name": p.get("name") or folder, "url": p["url"] + ".git",
+                          "folder": folder})
+    return _api_ext_install(self, ids, iid, nodes=nodes)
+
+
+def _diag_fixall_run(self, job, target, note):
+    cancel = self._diag_jobs.get(job) or threading.Event()
+    results = []
+
+    def step(text, kind="info"):
+        self._emit("diag", "fixall_step", job=job, text=text, kind=kind)
+
+    def result(label, out):
+        ok = bool(out.get("ok"))
+        text_ = (out.get("text") if ok else out.get("error")) or ("已完成" if ok else "失败")
+        results.append({"label": label, "ok": ok, "text": text_, "undo": out.get("undo") or ""})
+        step(f"{label} → {text_}", "act" if ok else "warn")
+
+    def done(ok, text):
+        self._emit("diag", "fixall_done", job=job, ok=ok, text=text, results=results)
+
+    # 为了装节点 / 依赖把正在运行的实例停掉之后，不管是做完、用户点了停止还是中途出错，都要把它启动回来。
+    # 以前只有全部做完才启动：停掉实例后点「停止」或者后面哪一步抛了异常，实例就一直停着。
+    state = {"r": None, "iid": None, "stopped": False}
+
+    def restore():
+        """把被这次修复停掉的实例启动回来；返回要接在结束语后面的一句说明"""
+        if not state["stopped"]:
+            return ""
+        state["stopped"] = False
+        if _ext_busy(self):
+            # 后台的插件任务还在装东西，这时启动实例会和它抢文件：不启动，说清楚
+            step("实例没有自动重新启动：后台还有插件任务在装东西，等它装完后请手动启动", "warn")
+            return "。实例已停止，等插件任务装完后请手动启动"
+        try:
+            root = (self.instance_cfg(state["iid"]) or {}).get("webui_root", "")
+            res = state["r"].start(root)
+        except Exception as e:
+            res = {"ok": False, "error": str(e)}
+        if res.get("ok"):
+            step("已重新启动实例", "result")
+            return ""
+        step("重新启动失败：" + str(res.get("error") or ""), "warn")
+        return "。实例没能自动重新启动，请手动启动"
+
+    try:
+        ctx, log_text = _diag_target(self, target)
+        findings = dg.scan(log_text, ctx)
+        step("重新看一遍日志，找出所有问题…")
+        _diag_enrich(self, findings, ctx)
+        _diag_auto_apply(self, findings)
+        acts, asks = fixall_plan(findings)
+        if asks and dl.resolve(self.cfg):
+            step("有模型没直接找到下载地址，让 AI 去 Civitai / HuggingFace 上找…", "round")
+            ask = "\n\n".join(asks) + "\n\n每个能找到的模型都给一个 download_model 动作（会被直接执行），找不到的写进 steps。"
+            res = dl.run(self, ctx, log_text, findings, on_step=lambda t: step(t, "ai"), cancelled=cancel.is_set,
+                         note=((note + "\n\n") if note else "") + ask, fix=True)
+            if res.get("summary"):
+                step("AI：" + res["summary"], "result")
+            acts, _ = fixall_plan(findings, res.get("actions") or [])
+            for s in res.get("steps") or []:
+                step("要你自己做：" + s, "warn")
+        elif asks:
+            step("有模型没找到下载地址；在「启动器设置 → 报错诊断」设置 AI 后，一键修复会让 AI 去找", "warn")
+        if cancel.is_set():
+            return done(False, "已停止")
+        if not acts:
+            return done(not findings, "没有问题需要修" if not findings else "没有能自动做的修复，照诊断里的说明手动处理")
+
+        iid = ctx.get("iid")
+        r = self._runner(iid) if iid else None
+        state.update(r=r, iid=iid)
+        live = [a for a in acts if a["aid"] in _TK_LIVE]
+        offline = [a for a in acts if a["aid"] in _FIXALL_OFFLINE]
+        downloads = [a for a in acts if a["aid"] == "download_model"]
+        others = [a for a in acts if a not in live and a not in offline and a not in downloads]
+        step(f"要做 {len(acts)} 项：" + "、".join(a["label"] for a in acts), "round")
+
+        # 改网页里的工作流：要 ComfyUI 开着，先做
+        for a in live + others:
+            if cancel.is_set():
+                return done(False, "已停止")
+            try:
+                result(a["label"], _diag_exec(self, a["aid"], a["params"]))
+            except Exception as e:
+                result(a["label"], {"ok": False, "error": str(e)})
+        # 下载不占实例、互不影响：一起开始
+        for a in downloads:
+            try:
+                result(a["label"], _diag_download(self, a["params"]))
+            except Exception as e:
+                result(a["label"], {"ok": False, "error": str(e)})
+
+        was_running = bool(offline and r and r.running())
+        if was_running:
+            step("先停止实例（装节点 / 依赖时文件不能被占用），装完自动重新启动…")
+            r.stop()
+            state["stopped"] = True
+        nodes = [a for a in offline if a["aid"] == "comfy_install_node"]
+        if nodes and _fixall_wait_ext(self, cancel):
+            step(f"一次装齐 {len(nodes)} 个节点包：" + "、".join(a["params"].get("name") or a["label"] for a in nodes),
+                 "round")
+            out = _fixall_install_nodes(self, iid, nodes)
+            result("安装节点：" + "、".join(a["params"].get("name") or "" for a in nodes),
+                   out if not out.get("ok") else {"ok": True, "text": "已开始安装，进度看运行日志"})
+            if out.get("ok") and not _fixall_wait_ext(self, cancel):
+                return done(False, "已停止" + restore())
+        for a in offline:
+            if a in nodes:
+                continue
+            if cancel.is_set() or not _fixall_wait_ext(self, cancel):
+                return done(False, "已停止" + restore())
+            try:
+                result(a["label"], _diag_exec(self, a["aid"], a["params"]))
+            except Exception as e:
+                result(a["label"], {"ok": False, "error": str(e)})
+        if not _fixall_wait_ext(self, cancel):
+            return done(False, "已停止" + restore())
+
+        if downloads:
+            step("等模型下完…（进度看「一键启动」页的运行日志，下好的会提示）")
+            t0 = time.time()
+            while time.time() - t0 < _TK_WAIT_JOBS:
+                with self._diag_lock:
+                    if not self._diag_dl:
+                        break
+                if cancel.wait(2):
+                    return done(False, "已停止（正在下的模型会接着下完）" + restore())
+        tail = restore()
+        bad = [x for x in results if not x["ok"]]
+        done(not bad, f"做完了 {len(results) - len(bad)} 项" + (f"，{len(bad)} 项没成功（原因见上面）" if bad else "") +
+             ("。ComfyUI 网页里按 R 刷新模型列表再运行" if downloads and not was_running else "") + tail)
+    except dl.LlmError as e:
+        done(False, f"AI 出错：{e}" + restore())
+    except Exception as e:
+        print(traceback.format_exc())
+        done(False, f"一键修复内部出错：{e}" + restore())
+    finally:
+        self._diag_jobs.pop(job, None)
+
+
+def _api_diag_fix_all(self, target=None, note=""):
+    """一键修复：所有能自动做的修复一次做完（会先停实例、装完再启动）"""
+    t = target or {"type": "inst", "iid": self.cfg.get("active_instance")}
+    job = _diag_new_job(self)
+    note = _diag_compose_note(self, t, note)
+    self._spawn(lambda: _diag_fixall_run(self, job, t, note), name="diag-fixall")
+    return {"ok": True, "job": job}
+
+
 def _api_diag_undo(self, token):
     with self._diag_lock:
         rec = self._diag_undo.pop(token, None)
@@ -10326,7 +10709,7 @@ def _api_diag_report_error(self, text):
 # 远程不能让主机做的事：在主机屏幕上弹对话框 / 开窗口、退出或更新主机的启动器、改联动本身
 _LINK_DENY = {
     "exit_app", "request_exit_confirm", "choose_directory", "choose_files", "choose_images",
-    "open_url", "reveal_in_explorer", "drop_files", "drop_debug", "handle_dropped_paths",
+    "open_url", "open_tutorial", "reveal_in_explorer", "drop_files", "drop_debug", "handle_dropped_paths",
     "launcher_update", "launcher_restart", "remote_call", "outputs_reveal", "outputs_open",
     "reveal_image", "open_output_folder", "ver_open_backup", "ext_open_dir", "trainer_open",
     "log_frontend", "activity_entries", "activity_clear", "activity_open",
@@ -11101,6 +11484,11 @@ for _name, _fn in {
     "outputs_query": _api_outputs_query,
     "outputs_facets": _api_outputs_facets,
     "outputs_detail": _api_outputs_detail,
+    "outputs_compare": _api_outputs_compare,
+    "outputs_copy": _api_outputs_copy,
+    "outputs_drag": _api_outputs_drag,
+    "models_collections": _api_models_collections,
+    "models_collection_op": _api_models_collection_op,
     "outputs_reveal": _api_outputs_reveal,
     "outputs_open": _api_outputs_open,
     "outputs_delete": _api_outputs_delete,
@@ -11123,6 +11511,7 @@ for _name, _fn in {
     "diag_takeover": _api_diag_takeover,
     "diag_note_set": _api_diag_note_set,
     "diag_fix": _api_diag_fix,
+    "diag_fix_all": _api_diag_fix_all,
     "diag_undo": _api_diag_undo,
     "diag_info": _api_diag_info,
     "diag_llm_test": _api_diag_llm_test,

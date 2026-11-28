@@ -28,12 +28,127 @@
 
   function tbody() { return $("#md-files tbody"); }
 
+  /* ---------- 收藏夹（只记录，不移动模型文件；后端 app/model_favorites.py） ---------- */
+  let mcols = { collections: [], member: {} };
+  // 和 Python 的 os.path.normcase(abspath) 对齐：Windows 下不分大小写、统一反斜杠
+  const pkey = (p) => String(p || "").replace(/\//g, "\\").toLowerCase();
+  const colsOf = (p) => mcols.member[pkey(p)] || [];
+
+  async function loadCols() {
+    try {
+      const r = await App.api.models_collections();
+      if (r && r.ok !== false) mcols = { collections: r.collections || [], member: r.member || {} };
+    } catch (e) { /* 拿不到就当没有收藏夹 */ }
+    renderColSelect();
+  }
+
+  function renderColSelect() {
+    const sel = $("#md-col");
+    if (!sel) return;
+    const cur = sel.value;
+    sel.innerHTML = '<option value="">全部模型</option>' + mcols.collections.map((c) =>
+      `<option value="${c.id}">★ ${App.esc(c.name)}（${c.count}）</option>`).join("");
+    sel.value = mcols.collections.some((c) => String(c.id) === cur) ? cur : "";
+  }
+
+  function applyCols(r) {
+    if (r && r.ok !== false) {
+      mcols = { collections: r.collections || [], member: r.member || {} };
+      renderColSelect();
+      renderTable();
+      if (selected) renderDetailCols();
+      return true;
+    }
+    App.toast((r && r.error) || "操作失败", "error");
+    return false;
+  }
+
+  async function askColName(title, value) {
+    let name = null;
+    const v = await App.modal(title, `<input type="text" id="mcol-name-in" maxlength="40" value="${App.esc(value || "")}" placeholder="收藏夹名字">`,
+      [{ id: "ok", label: "确定", kind: "primary" }, { id: "cancel", label: "取消" }], {
+        onOpen(body, finish) {
+          const inp = body.querySelector("#mcol-name-in");
+          inp.focus(); inp.select();
+          inp.addEventListener("keydown", (e) => { if (e.key === "Enter") finish("ok"); });
+        },
+        onClose(body) { name = ((body.querySelector("#mcol-name-in") || {}).value || "").trim(); },
+      });
+    return v === "ok" && name ? name : null;
+  }
+
+  async function newCol() {
+    const name = await askColName("新建模型收藏夹", "");
+    if (!name) return null;
+    const r = await App.api.models_collection_op("create", null, name);
+    return applyCols(r) ? r.id : null;
+  }
+
+  /** 收藏夹管理：新建 / 改名 / 删除（删除只删记录，模型文件不动）。
+   *  界面只有一个弹窗：点「新建 / 改名 / 删除」先关掉管理窗、弹出对应的小窗，做完再回到管理窗 */
+  async function manageCols() {
+    for (;;) {
+      const listHtml = mcols.collections.length ? mcols.collections.map((c) =>
+        `<div class="mcol-row" data-cid="${c.id}"><span>★ ${App.esc(c.name)}</span><em>${c.count} 个</em>
+          <button class="btn btn-xs" data-mop="rename">改名</button><button class="btn btn-xs btn-danger-text" data-mop="delete">删除</button></div>`).join("")
+        : '<div class="hint">还没有收藏夹</div>';
+      const act = await App.modal("模型收藏夹", `<div class="mcol-list">${listHtml}</div>
+        <div class="row" style="margin-top:10px"><button class="btn btn-xs btn-accent" data-mop="new" type="button">＋ 新建收藏夹</button></div>
+        <div class="hint">收藏夹只记录模型在哪，不会移动、复制模型文件；删掉收藏夹也不影响模型本身。</div>`,
+      [{ id: "ok", label: "完成", kind: "primary" }], {
+        onOpen(body, finish) {
+          body.addEventListener("click", (e) => {
+            const b = e.target.closest("[data-mop]");
+            if (!b) return;
+            const row = b.closest("[data-cid]");
+            finish(b.dataset.mop + ":" + (row ? row.dataset.cid : ""));
+          });
+        },
+      });
+      const [op, cidS] = String(act || "").split(":");
+      const cid = Number(cidS);
+      const c = mcols.collections.find((x) => x.id === cid);
+      if (op === "new") await newCol();
+      else if (op === "rename" && c) {
+        const name = await askColName("收藏夹改名", c.name);
+        if (name) applyCols(await App.api.models_collection_op("rename", cid, name));
+      } else if (op === "delete" && c) {
+        if (await App.confirm("删除收藏夹", `删除模型收藏夹「${c.name}」？\n只删除收藏记录，模型文件不受影响。`, "删除", true)) {
+          if (applyCols(await App.api.models_collection_op("delete", cid)) && $("#md-col").value === String(cid)) {
+            $("#md-col").value = "";
+            renderTable();
+          }
+        }
+      } else return;          // 「完成」、Esc、点遮罩
+    }
+  }
+
+  function renderDetailCols() {
+    const box = $("#md-cols");
+    if (!box) return;
+    if (!selected) { box.hidden = true; return; }
+    box.hidden = false;
+    const on = new Set(colsOf(selected.path));
+    box.innerHTML = '<span class="od-cols-label">收藏到</span>' +
+      mcols.collections.map((c) => `<button class="chip${on.has(c.id) ? " on" : ""}" data-mcid="${c.id}">★ ${App.esc(c.name)}</button>`).join("") +
+      '<button class="chip" data-mcid="new">＋ 新收藏夹</button>';
+    box.querySelectorAll("[data-mcid]").forEach((b) => b.addEventListener("click", async () => {
+      if (!selected) return;
+      let cid = b.dataset.mcid, want = true;
+      if (cid === "new") { cid = await newCol(); if (!cid) return; }
+      else { cid = Number(cid); want = !on.has(cid); }
+      applyCols(await App.api.models_collection_op("set", cid, "", [selected.path], want));
+    }));
+  }
+
   function filtered() {
     const kw = ($("#md-filter").value || "").trim().toLowerCase();
     const base = $("#md-base").value;
+    const col = Number(($("#md-col") || {}).value || 0);
     return files.filter((f) => {
       if (kw && !f.rel.toLowerCase().includes(kw)) return false;
       if (base && (f.base || "未知") !== base) return false;
+      if (col && !colsOf(f.path).includes(col)) return false;
       return true;
     });
   }
@@ -69,7 +184,7 @@
     else $("#md-grid").innerHTML = "";
     tbody().innerHTML = mdView === "grid" ? "" : rows.map((f) =>
       `<tr data-path="${App.esc(f.path)}">
-        <td>${App.esc(f.rel)}</td>
+        <td>${colsOf(f.path).length ? '<span class="md-star" title="在收藏夹里">★</span>' : ""}${App.esc(f.rel)}</td>
         <td class="dim">${App.esc(f.base || "未知")}</td>
         <td class="dim">${App.esc(f.size_text)}</td>
         <td class="dim">${App.esc(f.mtime_text)}</td>
@@ -106,7 +221,7 @@
       const sub = f.rel.includes("\\") || f.rel.includes("/") ? f.rel.replace(/[\\/][^\\/]*$/, "") : "";
       return `<div class="md-card" data-path="${App.esc(f.path)}" title="${App.esc(f.rel)}\n${App.esc(f.size_text)} · ${App.esc(f.mtime_text)}">` +
         `<div class="md-thumb"><span class="md-noimg">${App.esc(f.base || "无预览")}</span></div>` +
-        `<div class="md-cap"><b>${App.esc(name)}</b>` +
+        `<div class="md-cap"><b>${colsOf(f.path).length ? '<span class="md-star">★</span>' : ""}${App.esc(name)}</b>` +
         `<span>${App.esc([f.base || "未知", sub].filter(Boolean).join(" · "))}</span></div></div>`;
     }).join("");
     if (!rows.length) return;
@@ -210,6 +325,7 @@
     ["#md-open", "#md-dl", "#md-copy-name", "#md-hash-lookup", "#md-delete", "#md-preview-set"].forEach((s) => ($(s).disabled = !selected));
     $("#md-preview-del").disabled = true;
     $("#md-copy-lora").disabled = !selected || !curIsLora;
+    renderDetailCols();
 
     const detail = $("#md-detail");
     detail.innerHTML = '<span class="dim">读取中…</span>';
@@ -354,6 +470,7 @@
     $("#md-detail").innerHTML = "";
     $("#md-preview").innerHTML = "<span>选中文件后这里显示预览图</span>";
     selected = null;
+    renderDetailCols();
     ["#md-open", "#md-dl", "#md-copy-name", "#md-copy-lora", "#md-hash-lookup", "#md-delete",
       "#md-preview-set", "#md-preview-del"].forEach((s) => ($(s).disabled = true));
     try {
@@ -674,6 +791,8 @@
       });
       $("#md-filter").addEventListener("input", renderTable);
       $("#md-base").addEventListener("change", renderTable);
+      $("#md-col").addEventListener("change", renderTable);
+      $("#md-col-manage").addEventListener("click", manageCols);
       const applyViewChips = () => $$("#md-viewsw [data-mdview]").forEach((b) => b.classList.toggle("on", b.dataset.mdview === mdView));
       applyViewChips();
       $("#md-viewsw").addEventListener("click", (e) => {
@@ -851,6 +970,7 @@
     onShow() {
       // 切回本页时刷新分类（根目录可能刚在别的页面改过）
       if (App.pages.models.reloadAll) App.pages.models.reloadAll();
+      loadCols().then(() => renderTable());
     },
   };
 })();

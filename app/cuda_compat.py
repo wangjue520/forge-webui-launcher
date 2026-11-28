@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import time
 
 _NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -362,12 +363,16 @@ def gpu_info():
                 continue
             ttl = 600
             for line in lines:
-                name, _, cap = line.partition(",") if "," in fields else (line, "", "")
+                # 计算能力是最后一列：从右边切，型号名里带逗号也不会被切断
+                name, _, cap = line.rpartition(",") if "," in fields else (line, "", "")
                 try:
                     sm = float(cap)
                 except ValueError:
                     sm = None
-                info.append({"name": name.strip(), "sm": sm or sm_from_name(name)})
+                    if "," in fields and not name:      # 这一行没有逗号：整行都是型号名
+                        name = line
+                name = name.strip().strip('"').strip()
+                info.append({"name": name, "sm": sm or sm_from_name(name)})
             break
     if not info:
         info = [{"name": n, "sm": sm_from_name(n), "src": "wmi"} for n in _wmi_nvidia_names()]
@@ -375,8 +380,72 @@ def gpu_info():
     return info
 
 
+# ---- 多显卡：实例指定了用哪张卡，就只按那张卡选 torch ----
+#
+# 实例的「GPU 编号」（gpu_device_id）最后变成 --device-id / --cuda-device，也就是 CUDA 的设备编号。
+# 以前选 torch 不看它，只看整台机器：GTX 1080 Ti + RTX 3090 明明指定用 3090，也被降到 cu126；
+# GTX 1080 Ti + RTX 5090 指定用 1080 Ti，又因为机器里有 50 系按 cu130 选，老卡没有内核。
+# 调用方用 with device_scope(cfg.get("gpu_device_id")) 包住选型 / 检查的那段代码，
+# 里面的 is_legacy_gpu / is_blackwell_gpu / gpu_names / gpu_tag_mismatch 等就只看选中的卡。
+
+_scope = threading.local()
+
+
+def _parse_device_ids(device_id):
+    """ "0" / "1" / "0,1" → [0] / [1] / [0, 1]；空、不是数字的（用户填了别的东西）返回 []（= 全部显卡）"""
+    out = []
+    for part in str(device_id if device_id is not None else "").replace("，", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+        elif part:
+            return []
+    return out
+
+
+class device_scope:
+    """with 块里的显卡判断只看 device_id 指定的那几张卡（见上面的说明）；可以嵌套"""
+
+    def __init__(self, device_id):
+        self.ids = _parse_device_ids(device_id)
+
+    def __enter__(self):
+        self.prev = getattr(_scope, "ids", None)
+        _scope.ids = self.ids
+        return self
+
+    def __exit__(self, *exc):
+        _scope.ids = self.prev
+        return False
+
+
+def cuda_order(info):
+    """
+    CUDA 给显卡编号的顺序。nvidia-smi 是按 PCI 插槽排的，CUDA 默认却是「最快的排 0 号」，
+    两个顺序在新老卡混插的机器上经常不一样。这里照 CUDA 的规则排：
+      · 设了 CUDA_DEVICE_ORDER=PCI_BUS_ID：和 nvidia-smi 一样
+      · 否则：计算能力最高的那张排最前，其余保持 nvidia-smi 的顺序
+        （CUDA 只保证 0 号是最快的，其余顺序没有规定；两张卡时这样排就是准的）
+    """
+    if (os.environ.get("CUDA_DEVICE_ORDER") or "").upper() == "PCI_BUS_ID" or len(info) < 2:
+        return list(info)
+    best = max(range(len(info)), key=lambda i: (info[i].get("sm") or 0, -i))
+    return [info[best]] + [g for i, g in enumerate(info) if i != best]
+
+
+def selected_gpus():
+    """这次要看的显卡：在 device_scope 里且编号对得上就只看指定的那几张，否则是全部"""
+    info = gpu_info()
+    ids = getattr(_scope, "ids", None)
+    if not ids or len(info) < 2:
+        return info
+    order = cuda_order(info)
+    picked = [order[i] for i in ids if i < len(order)]
+    return picked or info
+
+
 def gpu_names():
-    return [g["name"] for g in gpu_info()]
+    return [g["name"] for g in selected_gpus()]
 
 
 def sms_legacy(sms):
@@ -386,7 +455,7 @@ def sms_legacy(sms):
 
 
 def _sms():
-    return [g.get("sm") for g in gpu_info()]
+    return [g.get("sm") for g in selected_gpus()]
 
 
 def is_legacy_gpu():
@@ -440,7 +509,9 @@ def candidate_tags(wanted_tag, driver=None):
     need = tag_cuda(wanted_tag)
     out = [t for t in FALLBACK_TAGS if tag_cuda(t)[0] == major and tag_cuda(t) < need]
     if is_blackwell_gpu():
-        out = [t for t in out if tag_cuda(t) >= (12, 8)]
+        # 50 系过滤完一个都不剩（驱动只到 CUDA 11 这种）就是没有能装的：不能再把 cu118 放回去，
+        # 那个包 50 系必然跑不了。返回空列表，resolve_compat 按「没有可用版本」处理，提示升级驱动
+        return [t for t in out if tag_cuda(t) >= tag_cuda(BLACKWELL_MIN_TAG)]
     return out or [first]
 
 
@@ -455,6 +526,8 @@ def resolve_compat(spec_sets, wanted_tag, bases_for, pytag=None, driver=None, lo
     时按首选 tag 原样换版本号返回 (specs, tag, None)，和以前的行为一致。
     """
     tags = candidate_tags(wanted_tag, driver)
+    if not tags:
+        return None, wanted_tag, None
     reached, offline = None, None
     for specs in spec_sets:
         for t in tags:
@@ -554,6 +627,9 @@ def _fb_key(root):
     return os.path.normcase(os.path.abspath(root))
 
 
+_fb_lock = threading.Lock()   # 几个实例同时启动 / 部署时，「读出来改一条再写回去」不能互相盖掉
+
+
 def _fb_load():
     try:
         with open(_FALLBACK_PATH, "r", encoding="utf-8") as f:
@@ -564,37 +640,46 @@ def _fb_load():
 
 
 def _fb_save(data):
+    """先写临时文件再整个换上去：别的进程不会读到写了一半的 JSON（读到半截会被当成没有记录）"""
+    tmp = f"{_FALLBACK_PATH}.{os.getpid()}.tmp"
     try:
         os.makedirs(os.path.dirname(_FALLBACK_PATH), exist_ok=True)
-        with open(_FALLBACK_PATH, "w", encoding="utf-8") as f:
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=1)
+        os.replace(tmp, _FALLBACK_PATH)
     except OSError:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def note_fallback(root, torch_spec, wanted_tag):
     """记下 root 的 torch 因为驱动太旧被换装成了 torch_spec（如 2.13.0+cu126）"""
-    data, key = _fb_load(), _fb_key(root)
-    rec = data.get(key) or {}
-    if rec.get("torch") == torch_spec and rec.get("wanted") == wanted_tag:
-        return
-    data[key] = {"torch": torch_spec, "wanted": wanted_tag, "t": int(time.time())}
-    _fb_save(data)
+    with _fb_lock:
+        data, key = _fb_load(), _fb_key(root)
+        rec = data.get(key) or {}
+        if rec.get("torch") == torch_spec and rec.get("wanted") == wanted_tag:
+            return
+        data[key] = {"torch": torch_spec, "wanted": wanted_tag, "t": int(time.time())}
+        _fb_save(data)
 
 
 def clear_fallback(root):
-    data, key = _fb_load(), _fb_key(root)
-    if key in data:
-        del data[key]
-        _fb_save(data)
+    with _fb_lock:
+        data, key = _fb_load(), _fb_key(root)
+        if key in data:
+            del data[key]
+            _fb_save(data)
 
 
 def dismiss_fallback(root):
     """用户选了「保持现状」：这条换装记录不再提示"""
-    data, key = _fb_load(), _fb_key(root)
-    if key in data and not data[key].get("dismissed"):
-        data[key]["dismissed"] = True
-        _fb_save(data)
+    with _fb_lock:
+        data, key = _fb_load(), _fb_key(root)
+        if key in data and not data[key].get("dismissed"):
+            data[key]["dismissed"] = True
+            _fb_save(data)
 
 
 def fallback_restorable(root, installed_spec, wanted_tag, driver=None):

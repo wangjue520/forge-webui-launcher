@@ -415,6 +415,114 @@ class DeployTorchTest(_ForgeRoot):
             self.assertEqual(lt.torch_warning(), "")
 
 
+class MultiGpuTest(_ForgeRoot):
+    """多显卡：实例指定了用哪张卡（gpu_device_id → --device-id / --cuda-device），就只按那张卡选 torch"""
+
+    OLD_NEW = [("NVIDIA GeForce GTX 1080 Ti", 6.1), ("NVIDIA GeForce RTX 3090", 8.6)]     # nvidia-smi 的顺序
+    OLD_50 = [("NVIDIA GeForce GTX 1080 Ti", 6.1), ("NVIDIA GeForce RTX 5090", 12.0)]
+    CU126 = ForgeOverridesTest.CU126
+
+    def test_cuda_order_is_fastest_first(self):
+        info = gpus(*self.OLD_NEW)
+        with patch.dict(os.environ, {"CUDA_DEVICE_ORDER": ""}):
+            self.assertEqual([g["name"] for g in cc.cuda_order(info)],
+                             ["NVIDIA GeForce RTX 3090", "NVIDIA GeForce GTX 1080 Ti"])
+        with patch.dict(os.environ, {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}):     # 用户让 CUDA 按插槽排：和 nvidia-smi 一样
+            self.assertEqual([g["name"] for g in cc.cuda_order(info)],
+                             ["NVIDIA GeForce GTX 1080 Ti", "NVIDIA GeForce RTX 3090"])
+
+    def flags(self, device):
+        with cc.device_scope(device):
+            return cc.is_legacy_gpu(), cc.is_blackwell_gpu(), cc.gpu_names()
+
+    def test_selected_card_decides(self):
+        with patch.dict(os.environ, {"CUDA_DEVICE_ORDER": ""}):
+            with patch.object(cc, "gpu_info", return_value=gpus(*self.OLD_NEW)):
+                self.assertEqual(self.flags("0"), (False, False, ["NVIDIA GeForce RTX 3090"]))   # 0 号 = 最快的
+                self.assertEqual(self.flags("1"), (True, False, ["NVIDIA GeForce GTX 1080 Ti"]))
+                self.assertEqual(self.flags("0,1")[0], True)                 # 两张都用：cu126 两张都能跑
+                for unknown in ("", None, "auto", "7"):                      # 没指定 / 填了别的 / 编号不存在：看全部
+                    self.assertEqual(len(self.flags(unknown)[2]), 2, unknown)
+                with cc.device_scope("0"):
+                    self.assertEqual(cc.effective_tag("cu130", (13, 0)), "cu130")   # 以前：cu126
+                with cc.device_scope("1"):
+                    self.assertEqual(cc.effective_tag("cu130", (13, 0)), "cu126")
+            with patch.object(cc, "gpu_info", return_value=gpus(*self.OLD_50)):
+                self.assertEqual(self.flags("0")[:2], (False, True))
+                self.assertEqual(self.flags("1")[:2], (True, False))         # 以前：因为机器里有 50 系按 cu130 选
+                with cc.device_scope("1"):
+                    self.assertEqual(cc.effective_tag("cu130", (13, 0)), "cu126")
+                    self.assertEqual(cc.gpu_tag_mismatch("cu130"), "legacy")
+        self.assertIsNone(getattr(cc._scope, "ids", None))                   # with 块出来之后恢复原样
+
+    def test_single_card_ignores_device_id(self):
+        with patch.object(cc, "gpu_info", return_value=gpus(("GTX 1080 Ti", 6.1))):
+            self.assertEqual(self.flags("3")[0], True)
+
+    def test_forge_launch_uses_instance_card(self):
+        root = self.make_root(installed="2.13.0+cu130")
+        with patch.dict(os.environ, {"CUDA_DEVICE_ORDER": ""}), \
+                patch.object(cc, "gpu_info", return_value=gpus(*self.OLD_NEW)), \
+                patch.object(cc, "driver_cuda_version", return_value=(13, 0)), \
+                patch.object(cc, "resolve_compat", return_value=self.CU126), \
+                patch.object(cc, "python_tag", return_value="cp313"):
+            out, reinstall = cm.torch_compat_overrides({"mirror_mode": "never", "gpu_device_id": "0"}, root, [])
+            self.assertEqual((out, reinstall), ({}, False))                  # 用 3090：默认的 cu130 不动
+            out, reinstall = cm.torch_compat_overrides({"mirror_mode": "never", "gpu_device_id": "1"}, root, [])
+            self.assertIn("cu126", out["TORCH_COMMAND"])                     # 用 1080 Ti：换 cu126
+            self.assertTrue(reinstall)
+            self.assertIsNone(pm._driver_issue_forge(root, {"gpu_device_id": "0"}))
+            self.assertEqual(pm._driver_issue_forge(root, {"gpu_device_id": "1"})["id"], "gpu_too_old")
+
+
+class ReviewFixesTest(_Base):
+    """外部代码审查查出来的几处"""
+
+    def test_gpu_name_with_comma(self):
+        class R:
+            returncode = 0
+            stdout = b'"NVIDIA Foo, Bar", 8.6\nNVIDIA GeForce RTX 3060, 8.6\nNVIDIA Odd Card, [N/A]\n'
+
+        cache = {"t": 0.0, "v": [], "ttl": 600}
+        with patch.object(cc, "_gpu_cache", cache), patch.object(cc, "find_nvidia_smi", return_value="smi"), \
+                patch.object(cc.subprocess, "run", return_value=R()):
+            self.assertEqual([(g["name"], g["sm"]) for g in cc.gpu_info()],
+                             [("NVIDIA Foo, Bar", 8.6), ("NVIDIA GeForce RTX 3060", 8.6), ("NVIDIA Odd Card", None)])
+
+    def test_blackwell_never_gets_cu118(self):
+        # 50 系 + 只到 CUDA 11 的驱动：以前过滤完又把 cu118 放了回去
+        self.set_gpu(("RTX 5090", 12.0), driver=(11, 8))
+        self.assertEqual(cc.candidate_tags("cu130", (11, 8)), [])
+        called = []
+        got = cc.resolve_compat([NEO], "cu130", lambda t: called.append(t) or ["x"], "cp313", (11, 8))
+        self.assertEqual((got[0], called), (None, []))                       # 不去查任何索引，直接按「没有可用版本」
+        import webview_api as wa
+        logs = []
+        self.assertEqual(wa._pick_comfy_torch_tag(logs.append), "cu128")     # ComfyUI：也不装 cu118
+        self.assertIn("580", "".join(logs))
+
+    def test_deploy_respects_user_torch_command(self):
+        called = []
+        with patch.dict(os.environ, {"TORCH_COMMAND": "pip install torch==2.9.1"}), \
+                patch.object(tb, "_ensure_torch", lambda *a, **k: called.append(1) or True):
+            logs = []
+            self.assertFalse(tb.ensure_torch(self.tmp, {}, logs.append))
+        self.assertEqual(called, [])
+        self.assertIn("TORCH_COMMAND", "".join(logs))
+
+    def test_fallback_file_is_replaced_atomically(self):
+        root = os.path.join(self.tmp, "w")
+        cc.note_fallback(root, "2.13.0+cu126", "cu130")
+        cc.dismiss_fallback(root)
+        folder = os.path.dirname(cc._FALLBACK_PATH)
+        self.assertEqual([n for n in os.listdir(folder) if n.endswith(".tmp")], [])
+        self.assertTrue(cc._fb_load()[cc._fb_key(root)]["dismissed"])
+        with patch.object(cc.json, "dump", side_effect=OSError("disk full")):   # 写失败：原来的记录还在
+            cc.note_fallback(root, "2.11.0+cu128", "cu130")
+        self.assertEqual(cc._fb_load()[cc._fb_key(root)]["torch"], "2.13.0+cu126")
+        self.assertEqual([n for n in os.listdir(folder) if n.endswith(".tmp")], [])
+
+
 class ComfyAndPrecheckTest(_Base):
     """ComfyUI 选 tag、已装 torch 的核对、部署预检（webview_api）"""
 

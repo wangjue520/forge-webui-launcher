@@ -197,8 +197,16 @@ def ensure_torch(root_dir, cfg, log, progress=None, cancel_event=None):
     部署主流程调用：在 webui.bat 之前把 torch 装好。返回 True=已就绪
     （Forge 会跳过自己的安装），False=没装上（Forge 自己装，不阻断部署）。
     """
+    # 用户自己设了 TORCH_COMMAND：装哪个 torch 由他说了算。以前启动时不插手、部署时却照样预装默认的，
+    # Forge 随后看到 torch 已经在了就跳过用户的命令，等于把用户的设置盖掉了
+    if "TORCH_COMMAND" in os.environ:
+        _log(log, "系统环境里设了 TORCH_COMMAND，按你的设置由 Forge 自己安装 torch，跳过预下载")
+        return False
     try:
-        return _ensure_torch(root_dir, cfg, log, progress, cancel_event)
+        import cuda_compat as cc
+        # 多显卡：只按这个实例指定的那张卡（gpu_device_id）选 torch
+        with cc.device_scope((cfg or {}).get("gpu_device_id")):
+            return _ensure_torch(root_dir, cfg, log, progress, cancel_event)
     except Exception as e:
         _log(log, f"预下载出现异常（不影响后续，Forge 会自行安装）: {e}")
         return False

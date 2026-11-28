@@ -139,6 +139,9 @@ SECONDARY_DIRS = {"controlnet": ("t2i_adapter",)}      # 同一个类型多读�
 KNOWN_MODEL_FOLDERS = set(MODEL_FOLDER_TYPES) | {"clip", "unet", "t2i_adapter"}
 NON_MODEL_FOLDERS = {"custom_nodes", "user", "input", "output", "temp", "models", ".venv", ".snapshots",
                      ".git", "__pycache__", ".desktop2-downloads"}
+# extra_model_paths 每一段里的控制字段。模型目录里要是正好有同名文件夹，当成模型类型写进去就会把
+# 控制字段盖掉：base_path 变成相对路径，整个共享目录都挂错地方。这两个名字不挂
+YAML_RESERVED = {"base_path", "is_default"}
 
 
 def extra_folders(dirs):
@@ -151,7 +154,7 @@ def extra_folders(dirs):
             continue
         for name in names:
             if name not in KNOWN_MODEL_FOLDERS and name not in NON_MODEL_FOLDERS \
-                    and os.path.isdir(os.path.join(d, name)):
+                    and name.lower() not in YAML_RESERVED and os.path.isdir(os.path.join(d, name)):
                 seen.add(name)
     return sorted(seen)
 
@@ -189,6 +192,7 @@ def yaml_text(dirs, primary, extra=None):
     extra：清单之外要挂的文件夹名，不给就到 dirs 里现找（extra_folders）。
     """
     extra = extra_folders(dirs) if extra is None else list(extra)
+    extra = [n for n in extra if n.lower() not in YAML_RESERVED and n not in KNOWN_MODEL_FOLDERS]
     lines = ["# 由启动器生成：ComfyUI 桌面版的共享模型目录（照桌面版自己的设置）。改这里没用，每次启动会重新生成。"]
     for i, d in enumerate(dirs):
         base = d.replace("\\", "/").replace('"', '\\"')

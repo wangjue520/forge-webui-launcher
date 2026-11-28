@@ -52,11 +52,14 @@ class UpdateFallbackTest(unittest.TestCase):
         self.assertEqual(result["remote"]["version"], updater.version_of(110))
 
     def test_version_numbering(self):
-        # 3.1 从 BASE_COUNT 那个提交起算，三位补零；更早的提交不会算出负数
-        self.assertEqual(updater.version_of(updater.BASE_COUNT), "3.1.000")
-        self.assertEqual(updater.version_of(updater.BASE_COUNT + 7), "3.1.007")
-        self.assertEqual(updater.version_of(updater.BASE_COUNT + 123), "3.1.123")
-        self.assertEqual(updater.version_of(110), "3.1.000")
+        # 每个大版本从自己的起点提交起算，三位补零；旧提交按它当时的大版本显示，不会算出负数
+        self.assertEqual((updater.BASE_COUNT, updater.BASE_VERSION), (221, "3.2"))
+        self.assertEqual(updater.version_of(221), "3.2.000")
+        self.assertEqual(updater.version_of(228), "3.2.007")
+        self.assertEqual(updater.version_of(219), "3.1.041")       # 3.1 最后一版仍显示成 3.1.041
+        self.assertEqual(updater.version_of(178), "3.1.000")
+        self.assertEqual(updater.version_of(110), "3.0.110")
+        self.assertEqual(updater.version_of(-3), "3.0.000")
 
     def test_same_release_no_update(self):
         # git 用户本地多一个 bump 提交：111 对 version.json 的 110，不算有更新

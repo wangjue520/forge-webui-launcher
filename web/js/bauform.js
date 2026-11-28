@@ -362,6 +362,7 @@
     window.removeEventListener("mousemove", B.onMove);
     window.removeEventListener("resize", B.onResize);
     if (B.ro) B.ro.disconnect();
+    clearTimeout(B.rt);    // 窗口刚改过大小就切走风格：排着的重画别在 B 清空后再跑（会报 B.guides 读 null）
     clearInterval(B.clockT);
     [B.bg, B.mast, B.navlight, B.coord, B.clockEl].forEach(function (n) { if (n && n.parentNode) n.parentNode.removeChild(n); });
     var logo = document.querySelector(".brand-logo"), name = document.querySelector(".brand-name");

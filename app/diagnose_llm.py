@@ -18,6 +18,7 @@ import subprocess
 import time
 
 import diagnose as dg
+import pip_history as ph
 
 KNOWLEDGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "diagnose_knowledge.md")
 
@@ -201,6 +202,10 @@ TOOL_SPECS = [
            "grep": {"type": "string", "description": "可选，只要包含这个正则的行（带前后 3 行）"}}, ["source"])),
     ("python_packages", "查某个实例的 Python 环境里装的包版本。names 为空则列出全部。",
      _obj({"iid": _S, "names": {"type": "array", "items": _S}}, ["iid"])),
+    ("pip_history", "某个实例 Python 环境的包变化记录（新的在前）：每次装节点 / 装依赖 / 启动 / 更新后多了、换了、"
+                    "少了哪些包，以及是哪次操作带来的。报错前后对一下时间，最容易找到是新装的哪个东西引起的。",
+     _obj({"iid": _S, "limit": {"type": "integer", "description": "看最近几条，默认 15，最多 60"},
+           "package": {"type": "string", "description": "可选，只看跟这个包有关的记录，如 numpy"}}, ["iid"])),
     ("check_model_file", "核对模型文件（safetensors / ckpt / gguf）是否完整。", _obj({"path": _S}, ["path"])),
     ("test_url", "从这台电脑（按启动器当前的代理设置）访问一个网址，看能不能连通、耗时多少。",
      _obj({"url": _S}, ["url"])),
@@ -388,6 +393,20 @@ class Tools:
         out = cm.decode_process_output(r.stdout or b"").strip()
         return out or ("失败：" + cm.decode_process_output(r.stderr or b"")[-800:])
 
+    def t_pip_history(self, iid, limit=15, package=""):
+        py = instance_python(self.api, iid)
+        if not py:
+            return "找不到这个实例用的 Python"
+        n = min(60, max(1, int(limit or 15)))
+        rows = ph.history(py, 60 if package else n)
+        if package:
+            c = ph.canon(package)
+            rows = [e for e in rows if any(c in (e.get(k) or {}) for k in ("added", "removed", "changed"))][:n]
+        if not rows:
+            return (f"没有跟 {package} 有关的变化记录" if package else
+                    "还没有记录（这个功能加上之后才开始记，装节点 / 启动一次之后就有了）")
+        return "\n".join(ph.entry_text(e, 40) for e in rows)
+
     def t_check_model_file(self, path):
         p, err = self._ok_path(path)
         if err:
@@ -523,17 +542,7 @@ def launcher_text(api):
 
 
 def instance_python(api, iid):
-    import config_manager as cm
-    cfg = cm.instance_cfg(api.cfg, iid) or {}
-    root = (cfg.get("webui_root") or "").strip()
-    if not root:
-        return ""
-    if cm.is_comfy(cfg):
-        return (cm.comfy_python(cfg, root) or "").strip('"')
-    for c in (os.path.join(root, "venv", "Scripts", "python.exe"), os.path.join(root, "venv", "bin", "python")):
-        if os.path.isfile(c):
-            return c
-    return ((cfg.get("custom_python_path") or "").strip() or cm.detect_bundled_python(root) or "").strip('"')
+    return ph.instance_python(api, iid)
 
 
 def instance_info(api, iid):
@@ -600,6 +609,12 @@ def environment(api, ctx):
     env["当前实例"] = api.cfg.get("active_instance")
     if ctx.get("iid"):
         env["诊断对象"] = instance_info(api, ctx["iid"])
+        try:
+            changes = ph.summary_text(instance_python(api, ctx["iid"]), 8)
+        except Exception:
+            changes = ""
+        if changes:
+            env["诊断对象的 Python 包最近变化（新的在前；更早的、完整的用 pip_history 工具查）"] = changes.splitlines()
     if ctx.get("comfy_dir"):
         wf = os.path.join(ctx["comfy_dir"], "user", "wwy_bridge", "current_workflow.json")
         if os.path.isfile(wf):
@@ -630,7 +645,12 @@ def system_prompt(api, ctx):
         "3. 最后必须调用 finish 交结论。用中文，口语化，别堆术语；steps 要具体到启动器的哪个页面、哪个按钮，"
         "或者 WebUI / ComfyUI 网页里的位置。拿不准就说拿不准，并说明还需要什么信息。\n"
         "4. 不要建议用户重装整个系统、乱删 venv 之类的大动作，除非证据充分；涉及 torch 版本的问题优先用启动器"
-        "「环境部署」页的功能，不要让用户手动 pip install torch。\n\n"
+        "「环境部署」页的功能，不要让用户手动 pip install torch。\n"
+        "5. 报错多半是最近新装 / 升级的东西引起的：环境信息里有「Python 包最近变化」（更多用 pip_history 查），"
+        "把报错出现的时间和哪次操作多了 / 换了哪些包对上，作为找原因的线索，并在 cause 里说明是哪次变化。"
+        "但用户装新东西是为了用新功能，所以不要把「卸掉新装的节点 / 把包降回原来的版本、回到以前」当成解决办法；"
+        "要找让新装的和原来的都能用的办法：补装缺的依赖、换成两边都兼容的版本（pip_install 写版本约束）、"
+        "按报错改设置或参数。只有新东西本身就是坏的、又确实没有别的办法时，才把停用它当最后一招，并说清楚代价。\n\n"
         f"允许读取的目录：\n{roots}\n（日志里出现过的具体文件路径也可以读）\n\n"
         f"日志来源（get_log 的 source）：\n{sources}\n\n"
         f"修复动作白名单（finish.actions 里的 action / params）：\n{dg.actions_doc()}\n\n"
@@ -750,7 +770,8 @@ def _truncated(finish):
 def _step_label(name, args):
     a = args or {}
     labels = {"list_dir": "查看目录", "read_file": "读取文件", "search_files": "搜索", "get_log": "查看日志",
-              "python_packages": "查看 Python 包", "check_model_file": "核对模型文件", "test_url": "测试网址",
+              "python_packages": "查看 Python 包", "pip_history": "查看包变化记录",
+              "check_model_file": "核对模型文件", "test_url": "测试网址",
               "instance_info": "查看实例信息", "search_model": "搜索模型", "hf_files": "查看 HuggingFace 仓库"}
     target = a.get("path") or a.get("url") or a.get("source") or a.get("iid") or a.get("name") or a.get("repo") or ""
     extra = f"「{a['pattern']}」" if a.get("pattern") else ""

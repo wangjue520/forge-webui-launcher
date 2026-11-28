@@ -30,6 +30,7 @@
   }
 
   const ok = (v) => new Promise((r) => setTimeout(() => r(v), 60));
+  const mockMcols = { next: 2, collections: [{ id: 1, name: "常用（演示）", count: 1 }], member: { m2: [1] } };
 
   const mockConfig = {
     ui_theme: (/[?&]theme=([\w-]+)/.exec(location.search) || [])[1] || "auto",
@@ -754,6 +755,51 @@
         send("takeover_done", { ok: true, text: "第 1 轮修复后重启正常，日志里没再看到报错" }, 4300);
         return ok({ ok: true, job, rounds: 5 });
       },
+      open_tutorial: () => ok({ ok: true }),
+      outputs_drag: () => ok({ ok: false, error: "预览模式不能拖出文件" }),
+      outputs_copy: (list) => ok({ ok: true, text: `（预览模式）已复制 ${(list || []).length} 个文件` }),
+      models_collections: () => ok({ ok: true, ...mockMcols }),
+      models_collection_op: (op, cid, name, paths, on) => {
+        if (op === "create") { mockMcols.collections.push({ id: mockMcols.next, name, count: 0 }); cid = mockMcols.next++; }
+        else if (op === "rename") mockMcols.collections.find((c) => c.id === cid).name = name;
+        else if (op === "delete") mockMcols.collections = mockMcols.collections.filter((c) => c.id !== cid);
+        else if (op === "set") (paths || []).forEach((p) => {
+          const k = String(p).toLowerCase(), cur = mockMcols.member[k] || [];
+          mockMcols.member[k] = on ? [...new Set([...cur, cid])] : cur.filter((x) => x !== cid);
+        });
+        mockMcols.collections.forEach((c) => { c.count = Object.values(mockMcols.member).filter((l) => l.includes(c.id)).length; });
+        return ok({ ok: true, id: cid, collections: mockMcols.collections, member: mockMcols.member });
+      },
+      diag_fix_all: () => {
+        const job = "fx1";
+        const send = (type, data, ms) => setTimeout(() => window.App.onEvent({ scope: "diag", type, job, ...data }), ms);
+        const s = (text, kind, ms) => send("fixall_step", { text, kind }, ms);
+        s("重新看一遍日志，找出所有问题…", "info", 200);
+        s("有模型没直接找到下载地址，让 AI 去 Civitai / HuggingFace 上找…", "round", 500);
+        s("搜索模型 kieed-step00006000.safetensors", "ai", 900);
+        s("AI：kieed 这个 LoRA 在 Civitai 上找到了同名文件", "result", 1400);
+        s("要做 4 项：下载 anima_baseV10.safetensors、下载 kieed-step00006000.safetensors、重装「ComfyUI-Foo」的依赖、安装缺的包 opencv-python", "round", 1600);
+        s("下载 anima_baseV10.safetensors → 已开始下载 anima_baseV10.safetensors，进度看「一键启动」页的运行日志", "act", 1800);
+        s("下载 kieed-step00006000.safetensors → 已开始下载 kieed-step00006000.safetensors，进度看「一键启动」页的运行日志", "act", 1900);
+        s("先停止实例（装节点 / 依赖时文件不能被占用），装完自动重新启动…", "info", 2100);
+        s("重装「ComfyUI-Foo」的依赖 → 已开始重装节点「ComfyUI-Foo」的依赖，进度看「一键启动」页的运行日志", "act", 2600);
+        s("安装缺的包 opencv-python → 已开始安装 opencv-python，进度看「一键启动」页的运行日志", "act", 3200);
+        s("等模型下完…（进度看「一键启动」页的运行日志，下好的会提示）", "info", 3400);
+        s("已重新启动实例", "result", 4200);
+        send("fixall_done", { ok: true, text: "做完了 4 项", results: [] }, 4400);
+        return ok({ ok: true, job });
+      },
+      outputs_compare: (list) => ok({ ok: true, items: (list || []).slice(0, 4).map((id, k) => ({ ok: true, id,
+        name: `demo_${id}.png`, path: `D:\\AI\\ComfyUI\\output\\demo_${id}.png`, kind: "image", width: 1024, height: k === 2 ? 1536 : 1024,
+        prompt: ["1girl, solo, masterpiece, best quality, looking at viewer, long hair",
+          "1girl, solo, masterpiece, best quality, looking at viewer, short hair, smile",
+          "1girl, solo, masterpiece, looking at viewer, long hair, night, city lights",
+          "1girl, solo, masterpiece, best quality, from side"][k % 4],
+        negative: "lowres, bad hands", model: k === 1 ? "animagineXL40" : "ponyDiffusionV6", seed: String(123456 + (k === 3 ? 7 : 0)),
+        sampler: k === 2 ? "DPM++ 2M" : "Euler a", scheduler: "karras", steps: k === 1 ? "28" : "24", cfg: "6", denoise: "",
+        source: "ComfyUI", exists: true, time_text: `2026-10-13 21:4${k}`, size_text: "1.45 MB", instance_name: "ComfyUI",
+        loras: k === 0 ? [{ name: "detail_tweaker", weight: "0.6" }] : [{ name: "detail_tweaker", weight: "0.8" }],
+        chars: [], tags: [], collections: [], iid: "demo" })) }),
       diag_note_set: () => ok({ ok: true }),
       diag_ai_cancel: () => ok({ ok: true }),
       diag_fix: (aid, p) => ok(aid === "comfy_set_mode" ? { ok: true, undo: "u7",
